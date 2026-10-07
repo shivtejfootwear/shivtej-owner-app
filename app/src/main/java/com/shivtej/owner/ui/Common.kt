@@ -1,0 +1,145 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package com.shivtej.owner.ui
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
+import com.shivtej.owner.App
+import java.io.File
+
+// ------------------------------------------------------------------ navigation
+sealed interface Route {
+    object Dashboard : Route
+    data class Products(val filter: String = "all") : Route
+    data class ProductEdit(val id: String?) : Route
+    data class Stock(val tab: Int = 0, val filter: String = "all") : Route
+    object Pos : Route
+    data class Receipt(val billId: String) : Route
+    data class Orders(val mode: String = "all") : Route
+    data class OrderDetail(val id: String) : Route
+    object Customers : Route
+    data class ReturnForm(val refType: String, val refId: String) : Route
+    object Returns : Route
+    object Reports : Route
+    object Assistant : Route
+    object Settings : Route
+}
+
+class Nav(private val stack: MutableList<Route>) {
+    val current: Route get() = stack.last()
+    val canGoBack: Boolean get() = stack.size > 1
+    fun go(r: Route) { stack.add(r) }
+    fun back() { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
+    fun top(r: Route) { stack.clear(); stack.add(Route.Dashboard); if (r != Route.Dashboard) stack.add(r) }
+    fun replace(r: Route) { if (stack.size > 1) stack.removeAt(stack.lastIndex); stack.add(r) }
+}
+
+// ------------------------------------------------------------------ small helpers
+fun imgModel(s: String): Any = if (s.startsWith("/")) File(s) else s
+
+fun toast(ctx: android.content.Context, msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+
+fun money(app: App, v: Double): String = com.shivtej.owner.util.Receipt.money(app.prefs, v)
+
+val GreenOk = Color(0xFF2E7D32)
+val AmberLow = Color(0xFFEF6C00)
+val RedOut = Color(0xFFC62828)
+
+@Composable
+fun Thumb(src: String?, size: Dp = 56.dp) {
+    if (src == null) {
+        Box(
+            Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) { Icon(Icons.Filled.Image, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+    } else {
+        AsyncImage(
+            model = imgModel(src), contentDescription = null, contentScale = ContentScale.Crop,
+            modifier = Modifier.size(size).clip(RoundedCornerShape(8.dp))
+        )
+    }
+}
+
+@Composable
+fun StockBadge(qty: Int, low: Int) {
+    val (t, c) = when {
+        qty <= 0 -> "Out of stock" to RedOut
+        qty <= low -> "Low: $qty" to AmberLow
+        else -> "In stock: $qty" to GreenOk
+    }
+    Text(t, color = c, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+fun ConfirmDialog(title: String, text: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = { TextButton(onClick = { onDismiss(); onConfirm() }) { Text(confirm) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+fun SearchField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = value, onValueChange = onChange, singleLine = true,
+        placeholder = { Text(hint) },
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+}
+
+@Composable
+fun SectionTitle(t: String) {
+    Text(t, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(vertical = 8.dp))
+}
+
+@Composable
+fun EmptyState(msg: String) {
+    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+        Text(msg, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Returns a function that runs an action once the CAMERA permission is granted. */
+@Composable
+fun rememberWithCamera(): (() -> Unit) -> Unit {
+    val ctx = LocalContext.current
+    var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) pending?.invoke() else toast(ctx, "Camera permission is needed")
+        pending = null
+    }
+    return { action ->
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) action()
+        else { pending = action; launcher.launch(Manifest.permission.CAMERA) }
+    }
+}
