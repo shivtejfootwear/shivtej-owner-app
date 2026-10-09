@@ -1,34 +1,115 @@
+# Builds the Shivtej Owner App (native Android, Kotlin + Jetpack Compose) and publishes the APK as the
+# downloadable artifact "Shivtej-Owner-App".
+#
+# How to run:  it starts by itself on every upload (push). To start it by hand:
+#              repository > Actions > "Build Shivtej Owner APK" > Run workflow.
+# Where is the APK:  open the finished run > Artifacts > Shivtej-Owner-App  (a zip that contains Shivtej-Owner-App.apk).
+#
+# This file must live at   .github/workflows/build-apk.yml   in the ROOT of the GitHub repository.
+
 name: Build Shivtej Owner APK
 
 on:
   push:
-    branches: [ main, master ]
   workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - uses: actions/setup-java@v4
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build release APK
+    runs-on: ubuntu-latest          # GitHub-hosted runner
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      # Finds settings.gradle.kts, so the build also works if the project was uploaded inside a sub-folder.
+      - name: Find the Android project folder
+        id: locate
+        shell: bash
+        run: |
+          set -eu
+          SETTINGS=$(find . -maxdepth 4 -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/.git/*' | head -n 1)
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::settings.gradle.kts was not found. Upload the whole project (settings.gradle.kts, build.gradle.kts and the app folder) to the repository."
+            exit 1
+          fi
+          DIR=$(dirname "$SETTINGS")
+          echo "Android project folder: $DIR"
+          ls -la "$DIR"
+          if [ ! -f "$DIR/app/build.gradle.kts" ]; then
+            echo "::error::$DIR/app/build.gradle.kts is missing - the app folder was not uploaded."
+            exit 1
+          fi
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android platform 34 and build tools 34.0.0
+        shell: bash
+        run: |
+          set -eu
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.9
+          gradle-version: '8.9'
 
-      - name: Build release APK
-        run: gradle --no-daemon :app:assembleRelease
+      - name: Build the release APK
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk Shivtej-Owner-App.apk
+      - name: Collect the APK
+        working-directory: ${{ steps.locate.outputs.dir }}
+        shell: bash
+        run: |
+          set -eu
+          SRC=app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$SRC" ]; then
+            echo "::error::The build finished but $SRC does not exist. Files found:"
+            find app/build/outputs -type f || true
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$SRC" "$GITHUB_WORKSPACE/dist/Shivtej-Owner-App.apk"
+          ls -l "$GITHUB_WORKSPACE/dist"
 
-      - uses: actions/upload-artifact@v4
+      - name: Check the APK signature
+        continue-on-error: true
+        shell: bash
+        run: |
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$GITHUB_WORKSPACE/dist/Shivtej-Owner-App.apk"
+
+      - name: Upload the APK (artifact Shivtej-Owner-App)
+        uses: actions/upload-artifact@v4
         with:
           name: Shivtej-Owner-App
-          path: Shivtej-Owner-App.apk
+          path: dist/Shivtej-Owner-App.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build reports (only if the build failed)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-reports
+          path: |
+            ${{ steps.locate.outputs.dir }}/app/build/reports/
+            ${{ steps.locate.outputs.dir }}/build/reports/
+          if-no-files-found: ignore
