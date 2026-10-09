@@ -1,0 +1,17 @@
+Logic check (no Android needed). Tests the pure money and assistant rules with the REAL files:
+  app/src/main/java/com/shivtej/owner/util/BillMath.kt
+  app/src/main/java/com/shivtej/owner/util/Ledger.kt
+  app/src/main/java/com/shivtej/owner/util/Assistant.kt
+The data classes come from stubs/Data.kt (same field names as the app's Room entities, without Room).
+
+Run from the project root, with any Kotlin 1.9+ / 2.x compiler (kotlinc installed, or Android Studio's kotlinc):
+
+  kotlinc tools/logic-check/stubs/Data.kt \
+    app/src/main/java/com/shivtej/owner/util/BillMath.kt \
+    app/src/main/java/com/shivtej/owner/util/Ledger.kt \
+    app/src/main/java/com/shivtej/owner/util/Assistant.kt \
+    tools/logic-check/harness/Main.kt \
+    -include-runtime -d logic-check.jar
+  java -jar logic-check.jar
+
+Expected: 21 lines starting with PASS and no FAIL. Then sample answers are printed.

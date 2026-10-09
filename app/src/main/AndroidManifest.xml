@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Task reminders: asked at runtime on Android 13 and newer -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Bluetooth receipt printer (ATPOS AT-301 and other 80mm ESC/POS printers) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />

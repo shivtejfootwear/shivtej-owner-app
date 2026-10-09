@@ -9,6 +9,7 @@ import com.shivtej.owner.data.Prefs
 import com.shivtej.owner.data.Repo
 import com.shivtej.owner.sync.SyncManager
 import com.shivtej.owner.sync.SyncWorker
+import com.shivtej.owner.util.Reminders
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +68,12 @@ class App : Application() {
         if (dbRefusal == null) {
             SyncWorker.schedule(this)
             scope.launch { net.online.collect { if (it) sync.kick() } }
+            // task reminders: make sure every open task with a future time still has its reminder (also after a restore)
+            Reminders.ensureChannel(this)
+            scope.launch {
+                repo.allTasks().filter { !it.done && it.dueAt > 0L }
+                    .forEach { Reminders.schedule(this@App, it) }
+            }
         }
     }
 }

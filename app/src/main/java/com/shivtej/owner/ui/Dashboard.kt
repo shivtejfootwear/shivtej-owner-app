@@ -36,7 +36,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val CardBorder = BorderStroke(1.dp, Color(0xFFE9E9EC))
+@Composable
+private fun cardBorder() = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
 
 /** Light white dashboard. Every number is calculated from the phone's database (the same data the website sync uses). */
 @Composable
@@ -124,7 +125,7 @@ fun DashboardScreen(app: App, nav: Nav) {
 
         // ---------------- sales trend
         item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder) {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Sales trend", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -149,7 +150,7 @@ fun DashboardScreen(app: App, nav: Nav) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Card(
                     onClick = { nav.go(Route.Staff) }, modifier = Modifier.weight(1f),
-                    colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text("Staff sales (today)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
@@ -168,7 +169,7 @@ fun DashboardScreen(app: App, nav: Nav) {
                 }
                 Card(
                     onClick = { nav.go(Route.Reports) }, modifier = Modifier.weight(1f),
-                    colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text("Top selling (today)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
@@ -192,7 +193,7 @@ fun DashboardScreen(app: App, nav: Nav) {
 
         // ---------------- recent bills
         item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder) {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Recent bills", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -212,7 +213,7 @@ fun DashboardScreen(app: App, nav: Nav) {
                                 Text(b.method, fontSize = 11.sp, color = BrandRed, fontWeight = FontWeight.SemiBold)
                             }
                         }
-                        HorizontalDivider(color = Color(0xFFF0F0F0))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }
@@ -220,7 +221,7 @@ fun DashboardScreen(app: App, nav: Nav) {
 
         // ---------------- low stock alerts
         item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder) {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Warning, null, tint = BrandRed, modifier = Modifier.size(18.dp))
@@ -242,7 +243,7 @@ fun DashboardScreen(app: App, nav: Nav) {
                                     color = if (s.qty <= 0) RedOut else AmberLow)
                             }
                         }
-                        HorizontalDivider(color = Color(0xFFF0F0F0))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }
@@ -262,11 +263,11 @@ private data class QuickAction(val label: String, val icon: androidx.compose.ui.
 private fun QuickTile(a: QuickAction, nav: Nav, modifier: Modifier) {
     Card(
         onClick = { nav.go(a.route) }, modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()
     ) {
         Column(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(38.dp).background(a.color.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
-                Icon(a.icon, null, tint = a.color, modifier = Modifier.size(22.dp))
+                Icon(a.icon, null, tint = readableTone(a.color), modifier = Modifier.size(22.dp))
             }
             Spacer(Modifier.height(6.dp))
             Text(a.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, maxLines = 2)
@@ -280,11 +281,11 @@ private data class Kpi(val title: String, val value: String, val sub: String, va
 private fun KpiCard(k: Kpi, nav: Nav, modifier: Modifier) {
     Card(
         onClick = { nav.go(k.route) }, modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color.White), border = CardBorder
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()
     ) {
         Column(Modifier.padding(12.dp)) {
             Text(k.title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            Text(k.value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = k.color, maxLines = 1)
+            Text(k.value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = readableTone(k.color), maxLines = 1)
             Text(k.sub, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
         }
     }

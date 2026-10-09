@@ -4,7 +4,6 @@ package com.shivtej.owner.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,124 +22,134 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shivtej.owner.App
 import com.shivtej.owner.data.*
+import com.shivtej.owner.util.AiClient
+import com.shivtej.owner.util.Assistant
+import com.shivtej.owner.util.AssistantData
 import com.shivtej.owner.util.BackupRestore
+import com.shivtej.owner.util.BillMath
 import com.shivtej.owner.util.Images
+import com.shivtej.owner.util.PaymentAmt
+import com.shivtej.owner.util.PurchaseAmt
+import com.shivtej.owner.util.SecretStore
+import com.shivtej.owner.util.SupplierMath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// ================================================================== OFFLINE ASSISTANT
-private data class Msg(val fromUser: Boolean, val text: String)
+// ================================================================== ASSISTANT
+private data class Msg(val fromUser: Boolean, val text: String, val tag: String = "")
 
-/** Rule-based assistant. It answers from the data stored on this phone, so it works without internet. */
+/**
+ * The assistant. Offline answers always work (from this phone's data). When the owner turned on online AI in Settings,
+ * the phone has internet and an API key is saved, the question goes to the AI service with a short summary;
+ * if that fails, the offline answer is shown with the reason.
+ */
 @Composable
 fun AssistantScreen(app: App) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val products by app.repo.products.collectAsStateWithLifecycle(emptyList())
     val bills by app.repo.bills.collectAsStateWithLifecycle(emptyList())
     val orders by app.repo.orders.collectAsStateWithLifecycle(emptyList())
+    val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
+    val returnRows by app.repo.returns.collectAsStateWithLifecycle(emptyList())
+    val posC by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
+    val suppliers by app.repo.suppliers.collectAsStateWithLifecycle(emptyList())
+    val purchases by app.repo.purchases.collectAsStateWithLifecycle(emptyList())
+    val supPays by app.repo.supplierPayments.collectAsStateWithLifecycle(emptyList())
+    val tasks by app.repo.tasks.collectAsStateWithLifecycle(emptyList())
+    val online by app.net.online.collectAsStateWithLifecycle()
+
+    val data = remember(products, bills, orders, pays, returnRows, posC, suppliers, purchases, supPays, tasks) {
+        val pa = purchases.filter { it.status != "REJECTED" }.map { PurchaseAmt(it.id, it.supplierId, it.amount) }
+        val pb = supPays.filter { it.status != "REJECTED" }.map { PaymentAmt(it.supplierId, it.billId, it.amount) }
+        AssistantData(
+            products = products,
+            bills = bills,
+            orders = orders,
+            payments = pays,
+            customerNames = posC.associate { BillMath.normMobile(it.mobile) to it.name }.filterKeys { it.length == 10 },
+            supplierOwed = suppliers.map { s -> s.name to SupplierMath.totals(s.id, pa, pb).outstanding }.filter { it.second > 0.0 },
+            openTasks = tasks,
+            lowThreshold = app.prefs.lowThreshold,
+            money = { v -> money(app, v) },
+            now = System.currentTimeMillis(),
+            webOrders = ledgerOrders(orders),
+            ledgerReturns = ledgerReturns(returnRows)
+        )
+    }
+
     val msgs = remember {
-        mutableStateListOf(Msg(false, "Hi! I answer from the data saved on this phone, so I work offline too. Ask me about low stock, today's sales, best sellers, pending orders or the stock of any product."))
+        mutableStateListOf(Msg(false, "Hi! Ask me about today's sales, low or out of stock, what to reorder, customer dues (udhaar), supplier dues, pending orders, tasks, or the stock of an article such as 6100 size 8. I answer from this phone's data, also without internet."))
     }
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     fun ask(q: String) {
         if (q.isBlank()) return
-        msgs.add(Msg(true, q))
-        msgs.add(Msg(false, answer(app, q, products, bills, orders)))
         input = ""
+        msgs.add(Msg(true, q))
+        val offline = Assistant.offline(q, data)
+        val key = SecretStore.aiKey(ctx)
+        if (!app.prefs.aiOnline || key.isBlank()) { msgs.add(Msg(false, offline, "Offline")); return }
+        if (!online) { msgs.add(Msg(false, offline, "Offline - no internet right now")); return }
+        val slot = msgs.size
+        msgs.add(Msg(false, "Asking the online AI...", "Online AI"))
+        scope.launch {
+            val res = withContext(Dispatchers.IO) {
+                AiClient.ask(key, app.prefs.aiModel, q, Assistant.summaryForAi(data))
+            }
+            msgs[slot] = res.fold(
+                onSuccess = { Msg(false, it, "Online AI") },
+                onFailure = { Msg(false, "Online AI could not answer: ${it.message}\n\nOffline answer:\n$offline", "Offline (online AI failed)") }
+            )
+        }
     }
     LaunchedEffect(msgs.size) { listState.animateScrollToItem(msgs.lastIndex) }
 
+    val aiReady = app.prefs.aiOnline && SecretStore.hasAiKey(ctx)
     Column(Modifier.fillMaxSize()) {
+        Text(
+            if (aiReady) "Online AI is on: answers use the internet when available. Offline answers are used otherwise."
+            else "Offline mode: answers come only from this phone's data.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
         LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), state = listState) {
             items(msgs.size) { i ->
                 val m = msgs[i]
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (m.fromUser) Arrangement.End else Arrangement.Start) {
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (m.fromUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.widthIn(max = 320.dp)
-                    ) {
-                        Text(m.text, modifier = Modifier.padding(12.dp), fontSize = 14.sp,
-                            color = if (m.fromUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(horizontalAlignment = if (m.fromUser) Alignment.End else Alignment.Start) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (m.fromUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.widthIn(max = 320.dp)
+                        ) {
+                            Text(m.text, modifier = Modifier.padding(12.dp), fontSize = 14.sp,
+                                color = if (m.fromUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (!m.fromUser && m.tag.isNotBlank()) Text(m.tag, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Low stock", "Out of stock", "Today's sales", "Best sellers", "Pending orders", "What to reorder", "Help")
+            listOf("Low stock", "Out of stock", "Today's sales", "Best sellers", "Pending orders", "What to reorder",
+                "Customer dues", "Supplier dues", "Compare last 7 days", "Open tasks", "Help")
                 .forEach { AssistChip(onClick = { ask(it) }, label = { Text(it) }) }
         }
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(input, { input = it }, singleLine = true, placeholder = { Text("Ask something...") }, modifier = Modifier.weight(1f))
             IconButton(onClick = { ask(input) }) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
-        }
-    }
-}
-
-private fun answer(app: App, q: String, products: List<Product>, bills: List<BillE>, orders: List<OrderE>): String {
-    val t = q.lowercase()
-    val low = app.prefs.lowThreshold
-    val rows = products.flatMap { p -> p.variants.flatMap { v -> v.sizes.map { Triple(p, v, it) } } }
-    fun line(r: Triple<Product, Variant, SizeStock>) = "• ${r.first.article} ${r.first.name} - ${r.second.colour} / ${r.third.size}: ${r.third.qty}"
-    val month = startOfToday() - 29L * 86_400_000
-    val soldQty = bills.filter { it.createdAt >= month }.flatMap { parseBillItems(it.itemsJson) }
-
-    return when {
-        "out of stock" in t || t.trim() == "out" -> {
-            val l = rows.filter { it.third.qty <= 0 }
-            if (l.isEmpty()) "Nothing is out of stock." else "${l.size} size(s) are out of stock:\n" + l.take(25).joinToString("\n") { line(it) } + if (l.size > 25) "\n...and ${l.size - 25} more." else ""
-        }
-        "low" in t -> {
-            val l = rows.filter { it.third.qty in 1..low }.sortedBy { it.third.qty }
-            if (l.isEmpty()) "No sizes are low (threshold $low)." else "${l.size} size(s) are low (≤ $low):\n" + l.take(25).joinToString("\n") { line(it) } + if (l.size > 25) "\n...and ${l.size - 25} more." else ""
-        }
-        "reorder" in t || "restock" in t || "buy" in t -> {
-            val sellMap = soldQty.groupBy { Triple(it.productId, it.colour, it.size) }.mapValues { e -> e.value.sumOf { it.qty } }
-            val l = rows.filter { it.third.qty <= low }.sortedByDescending { sellMap[Triple(it.first.id, it.second.colour, it.third.size)] ?: 0 }
-            if (l.isEmpty()) "Nothing needs reordering right now." else
-                "Reorder first (fast sellers in the last 30 days):\n" + l.take(15).joinToString("\n") {
-                    line(it) + "  (sold ${sellMap[Triple(it.first.id, it.second.colour, it.third.size)] ?: 0})"
-                }
-        }
-        "today" in t || "sale" in t || "bill" in t -> {
-            val b = bills.filter { it.createdAt >= startOfToday() }
-            val o = orders.filter { it.createdAt >= startOfToday() && it.orderStatus != "Cancelled" }
-            "Today: ${b.size} POS bill(s) = ${money(app, b.sumOf { it.total })}, ${o.size} online order(s) = ${money(app, o.sumOf { it.total })}."
-        }
-        "best" in t || "top" in t || "selling" in t -> {
-            val top = soldQty.groupBy { it.article + " " + it.name }.map { it.key to it.value.sumOf { x -> x.qty } }.sortedByDescending { it.second }.take(8)
-            if (top.isEmpty()) "No POS sales in the last 30 days yet." else "Best sellers (30 days):\n" + top.joinToString("\n") { "• ${it.first}: ${it.second} pcs" }
-        }
-        "pending" in t || "order" in t -> {
-            val n = orders.filter { it.orderStatus == "New" }
-            val s = orders.count { it.orderStatus in listOf("Confirmed", "Packed") }
-            if (orders.isEmpty()) "There are no website orders yet." else
-                "${n.size} new order(s) waiting for confirmation, $s confirmed/packed and ready to ship." +
-                    if (n.isNotEmpty()) "\n" + n.take(8).joinToString("\n") { "• #${it.id} - ${money(app, it.total)}" } else ""
-        }
-        "help" in t -> "Try: low stock, out of stock, today's sales, best sellers, pending orders, what to reorder, or type a product / article / colour (for example \"6100\" or \"black\") to see its stock."
-        else -> {
-            val words = t.split(" ", ",").filter { it.length >= 2 }
-            val found = products.filter { p ->
-                words.any { w -> p.name.lowercase().contains(w) || p.article.lowercase().contains(w) || p.brand.lowercase().contains(w) ||
-                    p.variants.any { it.colour.lowercase().contains(w) } }
-            }.take(5)
-            if (found.isEmpty()) "I could not find that. Type \"help\" to see what I can answer."
-            else found.joinToString("\n\n") { p ->
-                "${p.article} ${p.name} (${money(app, p.price)}) - total ${p.totalStock}\n" +
-                    p.variants.joinToString("\n") { v -> "  ${v.colour}: " + v.sizes.joinToString(", ") { "${it.size}=${it.qty}" } }
-            }
         }
     }
 }
@@ -169,6 +178,12 @@ fun SettingsScreen(app: App, onOpen: (Route) -> Unit = {}) {
     var confirmClear by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf<android.net.Uri?>(null) }
     val fmt = remember { SimpleDateFormat("dd MMM yyyy, hh:mm:ss a", Locale.getDefault()) }
+
+    // AI assistant settings. The key is never shown again once saved.
+    var aiOn by remember { mutableStateOf(prefs.aiOnline) }
+    var aiKeyText by remember { mutableStateOf("") }
+    var aiKeySaved by remember { mutableStateOf(SecretStore.hasAiKey(ctx)) }
+    var aiModel by remember { mutableStateOf(prefs.aiModel) }
 
     val backup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) scope.launch {
@@ -199,6 +214,18 @@ fun SettingsScreen(app: App, onOpen: (Route) -> Unit = {}) {
                         }
                     }) { Text(if (st.running) "Syncing..." else "Sync now") }
                     if (failed > 0) OutlinedButton(onClick = { scope.launch { app.repo.retryFailed() } }) { Text("Retry failed") }
+                }
+            }
+        }
+
+        SectionTitle("Appearance, tasks and assistant")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp)) {
+                TextButton(onClick = { onOpen(Route.ThemeSettings) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Theme, colours and wallpaper - light, dark, red & white", modifier = Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = { onOpen(Route.Tasks) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Tasks and reminders - due dates and notifications", modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -240,6 +267,43 @@ fun SettingsScreen(app: App, onOpen: (Route) -> Unit = {}) {
             prefs.printerNote = printer.trim()
             toast(ctx, "Settings saved")
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)) { Text("Save settings") }
+
+        SectionTitle("AI assistant")
+        Text("The offline assistant always works and answers from this phone's data. Online AI gives longer, chat-style answers when the phone has internet.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Use online AI when internet is available", modifier = Modifier.weight(1f))
+            Switch(checked = aiOn, onCheckedChange = { aiOn = it; prefs.aiOnline = it })
+        }
+        Text(
+            if (aiKeySaved) "API key: saved on this phone (encrypted, not shown)" else "API key: not saved",
+            fontSize = 12.sp, color = if (aiKeySaved) GreenOk else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        OutlinedTextField(aiKeyText, { aiKeyText = it.trim() }, label = { Text("Paste API key") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+            Button(enabled = aiKeyText.length >= 20, onClick = {
+                if (SecretStore.setAiKey(ctx, aiKeyText)) {
+                    aiKeyText = ""; aiKeySaved = SecretStore.hasAiKey(ctx); toast(ctx, "API key saved on this phone")
+                } else toast(ctx, "Could not save the key on this phone")
+            }) { Text("Save key") }
+            if (aiKeySaved) OutlinedButton(onClick = {
+                SecretStore.setAiKey(ctx, ""); aiKeySaved = false; aiOn = false; prefs.aiOnline = false
+                toast(ctx, "API key removed")
+            }) { Text("Remove key") }
+        }
+        OutlinedTextField(aiModel, { aiModel = it.trim().take(60) }, label = { Text("Model name") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        OutlinedButton(onClick = {
+            prefs.aiModel = aiModel.ifBlank { "claude-haiku-5-5" }
+            aiModel = prefs.aiModel
+            toast(ctx, "Model saved")
+        }, modifier = Modifier.padding(top = 4.dp)) { Text("Save model") }
+        Text("Privacy: when online AI is on and you ask a question, a short summary of totals (sales, stock, dues, tasks) is sent to the AI service. Customer phone numbers are not sent. Turn it off to keep everything on this phone.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
 
         SectionTitle("Owner security")
         OutlinedTextField(newCode, { newCode = it }, label = { Text("Change owner code (must match the server)") }, singleLine = true,

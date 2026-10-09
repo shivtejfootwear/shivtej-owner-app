@@ -28,7 +28,10 @@ import com.shivtej.owner.data.Product
 import com.shivtej.owner.data.SizeStock
 import com.shivtej.owner.data.Variant
 import com.shivtej.owner.util.Images
+import com.shivtej.owner.util.Videos
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -55,6 +58,7 @@ class ProductDraft(val id: String) {
     var active by mutableStateOf(true)
     var newItem by mutableStateOf(false)
     val images = mutableStateListOf<String>()
+    val videos = mutableStateListOf<String>()
     val variants = mutableStateListOf<VariantDraft>()
 
     fun fill(p: Product) {
@@ -63,6 +67,7 @@ class ProductDraft(val id: String) {
         price = p.price.toBigDecimal().stripTrailingZeros().toPlainString()
         active = p.active; newItem = p.newItem
         images.clear(); images.addAll(p.images)
+        videos.clear(); videos.addAll(p.videos)
         variants.clear()
         p.variants.forEach { v ->
             variants.add(VariantDraft(v.colour, v.images, v.sizes.map { SizeDraft(it.size, it.qty.toString(), it.barcode) }))
@@ -75,7 +80,8 @@ class ProductDraft(val id: String) {
         variants.map { v ->
             Variant(v.colour.trim(), v.images.toList(),
                 v.sizes.map { SizeStock(it.size.trim(), it.qty.toIntOrNull() ?: 0, it.barcode.trim()) })
-        }
+        },
+        videos.toList()
     )
 }
 
@@ -128,11 +134,39 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         }
     }
 
+    // ---- video picker (gallery only). Replace uses the position of the video that was tapped.
+    var videoReplaceAt by remember { mutableStateOf(-1) }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(5)) { uris ->
+        val at = videoReplaceAt
+        videoReplaceAt = -1
+        if (uris.isNotEmpty()) scope.launch {
+            var first = true
+            for (u in uris) {
+                try {
+                    val path = withContext(Dispatchers.IO) { Videos.importUri(ctx, u) }
+                    if (path == null) toast(ctx, "This video can not be read.")
+                    else if (at >= 0 && first && at < draft.videos.size) draft.videos[at] = path
+                    else draft.videos.add(path)
+                } catch (e: IllegalArgumentException) {
+                    toast(ctx, e.message ?: Videos.TOO_BIG)
+                }
+                first = false
+            }
+        }
+    }
+    fun pickVideos(replaceAt: Int) {
+        videoReplaceAt = replaceAt
+        videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+    }
+
     if (!loaded) { EmptyState("Loading..."); return }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
         SectionTitle("Photos")
         ImageRow(draft.images, { pickGallery(draft.images) }, { takePhoto(draft.images) })
+
+        SectionTitle("Videos (optional, up to 25 MB each)")
+        VideoList(draft.videos, onAdd = { pickVideos(-1) }, onReplace = { i -> pickVideos(i) })
 
         SectionTitle("Product details")
         Field("Product name *", draft.name) { draft.name = it }
@@ -265,6 +299,53 @@ private fun Field(
         keyboardOptions = KeyboardOptions(keyboardType = keyboard),
         modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)
     )
+}
+
+/** Videos of one product: preview in the phone's video player, replace or remove. Shared with the website later. */
+@Composable
+private fun VideoList(list: SnapshotStateList<String>, onAdd: () -> Unit, onReplace: (Int) -> Unit) {
+    val ctx = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        list.toList().forEachIndexed { i, src ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.PlayCircle, null, tint = BrandRed, modifier = Modifier.size(36.dp))
+                        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                            Text("Video ${i + 1}", fontWeight = FontWeight.SemiBold)
+                            Text(if (src.startsWith("http")) "Saved online" else "On this phone - uploads when online",
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { previewVideo(ctx, src) }) { Text("Preview") }
+                        TextButton(onClick = { onReplace(i) }) { Text("Replace") }
+                        TextButton(onClick = { list.remove(src) }) { Text("Remove", color = RedOut) }
+                    }
+                }
+            }
+        }
+        OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.Videocam, null); Spacer(Modifier.width(6.dp)); Text("Add videos")
+        }
+    }
+}
+
+/** Opens a video in the phone's own video player (there is no in-app player yet). */
+private fun previewVideo(ctx: android.content.Context, src: String) {
+    try {
+        val uri = if (src.startsWith("http")) android.net.Uri.parse(src) else {
+            val f = File(src)
+            if (!f.exists()) { toast(ctx, "This video file is missing on this phone. Replace it."); return }
+            androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+        }
+        val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            .setDataAndType(uri, "video/*")
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(i)
+    } catch (e: Exception) {
+        toast(ctx, "No video player app found on this phone.")
+    }
 }
 
 @Composable

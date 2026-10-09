@@ -12,7 +12,13 @@ Website, Owner App and POS all share ONE stock: every stock change is an atomic,
    functions (staff, customers, suppliers, purchase bills, supplier payments, bill snapshot fields). It drops and deletes nothing, and
    existing products, stock, bills, orders, returns and customers are untouched. The last result line says `OK: update 2 is installed ...`.
    Until this file is run, the app keeps the new records on the phone and waits for the server (nothing is lost).
-4. Optional, after testing the website and the app once: the commented STEP B at the end of `website_sync.sql` (row-level security).
+4. Open `supabase/owner_update_3_supplier_bill_file.sql`, paste, Run. (Update 3: supplier bill photo / PDF, storage bucket `supplier-bills`.)
+   It only ADDS a column, a bucket and policies, and replaces `owner_create_purchase` with the same signature. The last result line says `OK: update 3 is installed ...`.
+5. Open `supabase/owner_update_4_media_ledger_tasks.sql`, paste, Run. (Update 4: customer payments (udhaar), customer and supplier photos,
+   product videos, storage buckets `profile-photos` and `product-videos`.) It only ADDS columns, a table, buckets, policies and functions.
+   Run it AFTER update 2 and update 3. The last result line says `OK: update 4 is installed ...`.
+   Until it is run, payments, photos and videos stay on the phone and are sent when the SQL is installed (nothing is lost).
+6. Optional, after testing the website and the app once: the commented STEP B at the end of `website_sync.sql` (row-level security).
 
 ## 2. Website
 Upload `website/index-V4.4-OWNER-SYNC.html` in place of the current website file (your original V4.3 is kept in `website/`).
@@ -24,9 +30,21 @@ on the server), and its Billing / Add Product screens write to the shared databa
    hidden folder `.github`) so that they sit directly in the repository root.
    The build instructions are the file `.github/workflows/build-apk.yml` - GitHub only sees it at exactly that path.
 2. Open the repository > Actions > "Build Shivtej Owner APK" (it also starts automatically on upload; or press "Run workflow").
-3. When it turns green, open the run > Artifacts > download **Shivtej-Owner-App** (zip) > extract `Shivtej-Owner-App.apk`.
-4. Copy the APK to the phone and install it (allow "install unknown apps").
+3. The run first runs the unit tests (a failing test stops the build), then lint (report only), then builds the APKs.
+4. When it turns green, open the run > Artifacts > download **Shivtej-Owner-App** (zip) > extract `Shivtej-Owner-App.apk`.
+   Also available: **Shivtej-Owner-App-debug** (debug APK) and **unit-test-results** (the test report).
+5. Copy the APK to the phone and install it (allow "install unknown apps").
 If the build is red, open the failed step, copy the red error lines and send them back - they are fixed from the log.
+
+**Release signing (one time, so updates install over the old app).** The release APK must be signed with the SAME key every time.
+Without the key below, every run signs with a new debug key and an installed app cannot be updated over ("package conflicts").
+1. Use the key the installed app was signed with. If that key is not available, it cannot be recovered: the old app must be uninstalled
+   once (back up first in the app: Settings > Backup) and a new key created.
+2. Encode the keystore file as one line of base64 (on a computer: `base64 -w0 owner-release.jks > owner-release.jks.b64`).
+3. Repository > Settings > Secrets and variables > Actions > add these four secrets:
+   `SHIVTEJ_KEYSTORE_BASE64` (the content of the .b64 file), `SHIVTEJ_KEYSTORE_PASSWORD`, `SHIVTEJ_KEY_ALIAS`, `SHIVTEJ_KEY_PASSWORD`.
+   The keystore is never stored in the repository. The workflow writes it to a temporary file during the run only.
+4. Run the workflow again. The log then says "Release keystore loaded"; without the secrets it shows a warning instead.
 
 **If the `.github` folder did not upload** (hidden folders are skipped by some file managers and browsers):
 repository > Add file > Create new file > in the name box type `.github/workflows/build-apk.yml` (typing the `/` makes the
@@ -79,7 +97,61 @@ The app asks for these only when you open the Printer screen or print. Printing 
 - Printer: `util/PrinterManager.kt`.
 - New dependency: `com.google.zxing:core:3.5.3` (QR codes).
 
-## Known limits (not yet tested on a phone)
+## Update 4 (final update) - what changed
+- **Theme and wallpaper** (Settings > Theme, colours and wallpaper): Light, Dark, Red & White or System; accent colour; 6 built-in
+  wallpapers or your own picture from the gallery; preview before applying; readability cover (0-90%); dashboard only or all main screens;
+  remove wallpaper; restore default. Saved on the phone. Code: `ui/Theme.kt`, `data/Prefs.kt`, `MainActivity.kt`.
+- **Dashboard readability**: cards use the theme surface colour; coloured figures are lightened on dark backgrounds (`readableTone`).
+- **Assistant**: the offline engine `util/Assistant.kt` answers from this phone's data (today's sales, what sold today, last 7 days vs
+  the 7 days before, stock of an article such as `6100 size 8`, low and out of stock, reorder, best sellers, customer dues by name or
+  mobile, supplier dues, pending orders, open tasks). Works without internet.
+  Optional online AI (`util/AiClient.kt`, Anthropic Messages API, default model `claude-haiku-5-5`): Settings > AI assistant. It is used only
+  when it is switched on, the phone is online and a key is saved. If it fails, the offline answer is shown with the reason.
+  The API key is kept only in encrypted storage (`util/SecretStore.kt`, AndroidX Security). It is not in the source code, the ZIP or the sync queue.
+  Only totals and the top few names are sent with a question (no phone numbers).
+- **Product videos**: on the product screen, Add videos (gallery, up to 25 MB each), Preview (opens the phone's video player), Replace,
+  Remove. The video is kept on the phone and uploaded to the `product-videos` bucket by the sync. Code: `ui/ProductEdit.kt`, `util/Videos.kt`,
+  `sync/SyncManager.kt` (`syncVideos`).
+- **Customer udhaar**: each customer row shows the amount due; a total-outstanding card at the top; filter "Owes money" / "No dues"; search
+  by name, mobile or address. Customer detail: outstanding box, Receive payment (full or partial, against one bill or on account; refused
+  when it is more than what is due), account ledger (bills, payments, running balance, tap a shop bill to open its receipt).
+  Code: `util/Ledger.kt`, `ui/Customers.kt`, `ui/CustomerLedger.kt`, `data/Repo.kt` (`recordCustomerPayment`).
+- **Photos**: customer and supplier photo (add, replace, remove), shown in the lists and the detail, synced to the `profile-photos` bucket.
+- **Supplier bill photo / PDF** (update 3) is unchanged in this version.
+- **Tasks and reminders** (drawer "Tasks & Reminders"): create, edit, complete, delete; due date and time; example tasks. Reminders use
+  WorkManager (`util/Reminders.kt`) and need the notification permission (Android 13 and newer ask for it). Tasks stay on this phone and are not synced.
+- **Returns, refunds and website orders in the customer ledger** (final update, `util/Ledger.kt`, `data/LedgerInput.kt`):
+  - A website order that is not cancelled is a charge on the customer's account. The website saves orders as "COD - pending" or
+    "Pending payment", so they stay owed until the owner records the money (Receive payment > On account). An order counts as paid
+    only when its payment status is "Paid".
+  - A return takes back the value of the goods (it reduces what is owed). An exchange adds the replacement goods to what is owed.
+  - A refund is cash handed back to the customer, so it is recorded as cash. The return screen allows cash only up to what the
+    customer has paid extra with the shop over all their sales and payments ("Cash refund allowed"); the rest of the value reduces the
+    udhaar. The same limit is checked when saving. A customer who owes on another sale gets no cash refund.
+  - An exchange where the customer pays the difference is recorded as money received.
+  - Rejected returns and payments are not counted. Changing an order status to "Returned" does not change the balance: record the return.
+  - The customer's outstanding, purchase history and account ledger use the same rules; the last ledger balance equals the outstanding amount.
+  - No database change: the rules read the existing bills, orders, payments and returns. No data is rewritten.
+- **Database version 6**: `MIGRATION_5_6` only adds columns and tables. Backup and the database check accept versions 2 to 6.
+  Nothing is dropped, reset or rewritten.
+
+## Known limits (update 4)
+- The Android code could not be compiled in the environment where it was written (no Android SDK there). The GitHub build is the first real compile.
+  The pure logic (`BillMath`, `Ledger`, `Assistant`) was compiled with the Kotlin 2.0 compiler: 21 standalone checks passed, and the JVM
+  tests `LedgerTest` (6) and `LedgerReturnsTest` (19) passed (25 in total). The Android screens and `Repo.kt` were not compiled.
+  The GitHub workflow runs `./gradlew :app:testDebugUnitTest` as its first build step.
+- Not tested on a phone or against the live server: camera and gallery pickers, videos, notifications, the Bluetooth printer, online AI
+  (no API key was available), photo / video / payment sync with Supabase.
+- Reminders run with WorkManager, so they can be a few minutes late and battery saving can delay them. They are not exact alarms.
+- Product videos are not shown on the website yet.
+- Returns saved BEFORE this update kept the refund the screen proposed (the full value, even for udhaar sales). The ledger now records
+  those refunds as cash given, so such a customer's balance can be higher than before. Nothing was changed in the saved records:
+  check those customers in Customers > account ledger and correct the return if needed.
+- Website payments made online outside the app are not known to the app. They show as owed until recorded (Receive payment > On account).
+- Release signing: without the four secrets (see section 3) the release APK is signed with the debug key, and a new build can refuse to
+  install over an older one ("package conflicts"). Back up the data, uninstall the old app once, then install.
+
+## Known limits (update 2)
 - The Android code has not been compiled or run in the environment where it was written. The first GitHub build and a test on a real phone and the
   ATPOS printer are the real check. Please send the build log if it is red.
 - Bluetooth, camera, photo upload and the live Supabase run were not tested in that environment.

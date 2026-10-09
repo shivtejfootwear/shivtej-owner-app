@@ -74,11 +74,15 @@ fun ReturnFormScreen(app: App, nav: Nav, refType: String, refId: String) {
     var pickProduct by remember { mutableStateOf(false) }
     var pickVariantOf by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var cashCap by remember { mutableStateOf(0.0) }      // most cash that may go back (the rest reduces the udhaar)
 
     val backValue = sold.sumOf { (qtys[retLineKey(it)] ?: 0) * it.price }
     val outValue = if (kind == "EXCHANGE") replacements.sumOf { it.qty * it.price } else 0.0
+    LaunchedEffect(refType, refId, backValue, outValue) {
+        cashCap = app.repo.maxCashRefund(refType, refId, backValue, outValue)
+    }
     val net = backValue - outValue                       // > 0 refund, < 0 the customer pays the difference
-    val autoRefund = if (net > 0) net else 0.0
+    val autoRefund = if (net > 0) minOf(net, cashCap) else 0.0
     val customerPays = kind == "EXCHANGE" && net < 0
     val inLines = sold.filter { (qtys[retLineKey(it)] ?: 0) > 0 }.map { it.copy(qty = qtys[retLineKey(it)] ?: 0) }
 
@@ -157,7 +161,8 @@ fun ReturnFormScreen(app: App, nav: Nav, refType: String, refId: String) {
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
             )
         }
-        Text("The refund is only recorded here. Hand the money back yourself.", fontSize = 11.sp,
+        Text("The refund is only recorded here. Hand the money back yourself. Cash refund allowed: " +
+            money(app, cashCap) + ". The rest of the value reduces the customer's udhaar.", fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
 
         Spacer(Modifier.height(16.dp))

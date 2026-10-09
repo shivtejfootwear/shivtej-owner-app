@@ -2,6 +2,8 @@
 
 package com.shivtej.owner.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,7 +33,9 @@ import com.shivtej.owner.util.PaymentAmt
 import com.shivtej.owner.util.Periods
 import com.shivtej.owner.util.PurchaseAmt
 import com.shivtej.owner.util.SupplierMath
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,6 +43,41 @@ import java.util.Locale
 // REJECTED rows (refused by the server) stay in the lists for history but do not count in any total or balance
 private fun payAmts(list: List<SupplierPaymentE>) = list.filter { it.status != "REJECTED" }.map { PaymentAmt(it.supplierId, it.billId, it.amount) }
 private fun buyAmts(list: List<PurchaseE>) = list.filter { it.status != "REJECTED" }.map { PurchaseAmt(it.id, it.supplierId, it.amount) }
+
+/** Copies the supplier's bill (a photo or a PDF up to 10 MB) into app storage. Returns the absolute path, or null if it can not be read. */
+private fun importBill(ctx: android.content.Context, uri: android.net.Uri): String? {
+    val mime = ctx.contentResolver.getType(uri) ?: ""
+    if (mime == "application/pdf") {
+        return try {
+            val dir = java.io.File(ctx.filesDir, "images").apply { mkdirs() }
+            val f = java.io.File(dir, java.util.UUID.randomUUID().toString() + ".pdf")
+            val copied = ctx.contentResolver.openInputStream(uri)?.use { inp -> f.outputStream().use { inp.copyTo(it) } }
+            if (copied == null) return null
+            if (f.length() > 10L * 1024 * 1024) { f.delete(); null } else f.absolutePath
+        } catch (e: Exception) { null }
+    }
+    // photos are resized and compressed like product photos
+    return com.shivtej.owner.util.Images.importUri(ctx, uri)
+}
+
+/** Opens the bill photo / PDF: the copy on this phone first, otherwise the copy on the server. */
+private fun openBill(ctx: android.content.Context, localPath: String, url: String) {
+    try {
+        val local = java.io.File(localPath)
+        val intent = if (localPath.isNotBlank() && local.exists()) {
+            val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", local)
+            val mime = if (local.extension.equals("pdf", ignoreCase = true)) "application/pdf" else "image/jpeg"
+            android.content.Intent(android.content.Intent.ACTION_VIEW)
+                .setDataAndType(uri, mime)
+                .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } else {
+            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+        }
+        ctx.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        toast(ctx, "No app on this phone can open this bill")
+    }
+}
 
 // ================================================================== SUPPLIERS LIST
 @Composable
@@ -65,7 +104,8 @@ fun SuppliersScreen(app: App, nav: Nav) {
                     val t = SupplierMath.totals(s.id, pa, pay)
                     Column(Modifier.fillMaxWidth().clickable { nav.go(Route.SupplierDetail(s.id)) }.padding(vertical = 10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
+                            PersonAvatar(s.name, s.photoPath, s.photoUrl, 40.dp)
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text(s.name, fontWeight = FontWeight.SemiBold, maxLines = 1)
                                 Text(s.mobile.ifBlank { "No mobile" } + if (!s.active) " · INACTIVE" else "", fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -98,12 +138,17 @@ fun SupplierDialog(app: App, s: SupplierE?, onDone: () -> Unit) {
     var address by remember { mutableStateOf(s?.address ?: "") }
     var notes by remember { mutableStateOf(s?.notes ?: "") }
     var active by remember { mutableStateOf(s?.active ?: true) }
+    // null = photo unchanged, "" = photo removed, otherwise the path of the new picture
+    var photoChange by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDone,
         title = { Text(if (s == null) "Add supplier" else "Edit supplier") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PhotoField("Supplier photo (optional)",
+                    localPath = (photoChange ?: s?.photoPath).orEmpty(),
+                    remoteUrl = if (photoChange == "") "" else s?.photoUrl.orEmpty()) { photoChange = it }
                 OutlinedTextField(name, { name = it }, label = { Text("Supplier / company name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(mobile, { mobile = it.filter(Char::isDigit).take(10) }, label = { Text("Mobile (optional)") },
                     singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
@@ -118,7 +163,7 @@ fun SupplierDialog(app: App, s: SupplierE?, onDone: () -> Unit) {
         confirmButton = {
             TextButton(enabled = name.isNotBlank(), onClick = {
                 scope.launch {
-                    try { app.repo.saveSupplier(s?.id, name, mobile, address, notes, active); onDone() }
+                    try { app.repo.saveSupplier(s?.id, name, mobile, address, notes, active, photoChange); onDone() }
                     catch (e: Exception) { error = e.message ?: "Could not save" }
                 }
             }) { Text("Save") }
@@ -139,6 +184,7 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     var paying by remember { mutableStateOf<String?>(null) }   // "" = on account, else a bill id
     var payOpen by remember { mutableStateOf(false) }
     val dateFmt = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.ENGLISH) }
+    val ctx = LocalContext.current
 
     val myBills = purchases.filter { it.supplierId == supplierId }.sortedByDescending { it.billDate }
     val myPays = payments.filter { it.supplierId == supplierId }.sortedByDescending { it.paidAt }
@@ -214,6 +260,10 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                                 fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
                         }
                         if (b.note.isNotBlank()) Text("Note: " + b.note, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (b.billFile.isNotBlank() || b.billFileUrl.isNotBlank()) {
+                            Text("Bill photo / PDF attached", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            TextButton(onClick = { openBill(ctx, b.billFile, b.billFileUrl) }) { Text("View bill photo / PDF") }
+                        }
                     }
                 }
                 HorizontalDivider()
@@ -332,6 +382,20 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
     var pickedProduct by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // the supplier's bill photo or PDF (a copy kept on this phone and sent with the bill)
+    var billPath by remember { mutableStateOf("") }
+    var billBusy by remember { mutableStateOf(false) }
+    val billPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            billBusy = true
+            scope.launch {
+                val path = withContext(Dispatchers.IO) { importBill(ctx, uri) }
+                billBusy = false
+                if (path == null) error = "This bill can not be read. Choose a photo (JPG/PNG) or a PDF under 10 MB."
+                else { billPath = path; error = null }
+            }
+        }
+    }
 
     val date = Periods.parseDay(dateText)
     val itemsTotal = BillMath.round2(lines.sumOf { it.cost * it.qty })
@@ -382,6 +446,23 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
         OutlinedTextField(note, { note = it.take(200) }, label = { Text("Note (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
 
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Supplier's bill photo or PDF", fontWeight = FontWeight.SemiBold)
+                Text(if (billPath.isBlank()) "Optional. Attach the bill so it stays with this supplier."
+                     else if (billPath.endsWith(".pdf")) "PDF attached - it is sent with the bill when you save."
+                     else "Photo attached - it is sent with the bill when you save.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = { billPicker.launch(arrayOf("image/*", "application/pdf")) }, enabled = !billBusy) {
+                        Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp))
+                        Text(if (billBusy) "Reading..." else if (billPath.isBlank()) "Choose photo / PDF" else "Change")
+                    }
+                    if (billPath.isNotBlank()) TextButton(onClick = { billPath = "" }) { Text("Remove") }
+                }
+            }
+        }
+
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
             Column(Modifier.padding(12.dp)) {
                 Row { Text("Bill total", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Text(moneyG(app, total), fontWeight = FontWeight.Bold, color = BrandRed) }
                 OutlinedTextField(paidText, { paidText = it.filter { c -> c.isDigit() || c == '.' }.take(10) },
@@ -405,7 +486,7 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
                         app.repo.createPurchase(
                             supplierId = supplierId, billNo = billNo, billDate = date!!, lines = lines.toList(),
                             amountIfNoItems = typedAmount ?: 0.0, addStock = addStock, note = note,
-                            paidNow = paid, method = method
+                            paidNow = paid, method = method, billFile = billPath
                         )
                         nav.back()
                     } catch (e: Exception) {

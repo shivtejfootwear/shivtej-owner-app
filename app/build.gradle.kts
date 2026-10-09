@@ -4,9 +4,25 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+// Release signing. The keystore and its passwords are NOT in this repository.
+// CI (.github/workflows/build-apk.yml) writes the keystore from a GitHub secret and sets these four variables.
+// When they are not set, the release APK is signed with the debug key, exactly as before.
+val releaseKeystorePath: String? = System.getenv("SHIVTEJ_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.shivtej.owner"
     compileSdk = 34
+
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = System.getenv("SHIVTEJ_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SHIVTEJ_KEY_ALIAS")
+                keyPassword = System.getenv("SHIVTEJ_KEY_PASSWORD")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.shivtej.owner"
@@ -23,8 +39,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the APK installs directly on a phone.
-            signingConfig = signingConfigs.getByName("debug")
+            // The owner's release key when CI provides it; otherwise the debug key (the APK then installs only over
+            // an APK signed with that same debug key, which is why an update can show "package conflicts").
+            signingConfig = if (releaseKeystorePath != null) signingConfigs.getByName("release")
+                else signingConfigs.getByName("debug")
         }
     }
 
@@ -66,6 +84,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")   // encrypted storage for the optional AI API key
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
@@ -81,4 +100,7 @@ dependencies {
 
     // QR codes on the bill (website / Instagram), drawn on the phone
     implementation("com.google.zxing:core:3.5.3")
+
+    // JVM unit tests (app/src/test): money rules of the customer ledger and the offline assistant
+    testImplementation("junit:junit:4.13.2")
 }

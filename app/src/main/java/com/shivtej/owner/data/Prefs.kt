@@ -117,6 +117,37 @@ class Prefs(ctx: Context) {
         get() = sp.getString("print_mode", "graphic") ?: "graphic"
         set(v) = sp.edit().putString("print_mode", v).apply()
 
+    // ---- appearance (update 4): theme, accent colour, wallpaper
+    var themeMode: String               // "system" (default, as before) / "light" / "dark" / "redwhite"
+        get() = sp.getString("theme_mode", "system") ?: "system"
+        set(v) = sp.edit().putString("theme_mode", v).apply()
+    var accentArgb: Int                 // 0 = the default Shivtej red
+        get() = sp.getInt("accent_argb", 0)
+        set(v) = sp.edit().putInt("accent_argb", v).apply()
+    var wallKind: String                // "none" / "builtin" / "gallery"
+        get() = sp.getString("wall_kind", "none") ?: "none"
+        set(v) = sp.edit().putString("wall_kind", v).apply()
+    var wallBuiltin: String             // id of a built-in wallpaper (see ui/Theme.kt)
+        get() = sp.getString("wall_builtin", "sunset") ?: "sunset"
+        set(v) = sp.edit().putString("wall_builtin", v).apply()
+    var wallPath: String                // a wallpaper picked from the gallery (copied into app storage)
+        get() = sp.getString("wall_path", "") ?: ""
+        set(v) = sp.edit().putString("wall_path", v).apply()
+    var wallScope: String               // "dashboard" = only the dashboard / "app" = every main screen
+        get() = sp.getString("wall_scope", "dashboard") ?: "dashboard"
+        set(v) = sp.edit().putString("wall_scope", v).apply()
+    var wallOverlay: Int                // 0..90 % cover over the wallpaper so text stays readable
+        get() = sp.getInt("wall_overlay", 60)
+        set(v) = sp.edit().putInt("wall_overlay", v).apply()
+
+    // ---- AI assistant (update 4): optional online mode. The API key is NOT stored here (see util/SecretStore.kt).
+    var aiOnline: Boolean               // true = use the API when the phone is online (falls back to offline answers)
+        get() = sp.getBoolean("ai_online", false)
+        set(v) = sp.edit().putBoolean("ai_online", v).apply()
+    var aiModel: String
+        get() = sp.getString("ai_model", "claude-haiku-5-5") ?: "claude-haiku-5-5"
+        set(v) = sp.edit().putString("ai_model", v).apply()
+
     // local image path -> uploaded public URL
     fun uploadedUrl(path: String): String? =
         try { JSONObject(sp.getString("uploaded", "{}") ?: "{}").optString(path).ifBlank { null } }

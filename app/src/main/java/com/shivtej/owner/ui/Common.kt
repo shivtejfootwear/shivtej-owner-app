@@ -56,6 +56,9 @@ sealed interface Route {
     object Printer : Route
     object ShopSettings : Route
     object BillDesign : Route
+    // ---- update 4
+    object ThemeSettings : Route
+    object Tasks : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

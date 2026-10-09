@@ -71,11 +71,11 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            val dark = isSystemInDarkTheme()
-            MaterialTheme(
-                colorScheme = if (dark) darkColorScheme(primary = Color(0xFFEF9A9A), secondary = Color(0xFFFFCDD2))
-                else lightColorScheme(primary = Color(0xFFC62828), secondary = Color(0xFF8E0000))
-            ) {
+            val systemDark = isSystemInDarkTheme()
+            val themeVersion by ThemeBus.version.collectAsState()
+            // the scheme follows the theme chosen in Settings (system / light / dark / red & white) and its accent colour
+            val scheme = remember(themeVersion, systemDark) { buildScheme(app.prefs, systemDark) }
+            MaterialTheme(colorScheme = scheme) {
                 Surface(Modifier.fillMaxSize()) { Root(app) }
             }
         }
@@ -197,6 +197,7 @@ fun Shell(app: App) {
         DrawerItem("Printer", Icons.Filled.Print, Route.Printer),
         DrawerItem("Shop & Bill Settings", Icons.Filled.Receipt, Route.ShopSettings),
         DrawerItem("AI Assistant", Icons.Filled.SmartToy, Route.Assistant),
+        DrawerItem("Tasks & Reminders", Icons.Filled.Checklist, Route.Tasks),
         DrawerItem("Settings", Icons.Filled.Settings, Route.Settings)
     )
 
@@ -229,6 +230,8 @@ fun Shell(app: App) {
         Route.Reports -> "Reports"
         Route.Assistant -> "AI Assistant"
         Route.Settings -> "Settings"
+        Route.ThemeSettings -> "Theme & Wallpaper"
+        Route.Tasks -> "Tasks & Reminders"
     }
 
     ModalNavigationDrawer(
@@ -279,6 +282,7 @@ fun Shell(app: App) {
             }
         ) { pad ->
             Box(Modifier.padding(pad).fillMaxSize()) {
+                WallpaperLayer(app, isDashboard = route == Route.Dashboard)
                 when (route) {
                     Route.Dashboard -> DashboardScreen(app, nav)
                     is Route.Products -> ProductsScreen(app, nav, route.filter)
@@ -304,6 +308,8 @@ fun Shell(app: App) {
                     Route.Reports -> ReportsScreen(app, nav)
                     Route.Assistant -> AssistantScreen(app)
                     Route.Settings -> SettingsScreen(app) { nav.go(it) }
+                    Route.ThemeSettings -> ThemeSettingsScreen(app)
+                    Route.Tasks -> TasksScreen(app)
                 }
             }
         }

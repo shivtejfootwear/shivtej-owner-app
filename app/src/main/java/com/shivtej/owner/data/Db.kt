@@ -19,7 +19,9 @@ data class ProductE(
     val active: Boolean,
     val newItem: Boolean,
     val images: String,      // JSON array of strings (local absolute path or https url)
-    val updatedAt: Long
+    val updatedAt: Long,
+    // ---- added in database version 6 (product videos; empty = no videos)
+    @androidx.room.ColumnInfo(defaultValue = "''") val videos: String = ""   // JSON array of strings (local path or https url)
 )
 
 @Entity(tableName = "variants", primaryKeys = ["productId", "colour"])
@@ -93,7 +95,9 @@ data class PosCustomerE(
     val name: String,
     val address: String,
     val createdAt: Long,
-    val pendingSync: Boolean
+    val pendingSync: Boolean,
+    @androidx.room.ColumnInfo(defaultValue = "''") val photoPath: String = "",   // added in version 6: profile photo on this phone
+    @androidx.room.ColumnInfo(defaultValue = "''") val photoUrl: String = ""     // the same photo on the server once synced
 )
 
 /** A supplier / distributor the shop buys stock from. */
@@ -106,7 +110,9 @@ data class SupplierE(
     val notes: String,
     val active: Boolean,
     val createdAt: Long,
-    val pendingSync: Boolean
+    val pendingSync: Boolean,
+    @androidx.room.ColumnInfo(defaultValue = "''") val photoPath: String = "",   // added in version 6
+    @androidx.room.ColumnInfo(defaultValue = "''") val photoUrl: String = ""
 )
 
 /** A purchase bill from a supplier. When addStock is true its items were added to the stock when it was saved. */
@@ -122,7 +128,37 @@ data class PurchaseE(
     val note: String,
     val pendingSync: Boolean,
     @androidx.room.ColumnInfo(defaultValue = "'OK'") val status: String = "OK",     // OK / REJECTED (refused by the server, kept for history)
+    @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "''") val billFile: String = "",       // supplier's bill photo / PDF kept on this phone (absolute path)
+    @androidx.room.ColumnInfo(defaultValue = "''") val billFileUrl: String = ""     // the same file on the server once synced (public URL)
+)
+
+/** Money received from a shop customer. billId empty = a payment on account (it reduces the customer's total due). Added in version 6. */
+@Entity(tableName = "customer_payments")
+data class CustomerPaymentE(
+    @PrimaryKey val id: String,
+    val mobile: String,
+    val billId: String,
+    val amount: Double,
+    val method: String,
+    val note: String,
+    val paidAt: Long,
+    val pendingSync: Boolean,
+    @androidx.room.ColumnInfo(defaultValue = "'OK'") val status: String = "OK",
     @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = ""
+)
+
+/** A task or reminder kept on this phone (not synced). dueAt 0 = no due date. Added in version 6. */
+@Entity(tableName = "tasks")
+data class TaskE(
+    @PrimaryKey val id: String,
+    val title: String,
+    val details: String,
+    val dueAt: Long,
+    val done: Boolean,
+    val doneAt: Long,
+    val createdAt: Long,
+    val notifyId: Int                      // id used for the Android notification of this task
 )
 
 /** Money paid to a supplier. billId empty = a payment on account. */
@@ -272,6 +308,8 @@ interface AppDao {
 
     // ---- bills (version 3)
     @Query("SELECT * FROM bills") suspend fun allBills(): List<BillE>
+    @Query("SELECT * FROM orders") suspend fun allOrders(): List<OrderE>
+    @Query("SELECT * FROM return_log") suspend fun allReturns(): List<ReturnE>
 
     // ---- staff
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putStaff(s: StaffE)
@@ -289,6 +327,30 @@ interface AppDao {
     @Query("SELECT * FROM pos_customers WHERE mobile = :mobile") suspend fun posCustomer(mobile: String): PosCustomerE?
     @Query("SELECT mobile FROM pos_customers WHERE pendingSync = 1") suspend fun pendingPosCustomerIds(): List<String>
     @Query("UPDATE pos_customers SET pendingSync = 0 WHERE mobile = :mobile") suspend fun posCustomerSynced(mobile: String)
+
+    // ---- customer payments and tasks (version 6)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCustomerPayment(p: CustomerPaymentE)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCustomerPayments(p: List<CustomerPaymentE>)
+    @Query("SELECT * FROM customer_payments ORDER BY paidAt DESC") fun observeCustomerPayments(): Flow<List<CustomerPaymentE>>
+    @Query("SELECT * FROM customer_payments") suspend fun allCustomerPayments(): List<CustomerPaymentE>
+    @Query("SELECT id FROM customer_payments WHERE pendingSync = 1") suspend fun pendingCustomerPaymentIds(): List<String>
+    @Query("SELECT id FROM customer_payments WHERE status = 'REJECTED'") suspend fun rejectedCustomerPaymentIds(): List<String>
+    @Query("UPDATE customer_payments SET pendingSync = 0 WHERE id = :id") suspend fun customerPaymentSynced(id: String)
+    @Query("UPDATE customer_payments SET status = 'REJECTED', rejectReason = :why, pendingSync = 0 WHERE id = :id")
+    suspend fun markCustomerPaymentRejected(id: String, why: String)
+    @Query("SELECT COUNT(*) FROM customer_payments WHERE id = :id AND status = 'REJECTED'") suspend fun customerPaymentRejectedCount(id: String): Int
+    @Query("UPDATE ops SET status = 'REJECTED', error = 'Its payment was refused by the server' WHERE status IN ('PENDING','FAILED') AND type = 'ADD_CUSTOMER_PAYMENT' AND refId = :ref")
+    suspend fun rejectOpsOfCustomerPayment(ref: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putTask(t: TaskE)
+    @Query("SELECT * FROM tasks ORDER BY done ASC, CASE WHEN dueAt = 0 THEN 1 ELSE 0 END, dueAt ASC, createdAt DESC") fun observeTasks(): Flow<List<TaskE>>
+    @Query("SELECT * FROM tasks WHERE id = :id") suspend fun task(id: String): TaskE?
+    @Query("SELECT * FROM tasks") suspend fun allTasks(): List<TaskE>
+    @Query("DELETE FROM tasks WHERE id = :id") suspend fun deleteTask(id: String)
+    @Query("UPDATE pos_customers SET photoPath = :path WHERE mobile = :mobile") suspend fun setCustomerPhoto(mobile: String, path: String)
+    @Query("UPDATE suppliers SET photoPath = :path WHERE id = :id") suspend fun setSupplierPhoto(id: String, path: String)
+    @Query("UPDATE pos_customers SET photoUrl = :url WHERE mobile = :mobile") suspend fun setCustomerPhotoUrl(mobile: String, url: String)
+    @Query("UPDATE suppliers SET photoUrl = :url WHERE id = :id") suspend fun setSupplierPhotoUrl(id: String, url: String)
 
     // ---- suppliers / purchases / payments
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSupplier(s: SupplierE)
@@ -368,11 +430,43 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/**
+ * Version 5 -> 6: product videos, customer and supplier photos, customer payments, tasks.
+ * ADD COLUMN / CREATE TABLE only. Existing rows keep every value; new columns get empty defaults.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `products` ADD COLUMN `videos` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `pos_customers` ADD COLUMN `photoPath` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `pos_customers` ADD COLUMN `photoUrl` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `suppliers` ADD COLUMN `photoPath` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `suppliers` ADD COLUMN `photoUrl` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `customer_payments` (`id` TEXT NOT NULL, `mobile` TEXT NOT NULL, `billId` TEXT NOT NULL, " +
+            "`amount` REAL NOT NULL, `method` TEXT NOT NULL, `note` TEXT NOT NULL, `paidAt` INTEGER NOT NULL, " +
+            "`pendingSync` INTEGER NOT NULL, `status` TEXT NOT NULL DEFAULT 'OK', `rejectReason` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`id`))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `tasks` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `details` TEXT NOT NULL, " +
+            "`dueAt` INTEGER NOT NULL, `done` INTEGER NOT NULL, `doneAt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, " +
+            "`notifyId` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+    }
+}
+
+/**
+ * Version 4 -> 5: a supplier purchase bill can keep the supplier's bill photo or PDF (billFile, billFileUrl).
+ * ADD COLUMN only, empty default; existing bills simply have no attachment.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `purchase_bills` ADD COLUMN `billFile` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `purchase_bills` ADD COLUMN `billFileUrl` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
 @Database(
     entities = [ProductE::class, VariantE::class, SizeE::class, OpE::class, BillE::class,
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
-        StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class],
-    version = 4,
+        StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
+        CustomerPaymentE::class, TaskE::class],
+    version = 6,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -382,7 +476,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }

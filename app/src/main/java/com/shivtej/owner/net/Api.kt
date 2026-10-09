@@ -51,9 +51,12 @@ object Api {
     }
 
     /** Uploads one image to the public "product-images" bucket and returns its public URL. */
-    fun uploadImage(path: String, bytes: ByteArray, mime: String): String {
+    fun uploadImage(path: String, bytes: ByteArray, mime: String): String = uploadFile("product-images", path, bytes, mime)
+
+    /** Uploads one file (image or PDF) to a public bucket and returns its public URL. */
+    fun uploadFile(bucket: String, path: String, bytes: ByteArray, mime: String): String {
         val req = Request.Builder()
-            .url("$base/storage/v1/object/product-images/$path")
+            .url("$base/storage/v1/object/$bucket/$path")
             .header("apikey", key)
             .header("Content-Type", mime)
             .header("x-upsert", "true")
@@ -63,6 +66,6 @@ object Api {
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw fail(resp.code, text)
         }
-        return "$base/storage/v1/object/public/product-images/$path"
+        return "$base/storage/v1/object/public/$bucket/$path"
     }
 }

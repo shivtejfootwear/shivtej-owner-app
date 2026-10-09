@@ -1,9 +1,23 @@
-# Builds the Shivtej Owner App and publishes a downloadable APK artifact.
+# Builds and tests the Shivtej Owner App (native Android, Kotlin + Jetpack Compose).
+# Outputs (download from the finished run > Artifacts):
+#   Shivtej-Owner-App        release APK (signed with the owner's release key when the secrets below are set)
+#   Shivtej-Owner-App-debug  debug APK
+#   unit-test-results        JVM unit test reports (always uploaded)
+#   build-failure-reports    lint and build reports (only when a step failed)
+#
+# Repository secrets for a stable release key (set once, in Settings > Secrets and variables > Actions):
+#   SHIVTEJ_KEYSTORE_BASE64   the .jks keystore file encoded with base64 (one line)
+#   SHIVTEJ_KEYSTORE_PASSWORD keystore password
+#   SHIVTEJ_KEY_ALIAS         key alias inside the keystore
+#   SHIVTEJ_KEY_PASSWORD      key password
+# Without these secrets the release APK is signed with the debug key (the run shows a warning).
+#
+# This file must live at   .github/workflows/build-apk.yml   in the ROOT of the GitHub repository.
+
 name: Build Shivtej Owner APK
 
 on:
   push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
@@ -15,13 +29,33 @@ concurrency:
 
 jobs:
   build-apk:
-    name: Build release APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    name: Test, lint and build the APK
+    runs-on: ubuntu-latest          # GitHub-hosted runner
+    timeout-minutes: 60
 
     steps:
       - name: Check out the code
         uses: actions/checkout@v4
+
+      # Finds settings.gradle.kts, so the build also works if the project was uploaded inside a sub-folder.
+      - name: Find the Android project folder
+        id: locate
+        shell: bash
+        run: |
+          set -eu
+          SETTINGS=$(find . -maxdepth 4 -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/.git/*' | head -n 1)
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::settings.gradle.kts was not found. Upload the whole project (settings.gradle.kts, build.gradle.kts and the app folder) to the repository."
+            exit 1
+          fi
+          DIR=$(dirname "$SETTINGS")
+          echo "Android project folder: $DIR"
+          ls -la "$DIR"
+          if [ ! -f "$DIR/app/build.gradle.kts" ]; then
+            echo "::error::$DIR/app/build.gradle.kts is missing - the app folder was not uploaded."
+            exit 1
+          fi
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -29,38 +63,93 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify preinstalled Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform 34 and build tools 34.0.0
         shell: bash
         run: |
           set -eu
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          test -d "$ANDROID_HOME/platforms/android-34"
-          test -d "$ANDROID_HOME/build-tools/34.0.0"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      # Runs the JVM tests (ledger, returns and refunds, offline assistant rules). A failing test stops the build.
+      - name: Unit tests
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest
+
+      # Lint is reported but does not stop the build (the app has many screens; warnings are listed in the report).
+      - name: Lint (report only)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        continue-on-error: true
+        run: gradle --no-daemon :app:lintDebug
+
+      - name: Prepare the release keystore from the secrets (if they are set)
+        id: keystore
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIVTEJ_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SHIVTEJ_KEYSTORE_PASSWORD }}
+        run: |
+          set -eu
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::No release keystore secret (SHIVTEJ_KEYSTORE_BASE64). The release APK will be signed with the debug key. An installed app signed with another key cannot be updated over, so it must be uninstalled first (back up in the app first)."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KS="$RUNNER_TEMP/shivtej-release.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
+          # Fails early with a clear message if the password or the file is wrong
+          keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" > /dev/null
+          echo "Release keystore loaded (contents are not printed)."
+          echo "path=$KS" >> "$GITHUB_OUTPUT"
+
+      - name: Build the debug APK
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
       - name: Build the release APK
+        working-directory: ${{ steps.locate.outputs.dir }}
+        env:
+          SHIVTEJ_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
+          SHIVTEJ_KEYSTORE_PASSWORD: ${{ secrets.SHIVTEJ_KEYSTORE_PASSWORD }}
+          SHIVTEJ_KEY_ALIAS: ${{ secrets.SHIVTEJ_KEY_ALIAS }}
+          SHIVTEJ_KEY_PASSWORD: ${{ secrets.SHIVTEJ_KEY_PASSWORD }}
         run: gradle --no-daemon --stacktrace :app:assembleRelease
 
-      - name: Collect the APK
+      - name: Collect the APKs
+        working-directory: ${{ steps.locate.outputs.dir }}
         shell: bash
         run: |
           set -eu
-          SRC="app/build/outputs/apk/release/app-release.apk"
-          if [ ! -f "$SRC" ]; then
-            echo "::error::APK not found. Files found:"
-            find app/build/outputs -type f || true
-            exit 1
-          fi
-          mkdir -p dist
-          cp "$SRC" dist/Shivtej-Owner-App.apk
-          ls -lh dist/Shivtej-Owner-App.apk
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          for pair in "app/build/outputs/apk/release/app-release.apk:Shivtej-Owner-App.apk" \
+                      "app/build/outputs/apk/debug/app-debug.apk:Shivtej-Owner-App-debug.apk"; do
+            SRC="${pair%%:*}"; DST="${pair##*:}"
+            if [ ! -f "$SRC" ]; then
+              echo "::error::The build finished but $SRC does not exist. Files found:"
+              find app/build/outputs -type f || true
+              exit 1
+            fi
+            cp "$SRC" "$GITHUB_WORKSPACE/dist/$DST"
+          done
+          ls -l "$GITHUB_WORKSPACE/dist"
 
-      - name: Upload the APK
+      - name: Check the APK signatures (which key signed each APK)
+        continue-on-error: true
+        shell: bash
+        run: |
+          for f in "$GITHUB_WORKSPACE/dist/"*.apk; do
+            echo "== $(basename "$f")"
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$f" || true
+          done
+
+      - name: Upload the release APK (artifact Shivtej-Owner-App)
         uses: actions/upload-artifact@v4
         with:
           name: Shivtej-Owner-App
@@ -68,12 +157,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build reports if build failed
+      - name: Upload the debug APK (artifact Shivtej-Owner-App-debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shivtej-Owner-App-debug
+          path: dist/Shivtej-Owner-App-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the unit test reports (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            ${{ steps.locate.outputs.dir }}/app/build/reports/tests/
+            ${{ steps.locate.outputs.dir }}/app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload build and lint reports (only if a step failed)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-failure-reports
           path: |
-            app/build/reports/
-            build/reports/
+            ${{ steps.locate.outputs.dir }}/app/build/reports/
+            ${{ steps.locate.outputs.dir }}/build/reports/
           if-no-files-found: ignore
+          retention-days: 14

@@ -24,7 +24,7 @@ import java.util.Locale
  */
 object BackupRestore {
     private const val HEADER = "SQLite format 3\u0000"
-    private const val SCHEMA_VERSION = 4          // AppDb version; backups of versions 2-4 migrate with the additive migrations
+    private const val SCHEMA_VERSION = 6          // AppDb version; backups of versions 2-6 migrate with the additive migrations
     private const val PENDING = "restore-pending.db"
     private val REQUIRED_TABLES = listOf("products", "variants", "size_stock", "bills", "ops", "stock_log", "return_log")
 
@@ -124,7 +124,7 @@ object BackupRestore {
             val check = sq.rawQuery("PRAGMA quick_check", null).use { c -> if (c.moveToFirst()) c.getString(0) else "" }
             if (check != "ok") throw IOException("The backup file is damaged ($check). Nothing was changed.")
             val version = sq.rawQuery("PRAGMA user_version", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
-            // version 1 is not restored (no migration path); 2 and 3 migrate without losing data
+            // version 1 is not restored (no migration path); 2 to 6 migrate without losing data
             if (version !in 2..SCHEMA_VERSION) {
                 throw IOException("This backup is from another app version ($version). It can not be restored safely. Nothing was changed.")
             }
