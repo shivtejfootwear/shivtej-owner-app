@@ -33,7 +33,7 @@
 - **Opening balance is on this phone only.** The server (website and Supabase) does not know it yet, so website reports do not include it.
   The SQL for the server column has not been written; say if you want it.
 - **Oldest due** is the oldest sale that still has an amount due (not a strict first-in-first-out match of payments to bills).
-- **Saving a new customer from a bill** is still automatic (as before). It is not an offer.
+- **Saving a new customer from a bill** is now an offer, not automatic. After a bill for a mobile number that is not saved yet, the receipt asks "Save this customer?" with the name and city filled in (change them first if needed). A bill for an unsaved number still counts in the dues and in the Customers list. An already saved customer keeps the name and city on the phone; the bill only fills blanks.
 - **Wallpaper on every screen** needs "All main screens" in the wallpaper section; the default is the Dashboard only (as before).
 - **Contrast:** the colour rules are coded for the Custom theme and the cards, but the visual result was not seen on a phone, so please check it on the phone.
 - **Signing:** unchanged. The release APK is still signed with the debug key until the original keystore secrets are added (see section 5).

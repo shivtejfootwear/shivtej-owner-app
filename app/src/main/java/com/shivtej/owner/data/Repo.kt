@@ -384,16 +384,21 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 .put("total_mrp", t.totalMrp).put("total_discount", t.totalDiscount).put("sub_total", t.subTotal)
                 .put("tax_percent", t.taxPercent).put("tax_amount", t.taxAmount)
                 .put("amount_paid", paid).put("balance", balance).put("meta", JSONObject(meta)))
-            // the customer is remembered by mobile number (one customer = one row, never duplicated)
+            // A customer who is already saved keeps the name and address on the phone (the bill only fills blanks).
+            // Photo, opening balance and created date are copied, never rebuilt, so nothing is lost.
+            // A NEW customer is not saved here: the receipt screen offers to save them (see SaveCustomerOffer).
             if (bill.customerMobile.isNotEmpty()) {
                 val old = dao.posCustomer(bill.customerMobile)
-                val name = if (cName.isNotEmpty()) cName else old?.name ?: ""
-                val addr = if (cAddr.isNotEmpty()) cAddr else old?.address ?: ""
-                dao.putPosCustomer(PosCustomerE(bill.customerMobile, name, addr, old?.createdAt ?: now, true,
-                    photoPath = old?.photoPath ?: "", photoUrl = old?.photoUrl ?: "", openingBalance = old?.openingBalance ?: 0.0))
-                enqueue("UPSERT_CUSTOMER", bill.customerMobile, JSONObject().put("mobile", bill.customerMobile)
-                    .put("name", cName).put("address", cAddr).put("force", false)
-                    .put("created_at", java.time.Instant.ofEpochMilli(old?.createdAt ?: now).toString()))
+                if (old != null) {
+                    val name = old.name.ifBlank { cName }
+                    val addr = old.address.ifBlank { cAddr }
+                    if (name != old.name || addr != old.address) {
+                        dao.putPosCustomer(old.copy(name = name, address = addr, pendingSync = true))
+                        enqueue("UPSERT_CUSTOMER", bill.customerMobile, JSONObject().put("mobile", bill.customerMobile)
+                            .put("name", name).put("address", addr).put("force", false)
+                            .put("created_at", java.time.Instant.ofEpochMilli(old.createdAt).toString()))
+                    }
+                }
             }
         }
         if (extra.salesPersonId.isNotBlank()) prefs.lastSalesPersonId = extra.salesPersonId
@@ -458,6 +463,12 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         }
         onChanged()
         return saved!!
+    }
+
+    /** True when this mobile number is not a saved shop customer yet (the receipt then offers to save it). */
+    suspend fun isNewShopCustomer(mobile: String): Boolean {
+        val m = BillMath.normMobile(mobile)
+        return m.length == 10 && dao.posCustomer(m) == null
     }
 
     // ---------------------------------------------------------- customer udhaar and payments (update 4)

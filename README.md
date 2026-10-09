@@ -140,6 +140,7 @@ The app asks for these only when you open the Printer screen or print. Printing 
 - Theme: Light, Dark, Custom (own background colour), System, Red & White; wallpaper from the gallery with "Fill screen" or "Whole picture".
 - Customers: opening balance (dues from before the app) per customer, sorting by Most spent / Highest due / Oldest due, "Customer dues" card on the dashboard.
 - Billing: saved customers are listed while you type a name or number; choosing one shows what they owe and their recent bills.
+  A new mobile number is offered for saving on the receipt (it is not saved silently). Bills never remove a saved customer's photo or opening balance.
 - Contacts: "Pick from phone contacts" in Add customer (permission asked only when tapped).
 - Database version 7 (additive: one new column `openingBalance` on `pos_customers`). The opening balance is kept on this phone only.
 

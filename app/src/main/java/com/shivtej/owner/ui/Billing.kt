@@ -637,6 +637,7 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
         }
     }
     val r = rendered ?: run { EmptyState("Preparing the bill..."); return }
+    SaveCustomerOffer(app, b)
 
     var printing by remember { mutableStateOf(false) }
     var printMsg by remember { mutableStateOf<String?>(null) }
@@ -712,4 +713,41 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)
         ) { Text("Return / Exchange") }
     }
+}
+
+/** After a bill for a mobile number that is not saved yet: offer to save the customer (name and address can be changed first). */
+@Composable
+fun SaveCustomerOffer(app: App, bill: BillE) {
+    val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+    var isNew by remember(bill.id) { mutableStateOf(false) }
+    var dismissed by remember(bill.id) { mutableStateOf(false) }
+    var name by remember(bill.id) { mutableStateOf(bill.customerName) }
+    var address by remember(bill.id) { mutableStateOf(bill.customerAddress) }
+    LaunchedEffect(bill.id) { isNew = app.repo.isNewShopCustomer(bill.customerMobile) }
+    if (!isNew || dismissed) return
+    AlertDialog(
+        onDismissRequest = { dismissed = true },
+        title = { Text("Save this customer?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Mobile " + BillMath.normMobile(bill.customerMobile) + ". Saved customers are found next time you type their name or number.",
+                    fontSize = 13.sp)
+                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(address, { address = it }, label = { Text("City / Address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank(), onClick = {
+                scope.launch {
+                    try {
+                        app.repo.saveCustomer(bill.customerMobile, name, address)
+                        isNew = false
+                        toast(ctx, "Customer saved")
+                    } catch (e: Exception) { toast(ctx, e.message ?: "Could not save the customer") }
+                }
+            }) { Text("Save customer") }
+        },
+        dismissButton = { TextButton(onClick = { dismissed = true }) { Text("Not now") } }
+    )
 }
