@@ -63,15 +63,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android platform 34 and build tools 34.0.0
+      # GitHub's Ubuntu runner already has the Android SDK (platform 34, build-tools 34.0.0).
+      # A third-party set-up action failed at its set-up step, so the workflow only checks that the SDK is there.
+      - name: Verify the preinstalled Android SDK
         shell: bash
         run: |
           set -eu
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -d "$ANDROID_HOME/platforms/android-34"
+          test -d "$ANDROID_HOME/build-tools/34.0.0"
+          test -x "$ANDROID_HOME/build-tools/34.0.0/apksigner"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
