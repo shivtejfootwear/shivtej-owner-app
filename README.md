@@ -135,6 +135,14 @@ The app asks for these only when you open the Printer screen or print. Printing 
 - **Database version 6**: `MIGRATION_5_6` only adds columns and tables. Backup and the database check accept versions 2 to 6.
   Nothing is dropped, reset or rewritten.
 
+## Update 5 (theme, Quick actions, customers and dues)
+- Dashboard: pencil icon edits the Quick actions (add, remove, reorder, restore default). "Theme" button opens the theme settings.
+- Theme: Light, Dark, Custom (own background colour), System, Red & White; wallpaper from the gallery with "Fill screen" or "Whole picture".
+- Customers: opening balance (dues from before the app) per customer, sorting by Most spent / Highest due / Oldest due, "Customer dues" card on the dashboard.
+- Billing: saved customers are listed while you type a name or number; choosing one shows what they owe and their recent bills.
+- Contacts: "Pick from phone contacts" in Add customer (permission asked only when tapped).
+- Database version 7 (additive: one new column `openingBalance` on `pos_customers`). The opening balance is kept on this phone only.
+
 ## Known limits (update 4)
 - GitHub Actions run 37918973021 (repository shivtejfootwear/shivtej-owner-app, commit 069c8a5) succeeded: unit tests, debug APK,
   release APK, APK collection and the signature check all passed. The release APK was signed with the DEBUG key, because the keystore

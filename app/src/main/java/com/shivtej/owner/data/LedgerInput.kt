@@ -19,6 +19,10 @@ fun ledgerReturns(list: List<ReturnE>): List<Ledger.LedgerReturn> = list.map { r
     )
 }
 
+/** Opening balances (dues from before the app) of the shop customers, keyed by mobile. Zero balances are left out. */
+fun openingsOf(list: List<PosCustomerE>): Map<String, Double> =
+    list.filter { it.openingBalance != 0.0 }.associate { com.shivtej.owner.util.BillMath.normMobile(it.mobile) to it.openingBalance }
+
 /** Value of a list of return lines (qty x price), as saved in the return's JSON. */
 fun goodsValue(json: String): Double = parseRetLines(json).sumOf { it.qty * it.price }
 

@@ -7,6 +7,8 @@ class Prefs(ctx: Context) {
     private val sp = ctx.getSharedPreferences("owner_prefs", Context.MODE_PRIVATE)
 
     companion object {
+        /** The Quick actions shown on the dashboard when the owner has not changed them (ids: see ui/QuickActions.kt). */
+        const val DEFAULT_QUICK_ACTIONS = "bill,add_customer,add_product,staff,customers,reports,returns,printer"
         const val DEFAULT_NOTES = "Thank you for shopping with Shivtej Footwear.\n" +
             "No return or exchange on used footwear.\n" +
             "For any issues, please contact within 7 days with original bill.\n" +
@@ -118,7 +120,7 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString("print_mode", v).apply()
 
     // ---- appearance (update 4): theme, accent colour, wallpaper
-    var themeMode: String               // "system" (default, as before) / "light" / "dark" / "redwhite"
+    var themeMode: String               // "system" (default, as before) / "light" / "dark" / "redwhite" / "custom"
         get() = sp.getString("theme_mode", "system") ?: "system"
         set(v) = sp.edit().putString("theme_mode", v).apply()
     var accentArgb: Int                 // 0 = the default Shivtej red
@@ -133,6 +135,15 @@ class Prefs(ctx: Context) {
     var wallPath: String                // a wallpaper picked from the gallery (copied into app storage)
         get() = sp.getString("wall_path", "") ?: ""
         set(v) = sp.edit().putString("wall_path", v).apply()
+    var wallFit: String                 // "crop" = fill the screen (cut the edges) / "fit" = the whole picture, no cut
+        get() = sp.getString("wall_fit", "crop") ?: "crop"
+        set(v) = sp.edit().putString("wall_fit", v).apply()
+    var customBgArgb: Int               // background colour of the "custom" theme (white by default)
+        get() = sp.getInt("custom_bg", -1)
+        set(v) = sp.edit().putInt("custom_bg", v).apply()
+    var quickActions: String            // the dashboard Quick actions, in order, as comma separated ids
+        get() = sp.getString("quick_actions", DEFAULT_QUICK_ACTIONS) ?: DEFAULT_QUICK_ACTIONS
+        set(v) = sp.edit().putString("quick_actions", v).apply()
     var wallScope: String               // "dashboard" = only the dashboard / "app" = every main screen
         get() = sp.getString("wall_scope", "dashboard") ?: "dashboard"
         set(v) = sp.edit().putString("wall_scope", v).apply()

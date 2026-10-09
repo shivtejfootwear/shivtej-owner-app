@@ -59,6 +59,8 @@ sealed interface Route {
     // ---- update 4
     object ThemeSettings : Route
     object Tasks : Route
+    // ---- customer dues (opened from the dashboard): the customers who owe money, highest due first
+    object Dues : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

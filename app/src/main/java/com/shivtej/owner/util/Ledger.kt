@@ -22,7 +22,8 @@ import com.shivtej.owner.data.CustomerPaymentE
  *  - REJECTED payments, returns and refunds (refused by the server) are kept for history and are never counted.
  *
  * Per sale:     due = total - goodsBack + goodsOut - receivedAtSale - paymentsOnSale + refund
- * Per customer: net = sum of due - payments on account;  outstanding = max(0, net);  advance = max(0, -net)
+ * Per customer: net = opening balance + sum of due - payments on account;  outstanding = max(0, net);  advance = max(0, -net)
+ * The opening balance is the due a customer had before the app was introduced (entered by the owner, never changed by sales).
  * The last running balance of the ledger always equals the customer's net.
  */
 object Ledger {
@@ -59,10 +60,14 @@ object Ledger {
         val advance: Double,       // paid in advance, or owed back to the customer
         val orders: Int = 0,       // website orders (not cancelled)
         val returned: Double = 0.0, // value of goods taken back
-        val refunded: Double = 0.0  // cash given back
+        val refunded: Double = 0.0, // cash given back
+        val oldestDueAt: Long = 0L  // when the oldest still-unpaid amount was made (OPENING_AT = before the app); 0 = nothing due
     )
 
-    /** One row of the account ledger. kind: BILL, ORDER, PAYMENT, RETURN, EXCHANGE_OUT, REFUND or DIFF_RECEIVED. */
+    /** Time stamp used for the opening balance: earlier than any real sale, so it is always the oldest due. */
+    const val OPENING_AT = 1L
+
+    /** One row of the account ledger. kind: OPENING, BILL, ORDER, PAYMENT, RETURN, EXCHANGE_OUT, REFUND or DIFF_RECEIVED. */
     data class Entry(
         val at: Long,
         val kind: String,
@@ -122,29 +127,33 @@ object Ledger {
      */
     fun maxCashRefund(
         refType: String, refId: String, backValue: Double, outValue: Double,
-        bills: List<BillE>, orders: List<WebOrder>, payments: List<CustomerPaymentE>, returns: List<LedgerReturn>
+        bills: List<BillE>, orders: List<WebOrder>, payments: List<CustomerPaymentE>, returns: List<LedgerReturn>,
+        openings: Map<String, Double> = emptyMap()
     ): Double {
         val sale = salesOf(bills, orders).firstOrNull { it.refType == refType && it.id == refId } ?: return 0.0
         // The customer's whole account decides: payments on account are also money the customer has with the shop.
-        val before = summaryOf(sale.mobile, bills, payments, orders, returns)
+        val before = summaryOf(sale.mobile, bills, payments, orders, returns, openings)
         val netBefore = before.outstanding - before.advance      // > 0 owes the shop, < 0 the shop owes the customer
         return BillMath.round2(maxOf(0.0, backValue - outValue - netBefore))
     }
 
     fun summaryOf(
         mobile: String, bills: List<BillE>, payments: List<CustomerPaymentE>,
-        orders: List<WebOrder> = emptyList(), returns: List<LedgerReturn> = emptyList()
+        orders: List<WebOrder> = emptyList(), returns: List<LedgerReturn> = emptyList(),
+        openings: Map<String, Double> = emptyMap()
     ): Summary {
         val m = BillMath.normMobile(mobile)
         val mySales = salesOf(bills, orders).filter { it.mobile == m }
         val mySaleIds = mySales.map { it.id }.toSet()
         val myPays = countedPayments(payments).filter { BillMath.normMobile(it.mobile) == m }
         val onAccount = myPays.filter { it.billId !in mySaleIds }.sumOf { it.amount }
-        val net = BillMath.round2(mySales.sumOf { dueOf(it, payments, returns) } - onAccount)
+        val opening = openings[m] ?: 0.0
+        val net = BillMath.round2(opening + mySales.sumOf { dueOf(it, payments, returns) } - onAccount)
         val payTotal = myPays.sumOf { it.amount }
         val myReturns = activeReturns(returns).filter { r ->
             mySales.any { it.refType == r.refType && it.id == r.refId }
         }
+        val oldest = oldestDue(mySales, payments, returns, opening)
         return Summary(
             mobile = m,
             bills = mySales.count { it.refType == "BILL" },
@@ -155,24 +164,33 @@ object Ledger {
             advance = maxOf(0.0, -net),
             orders = mySales.count { it.refType == "ORDER" },
             returned = BillMath.round2(myReturns.sumOf { it.goodsBack }),
-            refunded = BillMath.round2(myReturns.sumOf { maxOf(0.0, it.refund) })
+            refunded = BillMath.round2(myReturns.sumOf { maxOf(0.0, it.refund) }),
+            oldestDueAt = oldest
         )
+    }
+
+    /** The oldest sale that still has an amount due (the opening balance is older than any sale). 0 when nothing is due. */
+    private fun oldestDue(sales: List<Sale>, payments: List<CustomerPaymentE>, returns: List<LedgerReturn>, opening: Double): Long {
+        if (opening > 0.0) return OPENING_AT
+        return sales.filter { dueOf(it, payments, returns) > 0.005 }.minOfOrNull { it.at } ?: 0L
     }
 
     /** One summary per customer that has bills, orders or payments. */
     fun summaries(
         bills: List<BillE>, payments: List<CustomerPaymentE>,
-        orders: List<WebOrder> = emptyList(), returns: List<LedgerReturn> = emptyList()
+        orders: List<WebOrder> = emptyList(), returns: List<LedgerReturn> = emptyList(),
+        openings: Map<String, Double> = emptyMap()
     ): Map<String, Summary> {
         val mobiles = (bills.map { BillMath.normMobile(it.customerMobile) } +
             payments.map { BillMath.normMobile(it.mobile) } +
-            orders.map { BillMath.normMobile(it.mobile) })
+            orders.map { BillMath.normMobile(it.mobile) } +
+            openings.keys.map { BillMath.normMobile(it) })
             .filter { it.length == 10 }.toSet()
-        return mobiles.associateWith { summaryOf(it, bills, payments, orders, returns) }
+        return mobiles.associateWith { summaryOf(it, bills, payments, orders, returns, openings) }
     }
 
     private fun kindPriority(kind: String): Int = when (kind) {
-        "BILL", "ORDER" -> 0      // a sale comes before the things that happen after it
+        "OPENING", "BILL", "ORDER" -> 0      // the opening balance and a sale come before the things that happen after them
         "PAYMENT" -> 2            // a payment on the same moment comes after the sale
         else -> 1
     }
@@ -180,18 +198,23 @@ object Ledger {
     /** The account ledger in date order, with the running balance. The last balance equals the customer's net. */
     fun entries(
         mobile: String, bills: List<BillE>, payments: List<CustomerPaymentE>,
-        orders: List<WebOrder> = emptyList(), returns: List<LedgerReturn> = emptyList()
+        orders: List<WebOrder> = emptyList(), returns: List<LedgerReturn> = emptyList(),
+        openings: Map<String, Double> = emptyMap()
     ): List<Entry> {
         val m = BillMath.normMobile(mobile)
         val mySales = salesOf(bills, orders).filter { it.mobile == m }
         val rows = ArrayList<Entry>()
+        val opening = openings[m] ?: 0.0
+        if (opening > 0.0) rows.add(Entry(OPENING_AT, "OPENING", m, "Opening balance (before the app)", opening, 0.0, 0.0))
+        if (opening < 0.0) rows.add(Entry(OPENING_AT, "OPENING", m, "Opening balance (before the app)", 0.0, -opening, 0.0))
         for (s in mySales) {
             rows.add(Entry(s.at, if (s.refType == "BILL") "BILL" else "ORDER", s.id, s.title,
                 BillMath.round2(s.total - s.receivedAtSale), 0.0, 0.0))
         }
         for (p in countedPayments(payments).filter { BillMath.normMobile(it.mobile) == m }) {
+            val how = if (p.billId.isBlank()) "Payment (on account)" else "Payment against a sale"
             rows.add(Entry(p.paidAt, "PAYMENT", p.id,
-                if (p.billId.isBlank()) "Payment (on account)" else "Payment against a sale", 0.0, p.amount, 0.0))
+                if (p.method.isBlank()) how else "$how · ${p.method}", 0.0, p.amount, 0.0))
         }
         val mine = activeReturns(returns).filter { r -> mySales.any { it.refType == r.refType && it.id == r.refId } }
         for (r in mine) {

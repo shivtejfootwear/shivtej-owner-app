@@ -34,6 +34,7 @@ import com.shivtej.owner.data.BillE
 import com.shivtej.owner.data.CustomerPaymentE
 import com.shivtej.owner.data.ledgerOrders
 import com.shivtej.owner.data.ledgerReturns
+import com.shivtej.owner.data.openingsOf
 import com.shivtej.owner.util.BillMath
 import com.shivtej.owner.util.Images
 import com.shivtej.owner.util.Ledger
@@ -90,10 +91,12 @@ fun RecordPaymentDialog(app: App, mobile: String, presetBill: String, onDone: ()
     val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
     val orderRows by app.repo.orders.collectAsStateWithLifecycle(emptyList())
     val returnRows by app.repo.returns.collectAsStateWithLifecycle(emptyList())
+    val posRows by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
     val webOrders = remember(orderRows) { ledgerOrders(orderRows) }
     val rets = remember(returnRows) { ledgerReturns(returnRows) }
+    val openings = remember(posRows) { openingsOf(posRows) }
     val m = BillMath.normMobile(mobile)
-    val sum = remember(bills, pays, webOrders, rets, m) { Ledger.summaryOf(m, bills, pays, webOrders, rets) }
+    val sum = remember(bills, pays, webOrders, rets, m, openings) { Ledger.summaryOf(m, bills, pays, webOrders, rets, openings) }
     val openBills = remember(bills, pays, rets, m) {
         bills.filter { BillMath.normMobile(it.customerMobile) == m && Ledger.billRemaining(it, pays, rets) > 0.0 }
             .sortedBy { it.createdAt }
@@ -154,10 +157,11 @@ fun RecordPaymentDialog(app: App, mobile: String, presetBill: String, onDone: ()
 /** The account ledger of one customer: bills that owed money, payments received, and the running balance. */
 fun LazyListScope.ledgerItems(
     app: App, mobile: String, bills: List<BillE>, pays: List<CustomerPaymentE>,
-    orders: List<Ledger.WebOrder>, returns: List<Ledger.LedgerReturn>, nav: Nav
+    orders: List<Ledger.WebOrder>, returns: List<Ledger.LedgerReturn>, nav: Nav,
+    openings: Map<String, Double> = emptyMap()
 ) {
     val fmt = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.ENGLISH)
-    val rows = Ledger.entries(mobile, bills, pays, orders, returns)
+    val rows = Ledger.entries(mobile, bills, pays, orders, returns, openings)
     item { SectionTitle("Account ledger (bills, orders, returns, payments, balance)") }
     if (rows.isEmpty()) item { EmptyState("No bills, orders or payments for this customer yet.") }
     items(rows.reversed()) { e ->
@@ -166,7 +170,8 @@ fun LazyListScope.ledgerItems(
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(e.title, fontWeight = FontWeight.SemiBold)
-                Text(fmt.format(Date(e.at)), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (e.kind == "OPENING") "Before the app" else fmt.format(Date(e.at)), fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Column(horizontalAlignment = Alignment.End) {
                 if (e.credit > 0.0) {

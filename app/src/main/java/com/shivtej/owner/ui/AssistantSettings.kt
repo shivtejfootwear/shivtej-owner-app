@@ -78,6 +78,7 @@ fun AssistantScreen(app: App) {
             orders = orders,
             payments = pays,
             customerNames = posC.associate { BillMath.normMobile(it.mobile) to it.name }.filterKeys { it.length == 10 },
+            openings = openingsOf(posC),
             supplierOwed = suppliers.map { s -> s.name to SupplierMath.totals(s.id, pa, pb).outstanding }.filter { it.second > 0.0 },
             openTasks = tasks,
             lowThreshold = app.prefs.lowThreshold,

@@ -22,7 +22,8 @@ class AssistantData(
     val money: (Double) -> String,
     val now: Long,
     val webOrders: List<Ledger.WebOrder> = emptyList(),        // the same orders as `orders`, for the udhaar ledger
-    val ledgerReturns: List<Ledger.LedgerReturn> = emptyList() // returns and exchanges, for the udhaar ledger
+    val ledgerReturns: List<Ledger.LedgerReturn> = emptyList(), // returns and exchanges, for the udhaar ledger
+    val openings: Map<String, Double> = emptyMap()             // opening balances (dues before the app), keyed by mobile
 )
 
 /**
@@ -125,12 +126,12 @@ object Assistant {
     }
 
     private fun customerDuesText(t: String, d: AssistantData): String {
-        val sums = Ledger.summaries(d.bills, d.payments, d.webOrders, d.ledgerReturns)
+        val sums = Ledger.summaries(d.bills, d.payments, d.webOrders, d.ledgerReturns, d.openings)
         val mobileTyped = Regex("\\d{10}").find(t.filter { it.isDigit() || it == ' ' }.replace(" ", ""))?.value
         val mobileByName = d.customerNames.entries.firstOrNull { (_, name) -> name.length >= 3 && t.contains(name.lowercase()) }?.key
         val mobile = mobileTyped ?: mobileByName
         if (mobile != null) {
-            val s = sums[mobile] ?: Ledger.summaryOf(mobile, d.bills, d.payments, d.webOrders, d.ledgerReturns)
+            val s = sums[mobile] ?: Ledger.summaryOf(mobile, d.bills, d.payments, d.webOrders, d.ledgerReturns, d.openings)
             val name = d.customerNames[mobile] ?: "Customer"
             val tail = if (s.advance > 0) "\nAdvance with the shop: ${d.money(s.advance)}" else ""
             return "$name: billed ${d.money(s.billed)}, received ${d.money(s.payments)}, due ${d.money(s.outstanding)}$tail\n" +
@@ -247,7 +248,7 @@ object Assistant {
         sb.append("Stock: ${all.count { it.qty <= 0 }} size(s) out of stock; ${all.count { it.qty in 1..d.lowThreshold }} size(s) low (limit ${d.lowThreshold}).\n")
         val lowList = all.filter { it.qty <= d.lowThreshold }.sortedBy { it.qty }.take(15)
         if (lowList.isNotEmpty()) sb.append("Low or out items: " + lowList.joinToString("; ") { "${it.p.article} ${it.p.name} ${it.colour} size ${it.size} = ${it.qty}" } + "\n")
-        val owing = Ledger.summaries(d.bills, d.payments, d.webOrders, d.ledgerReturns).values.filter { it.outstanding > 0.0 }.sortedByDescending { it.outstanding }
+        val owing = Ledger.summaries(d.bills, d.payments, d.webOrders, d.ledgerReturns, d.openings).values.filter { it.outstanding > 0.0 }.sortedByDescending { it.outstanding }
         sb.append("Customers who owe money: ${owing.size}; total due ${d.money(owing.sumOf { it.outstanding })}\n")
         if (owing.isNotEmpty()) sb.append("Top dues: " + owing.take(10).joinToString("; ") { "${d.customerNames[it.mobile] ?: "Customer"} ${d.money(it.outstanding)}" } + "\n")
         sb.append("Suppliers still to pay: ${d.money(d.supplierOwed.sumOf { it.second })}\n")

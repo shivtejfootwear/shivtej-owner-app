@@ -37,10 +37,14 @@ import com.shivtej.owner.util.BillMath
 import com.shivtej.owner.util.BillTheme
 import com.shivtej.owner.util.Fmt
 import com.shivtej.owner.util.Invoice
+import com.shivtej.owner.util.Ledger
 import com.shivtej.owner.util.MathLine
 import com.shivtej.owner.util.Receipt
 import com.shivtej.owner.util.ReceiptData
 import com.shivtej.owner.util.ThermalText
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -430,7 +434,7 @@ private fun CartLineCard(app: App, i: Int, l: CartLine) {
     }
 }
 
-/** Customer name / mobile / city. Typing a saved mobile number loads the customer. One customer = one mobile number. */
+/** Customer name / mobile / city. Matching saved customers appear under the fields as you type; choosing one loads everything. */
 @Composable
 private fun CustomerCard(
     app: App, nav: Nav, posCustomers: List<PosCustomerE>, webCustomers: List<CustomerE>, bills: List<BillE>
@@ -439,9 +443,20 @@ private fun CustomerCard(
     val d = cart.draft
     val m = d.customerMobile
     var autoLoaded by remember { mutableStateOf(false) }
+    var typing by remember { mutableStateOf(false) }
+    val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
+    val orderRows by app.repo.orders.collectAsStateWithLifecycle(emptyList())
+    val returnRows by app.repo.returns.collectAsStateWithLifecycle(emptyList())
     val saved = if (m.length == 10) posCustomers.firstOrNull { it.mobile == m } else null
     val web = if (m.length == 10 && saved == null) webCustomers.firstOrNull { BillMath.normMobile(it.mobile) == m } else null
-    val past = if (m.length == 10) bills.filter { it.customerMobile == m } else emptyList()
+    val past = if (m.length == 10) bills.filter { it.customerMobile == m }.sortedByDescending { it.createdAt } else emptyList()
+    // what the customer owes BEFORE this bill (the bill being made is not saved yet)
+    val owed = if (m.length == 10 && (saved != null || web != null || past.isNotEmpty())) {
+        Ledger.summaryOf(m, bills, pays, ledgerOrders(orderRows), ledgerReturns(returnRows), openingsOf(posCustomers))
+    } else null
+    // suggestions while the owner types; hidden once a full saved number has been found
+    val matches = if (!typing || (m.length == 10 && (saved != null || web != null))) emptyList()
+        else customerMatches(m, d.customerName, posCustomers, webCustomers)
 
     LaunchedEffect(m, saved?.name, saved?.address, web?.name) {
         if (m.length == 10 && (saved != null || web != null)) {
@@ -461,7 +476,9 @@ private fun CustomerCard(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Customer Details", fontWeight = FontWeight.Bold)
             OutlinedTextField(
-                value = d.customerMobile, onValueChange = { v -> cart.updateDraft { it.copy(customerMobile = v.filter(Char::isDigit).take(10)) } },
+                value = d.customerMobile,
+                // pasted numbers such as "+91 98765 43210" are reduced to the 10 digits
+                onValueChange = { v -> typing = true; cart.updateDraft { it.copy(customerMobile = BillMath.normMobile(v)) } },
                 label = { Text("Mobile number") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { Icon(Icons.Filled.Phone, null) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
@@ -469,10 +486,31 @@ private fun CustomerCard(
                 supportingText = { if (m.isNotEmpty() && m.length != 10) Text("Mobile number must be 10 digits") }
             )
             OutlinedTextField(
-                value = d.customerName, onValueChange = { v -> autoLoaded = false; cart.updateDraft { it.copy(customerName = v) } },
+                value = d.customerName, onValueChange = { v -> autoLoaded = false; typing = true; cart.updateDraft { it.copy(customerName = v) } },
                 label = { Text("Customer name (empty = Walk-in Customer)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { Icon(Icons.Filled.Person, null) }
             )
+            if (matches.isNotEmpty()) {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftRed)) {
+                    Column {
+                        Text("Saved customers that match. Tap one to load it.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp))
+                        matches.forEach { c ->
+                            Row(Modifier.fillMaxWidth().clickable {
+                                typing = false; autoLoaded = true
+                                cart.updateDraft { it.copy(customerMobile = c.mobile, customerName = c.name, customerAddress = c.address) }
+                            }.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.name.ifBlank { "Customer" }, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                    Text(c.mobile + if (c.address.isNotBlank()) " · " + c.address else "", fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                }
+                                Text("Select", color = BrandRed, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
             OutlinedTextField(
                 value = d.customerAddress, onValueChange = { v -> autoLoaded = false; cart.updateDraft { it.copy(customerAddress = v) } },
                 label = { Text("City / Address") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
@@ -487,12 +525,43 @@ private fun CustomerCard(
                         )
                         TextButton(onClick = { nav.go(Route.CustomerDetail(m)) }) { Text("History") }
                     }
+                    owed?.let { s ->
+                        Text(
+                            if (s.outstanding > 0.0) "Owes now (before this bill): ${moneyG(app, s.outstanding)}" else "No balance due before this bill",
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (s.outstanding > 0.0) RedOut else GreenOk
+                        )
+                    }
+                    past.take(3).forEach { b ->
+                        Row(Modifier.fillMaxWidth().clickable { nav.go(Route.Receipt(b.id)) }.padding(vertical = 2.dp)) {
+                            Text(b.billNo + " · " + SimpleDateFormat("dd MMM yyyy", Locale.ENGLISH).format(Date(b.createdAt)),
+                                fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Text(moneyG(app, b.total), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                 } else {
                     Text("New customer - will be saved with this bill.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
     }
+}
+
+private data class CustomerPick(val mobile: String, val name: String, val address: String)
+
+/** Saved customers whose name contains the text typed, or whose mobile contains the digits typed (spaces and +91 ignored). */
+private fun customerMatches(mobileText: String, nameText: String, posCustomers: List<PosCustomerE>, webCustomers: List<CustomerE>): List<CustomerPick> {
+    val digits = mobileText.filter(Char::isDigit)
+    val name = nameText.trim()
+    if (digits.isEmpty() && name.length < 2) return emptyList()
+    val all = LinkedHashMap<String, CustomerPick>()
+    posCustomers.forEach { c -> val mm = BillMath.normMobile(c.mobile); if (mm.length == 10) all[mm] = CustomerPick(mm, c.name, c.address) }
+    webCustomers.forEach { c -> val mm = BillMath.normMobile(c.mobile); if (mm.length == 10 && mm !in all) all[mm] = CustomerPick(mm, c.name, "") }
+    // "919..." typed with the country code also finds the 10 digit number after it
+    val alt = if (digits.length > 2 && digits.startsWith("91")) digits.drop(2) else null
+    return all.values.filter { c ->
+        (digits.isNotEmpty() && (c.mobile.contains(digits) || (alt != null && c.mobile.contains(alt)))) ||
+            (name.length >= 2 && c.name.contains(name, ignoreCase = true))
+    }.sortedBy { it.name.lowercase() }.take(5)
 }
 
 /** Bill number, date and the sales person who made this sale. */

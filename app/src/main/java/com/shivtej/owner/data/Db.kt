@@ -97,7 +97,9 @@ data class PosCustomerE(
     val createdAt: Long,
     val pendingSync: Boolean,
     @androidx.room.ColumnInfo(defaultValue = "''") val photoPath: String = "",   // added in version 6: profile photo on this phone
-    @androidx.room.ColumnInfo(defaultValue = "''") val photoUrl: String = ""     // the same photo on the server once synced
+    @androidx.room.ColumnInfo(defaultValue = "''") val photoUrl: String = "",    // the same photo on the server once synced
+    // added in version 7: dues this customer had BEFORE the app was introduced (kept on this phone, not synced)
+    val openingBalance: Double = 0.0
 )
 
 /** A supplier / distributor the shop buys stock from. */
@@ -325,6 +327,7 @@ interface AppDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putPosCustomers(c: List<PosCustomerE>)
     @Query("SELECT * FROM pos_customers ORDER BY name COLLATE NOCASE") fun observePosCustomers(): Flow<List<PosCustomerE>>
     @Query("SELECT * FROM pos_customers WHERE mobile = :mobile") suspend fun posCustomer(mobile: String): PosCustomerE?
+    @Query("SELECT * FROM pos_customers") suspend fun allPosCustomers(): List<PosCustomerE>
     @Query("SELECT mobile FROM pos_customers WHERE pendingSync = 1") suspend fun pendingPosCustomerIds(): List<String>
     @Query("UPDATE pos_customers SET pendingSync = 0 WHERE mobile = :mobile") suspend fun posCustomerSynced(mobile: String)
 
@@ -431,6 +434,16 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
 }
 
 /**
+ * Version 6 -> 7: an opening balance per shop customer (dues from before the app). ADD COLUMN only; every existing
+ * customer gets 0.0, so nothing changes until the owner enters a figure.
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `pos_customers` ADD COLUMN `openingBalance` REAL NOT NULL DEFAULT 0.0")
+    }
+}
+
+/**
  * Version 5 -> 6: product videos, customer and supplier photos, customer payments, tasks.
  * ADD COLUMN / CREATE TABLE only. Existing rows keep every value; new columns get empty defaults.
  */
@@ -466,7 +479,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -476,7 +489,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }

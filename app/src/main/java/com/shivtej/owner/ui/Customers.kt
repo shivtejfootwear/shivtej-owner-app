@@ -2,6 +2,14 @@
 
 package com.shivtej.owner.ui
 
+import android.Manifest
+import android.content.Context
+import android.net.Uri
+import android.provider.ContactsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -33,6 +41,7 @@ import com.shivtej.owner.util.BillMath
 import com.shivtej.owner.util.Ledger
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
@@ -47,7 +56,9 @@ data class CustRow(
     val lastAt: Long,
     val outstanding: Double = 0.0,      // udhaar still to be paid (shop bills minus payments received)
     val photoPath: String = "",
-    val photoUrl: String = ""
+    val photoUrl: String = "",
+    val oldestDueAt: Long = 0L,         // when the oldest unpaid amount was made (Ledger.OPENING_AT = before the app)
+    val openingBalance: Double = 0.0    // dues from before the app, entered by the owner
 )
 
 /** Every customer the phone knows about, merged by mobile number so the same customer never appears twice. */
@@ -79,10 +90,12 @@ fun buildCustRows(
             if (it.name.isBlank()) it.name = custField(o.customerJson, "name")
         }
     }
-    val sums = Ledger.summaries(bills, pays, ledgerOrders(orders), ledgerReturns(returns))
+    val openings = openingsOf(posC)
+    val sums = Ledger.summaries(bills, pays, ledgerOrders(orders), ledgerReturns(returns), openings)
     return map.values.map {
         CustRow(it.mobile, it.name, it.address, it.email, it.count, BillMath.round2(it.spent), it.last,
-            outstanding = sums[it.mobile]?.outstanding ?: 0.0, photoPath = it.photoPath, photoUrl = it.photoUrl)
+            outstanding = sums[it.mobile]?.outstanding ?: 0.0, photoPath = it.photoPath, photoUrl = it.photoUrl,
+            oldestDueAt = sums[it.mobile]?.oldestDueAt ?: 0L, openingBalance = openings[it.mobile] ?: 0.0)
     }
         .sortedWith(compareByDescending<CustRow> { it.spent }.thenBy { it.name.lowercase() })
 }
@@ -103,7 +116,7 @@ fun PersonAvatar(name: String, localPath: String, remoteUrl: String, size: Dp = 
 }
 
 @Composable
-fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false) {
+fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus: String = "all") {
     val posC by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
     val webC by app.repo.customers.collectAsStateWithLifecycle(emptyList())
     val bills by app.repo.bills.collectAsStateWithLifecycle(emptyList())
@@ -111,7 +124,8 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false) {
     val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
     val returns by app.repo.returns.collectAsStateWithLifecycle(emptyList())
     var query by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("all") }      // all | owes | clear
+    var status by remember { mutableStateOf(initialStatus) }      // all | owes | clear
+    var sort by remember { mutableStateOf(if (initialStatus == "owes") "due" else "spent") }  // spent | due | oldest
     var adding by remember { mutableStateOf(openAdd) }
     val rows = remember(posC, webC, bills, orders, pays, returns) { buildCustRows(posC, webC, bills, orders, pays, returns) }
 
@@ -124,6 +138,16 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false) {
         q.isEmpty() ||
             (digits.isNotEmpty() && q.all { it.isDigit() || it == ' ' || it == '+' } && r.mobile.contains(digits)) ||
             r.name.contains(q, true) || r.address.contains(q, true) || r.email.contains(q, true)
+    }.let { list ->
+        when (sort) {
+            // the highest amount still to be paid first
+            "due" -> list.sortedWith(compareByDescending<CustRow> { it.outstanding }
+                .thenBy { if (it.oldestDueAt == 0L) Long.MAX_VALUE else it.oldestDueAt })
+            // the oldest pending amount first; customers who owe nothing last
+            "oldest" -> list.sortedWith(compareBy<CustRow>({ if (it.outstanding > 0.0) 0 else 1 },
+                { if (it.oldestDueAt == 0L) Long.MAX_VALUE else it.oldestDueAt }, { -it.outstanding }))
+            else -> list
+        }
     }
     // typing a full 10-digit mobile number brings that customer to the top
     val exact = if (digits.length == 10) rows.firstOrNull { it.mobile == digits } else null
@@ -152,6 +176,11 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false) {
                 Chip("All", status == "all") { status = "all" }
                 Chip("Owes money", status == "owes") { status = "owes" }
                 Chip("No dues", status == "clear") { status = "clear" }
+            }
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+                Chip("Most spent", sort == "spent") { sort = "spent" }
+                Chip("Highest due", sort == "due") { sort = "due" }
+                Chip("Oldest due", sort == "oldest") { sort = "oldest" }
             }
             Text("${shown.size} customer(s) · ${rows.size} saved in total", fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 6.dp))
@@ -187,6 +216,8 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false) {
                             if (c.outstanding > 0.0) Text("Due " + moneyG(app, c.outstanding), fontSize = 12.sp,
                                 color = RedOut, fontWeight = FontWeight.Bold)
                             else Text("${c.bills} purchase(s)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (c.outstanding > 0.0 && c.oldestDueAt > 0L) Text("since " + sinceLabel(c.oldestDueAt), fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     HorizontalDivider()
@@ -210,9 +241,26 @@ fun CustomerDialog(
     app: App, existing: CustRow?, takenMobiles: Set<String>, onOpen: (String) -> Unit, onDone: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     var name by remember { mutableStateOf(existing?.name ?: "") }
     var mobile by remember { mutableStateOf(existing?.mobile ?: "") }
     var address by remember { mutableStateOf(existing?.address ?: "") }
+    var opening by remember { mutableStateOf(existing?.openingBalance?.takeIf { it != 0.0 }?.let { plainAmount(it) } ?: "") }
+
+    // Pick a name and number from the phone's Contacts (asked once, only when the owner taps the button).
+    val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri ->
+        if (uri != null) {
+            val picked = readPhoneContact(ctx, uri)
+            if (picked == null) toast(ctx, "This contact has no 10 digit mobile number.")
+            else {
+                mobile = picked.second
+                if (name.isBlank()) name = picked.first
+            }
+        }
+    }
+    val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) contactPicker.launch(null) else toast(ctx, "Contacts permission was not given. Type the number instead.")
+    }
     // null = photo unchanged, "" = photo removed, otherwise the path of the new picture
     var photoChange by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -233,6 +281,18 @@ fun CustomerDialog(
                     supportingText = { if (mobile.isNotEmpty() && m.length != 10) Text("Must be 10 digits") })
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(address, { address = it }, label = { Text("City / Address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (existing == null) OutlinedButton(onClick = {
+                    if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                        contactPicker.launch(null)
+                    else contactsPermission.launch(Manifest.permission.READ_CONTACTS)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Phone, null)
+                    Text("  Pick from phone contacts")
+                }
+                OutlinedTextField(opening, { opening = it.filter { c -> c.isDigit() || c == '.' }.take(10) },
+                    label = { Text("Opening balance (dues before the app)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    supportingText = { Text("Leave empty if none. Later bills and payments are counted automatically.", fontSize = 11.sp) })
                 if (clash) Text("This mobile number is already saved. Open that customer to edit it.", color = AmberLow, fontSize = 13.sp)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             }
@@ -240,11 +300,16 @@ fun CustomerDialog(
         confirmButton = {
             if (clash) TextButton(onClick = { onDone(); onOpen(m) }) { Text("Open customer") }
             else TextButton(enabled = m.length == 10 && name.isNotBlank(), onClick = {
-                scope.launch {
-                    try {
-                        app.repo.saveCustomer(m, name, address, photoChange)
-                        onDone()
-                    } catch (e: Exception) { error = e.message ?: "Could not save" }
+                val openingValue = if (opening.isBlank()) 0.0 else BillMath.parseAmount(opening)
+                if (openingValue == null) {
+                    error = "Opening balance must be a number"
+                } else {
+                    scope.launch {
+                        try {
+                            app.repo.saveCustomer(m, name, address, photoChange, openingValue)
+                            onDone()
+                        } catch (e: Exception) { error = e.message ?: "Could not save" }
+                    }
                 }
             }) { Text("Save") }
         },
@@ -274,8 +339,9 @@ fun CustomerDetailScreen(app: App, nav: Nav, mobile: String) {
     }
     val myBills = bills.filter { BillMath.normMobile(it.customerMobile) == mobile }
     val myOrders = orders.filter { it.orderStatus != "Cancelled" && custField(it.customerJson, "mobile", "phone").let { m -> BillMath.normMobile(m) == mobile } }
-    val sum = remember(bills, pays, orders, returns, mobile) {
-        Ledger.summaryOf(mobile, bills, pays, ledgerOrders(orders), ledgerReturns(returns))
+    val openings = remember(posC) { openingsOf(posC) }
+    val sum = remember(bills, pays, orders, returns, mobile, openings) {
+        Ledger.summaryOf(mobile, bills, pays, ledgerOrders(orders), ledgerReturns(returns), openings)
     }
     val history = remember(myBills, myOrders, pays, returns) {
         val ledgerRets = ledgerReturns(returns)
@@ -326,6 +392,9 @@ fun CustomerDetailScreen(app: App, nav: Nav, mobile: String) {
                     Text(moneyG(app, sum.outstanding), fontWeight = FontWeight.Bold, fontSize = 24.sp,
                         color = if (sum.outstanding > 0.0) RedOut else GreenOk)
                     Text("Billed ${moneyG(app, sum.billed)} · Received ${moneyG(app, sum.payments)}", fontSize = 12.sp)
+                    val opening = openings[mobile] ?: 0.0
+                    if (opening != 0.0) Text("Includes the opening balance from before the app: ${moneyG(app, opening)}", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (sum.advance > 0.0) Text("Advance with the shop: ${moneyG(app, sum.advance)}", fontSize = 12.sp, color = GreenOk)
                     Button(enabled = sum.outstanding > 0.0, onClick = { paying = "" }, modifier = Modifier.padding(top = 8.dp)) {
                         Text("Receive payment")
@@ -333,7 +402,7 @@ fun CustomerDetailScreen(app: App, nav: Nav, mobile: String) {
                 }
             }
         }
-        ledgerItems(app, mobile, bills, pays, ledgerOrders(orders), ledgerReturns(returns), nav)
+        ledgerItems(app, mobile, bills, pays, ledgerOrders(orders), ledgerReturns(returns), nav, openings)
         item { SectionTitle("Purchase history (tap a shop bill to view or print it)") }
         if (history.isEmpty()) item { EmptyState("No purchases yet for this customer.") }
         items(history, key = { it.id }) { p ->
@@ -373,4 +442,31 @@ private fun StatTile(title: String, value: String, modifier: Modifier) {
             Text(value, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = BrandRed, maxLines = 1)
         }
     }
+}
+
+/** "dd MMM yyyy" for the date of the oldest unpaid amount, or "before the app" for the opening balance. */
+fun sinceLabel(at: Long): String =
+    if (at == Ledger.OPENING_AT) "before the app" else SimpleDateFormat("dd MMM yyyy", Locale.ENGLISH).format(Date(at))
+
+/** An amount without trailing zeros, for typing into a field: 500.0 -> "500", 250.5 -> "250.5". */
+fun plainAmount(v: Double): String = BillMath.round2(v).let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() }
+
+/** Reads the name and the 10 digit mobile number of a contact picked from the phone's Contacts app. Null when there is none. */
+fun readPhoneContact(ctx: Context, uri: Uri): Pair<String, String>? {
+    val cr = ctx.contentResolver
+    var contactId: String? = null
+    var name = ""
+    cr.query(uri, arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) { contactId = c.getString(0); name = c.getString(1).orEmpty() }
+    }
+    val id = contactId ?: return null
+    var number: String? = null
+    cr.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI, arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+        "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?", arrayOf(id), null)?.use { c ->
+        while (number == null && c.moveToNext()) {
+            val n = BillMath.normMobile(c.getString(0).orEmpty())
+            if (n.length == 10) number = n
+        }
+    }
+    return number?.let { name to it }
 }

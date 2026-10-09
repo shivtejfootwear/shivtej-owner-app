@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shivtej.owner.App
 import com.shivtej.owner.data.*
+import com.shivtej.owner.util.BillMath
+import com.shivtej.owner.util.Ledger
 import com.shivtej.owner.util.Periods
 import com.shivtej.owner.util.Reports
 import java.text.SimpleDateFormat
@@ -48,6 +50,8 @@ fun DashboardScreen(app: App, nav: Nav) {
     val staff by app.repo.staff.collectAsStateWithLifecycle(emptyList())
     val posCustomers by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
     val webCustomers by app.repo.customers.collectAsStateWithLifecycle(emptyList())
+    val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
+    val returnRows by app.repo.returns.collectAsStateWithLifecycle(emptyList())
     val failed by app.repo.failedOps.collectAsStateWithLifecycle(0)
     val st by app.sync.state.collectAsStateWithLifecycle()
     val online by app.net.online.collectAsStateWithLifecycle()
@@ -70,6 +74,14 @@ fun DashboardScreen(app: App, nav: Nav) {
     }
     val trend = remember(sales, now / 60_000L) { Reports.dailyTotals(sales, 7, now) }
     val staffToday = remember(sales, now / 60_000L) { Reports.staffStats(sales, start, Long.MAX_VALUE) }
+    // customer dues: the same figures as the customer ledgers (see util/Ledger.kt)
+    val dues = remember(bills, pays, orders, returnRows, posCustomers) {
+        Ledger.summaries(bills, pays, ledgerOrders(orders), ledgerReturns(returnRows), openingsOf(posCustomers))
+            .values.filter { it.outstanding > 0.0 }
+    }
+    val totalDue = BillMath.round2(dues.sumOf { it.outstanding })
+    var quickCsv by remember { mutableStateOf(app.prefs.quickActions) }
+    var editingQuick by remember { mutableStateOf(false) }
     val productById = products.associateBy { it.id }
     val topToday = remember(todayBills) {
         todayBills.flatMap { parseBillItems(it.itemsJson) }
@@ -89,25 +101,22 @@ fun DashboardScreen(app: App, nav: Nav) {
             if (failed > 0) Banner("$failed change(s) could not be synced. Open Settings > Sync status.", Color(0xFFFFCDD2))
         }
 
-        // ---------------- quick actions
+        // ---------------- quick actions (the owner chooses and orders them with the pencil)
         item {
-            Text("Quick actions", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Quick actions", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = { nav.go(Route.ThemeSettings) }) { Text("Theme") }
+                IconButton(onClick = { editingQuick = true }) { Icon(Icons.Filled.Edit, "Edit Quick actions") }
+            }
         }
         item {
-            val actions = listOf(
-                QuickAction("New Bill", Icons.Filled.Receipt, BrandRed, Route.Pos),
-                QuickAction("Add Customer", Icons.Filled.PersonAdd, Color(0xFF1565C0), Route.CustomerNew),
-                QuickAction("Add Product", Icons.Filled.AddCircle, Color(0xFF2E7D32), Route.ProductEdit(null)),
-                QuickAction("Staff", Icons.Filled.Group, Color(0xFF6A1B9A), Route.Staff),
-                QuickAction("Customers", Icons.Filled.People, Color(0xFFEF6C00), Route.Customers),
-                QuickAction("Reports", Icons.Filled.BarChart, Color(0xFF00838F), Route.Reports),
-                QuickAction("Returns / Exchange", Icons.Filled.Replay, BrandInk, Route.Returns),
-                QuickAction("Printer", Icons.Filled.Print, BrandInk, Route.Printer)
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val actions = quickActionsFrom(quickCsv).map { QuickAction(it.label, it.icon, it.color, it.route) }
+            if (actions.isEmpty()) EmptyState("No shortcuts yet. Tap the pencil to add some.")
+            else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 actions.chunked(4).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         row.forEach { a -> QuickTile(a, nav, Modifier.weight(1f)) }
+                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
@@ -116,7 +125,7 @@ fun DashboardScreen(app: App, nav: Nav) {
         // ---------------- KPI cards (real values)
         item { Text("Overview", fontWeight = FontWeight.Bold, fontSize = 16.sp) }
         items(kpiRows(app, products.size, products.count { it.active }, sizes.sumOf { it.qty }, lowCount, outCount,
-            todaySales, todayBills.size, orders.size, pending, customerKeys.size, todayDiscount, activeStaff, nav)) { pair ->
+            todaySales, todayBills.size, orders.size, pending, customerKeys.size, todayDiscount, activeStaff, totalDue, dues.size, nav)) { pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 pair.forEach { k -> KpiCard(k, nav, Modifier.weight(1f)) }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
@@ -250,6 +259,10 @@ fun DashboardScreen(app: App, nav: Nav) {
         }
         item { Spacer(Modifier.height(16.dp)) }
     }
+
+    if (editingQuick) QuickActionsEditor(quickCsv,
+        onSave = { csv -> app.prefs.quickActions = csv; quickCsv = csv; editingQuick = false },
+        onCancel = { editingQuick = false })
 }
 
 /** Only used to read phone numbers the same way the bill does. */
@@ -294,7 +307,7 @@ private fun KpiCard(k: Kpi, nav: Nav, modifier: Modifier) {
 private fun kpiRows(
     app: App, products: Int, active: Int, stock: Int, low: Int, out: Int,
     todaySales: Double, todayBills: Int, orders: Int, pending: Int, customers: Int, discount: Double,
-    staff: Int, nav: Nav
+    staff: Int, dueTotal: Double, dueCount: Int, nav: Nav
 ): List<List<Kpi>> {
     val rows = listOf(
         listOf(
@@ -318,6 +331,7 @@ private fun kpiRows(
             Kpi("Today's Discount", moneyG(app, discount), "total discount today", GreenOk, Route.Reports)
         ),
         listOf(
+            Kpi("Customer dues", moneyG(app, dueTotal), "$dueCount customer(s) owe money", RedOut, Route.Dues),
             Kpi("Staff Members", staff.toString(), "active staff", Color(0xFF6A1B9A), Route.Staff)
         )
     )

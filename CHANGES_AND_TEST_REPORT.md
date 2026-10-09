@@ -1,3 +1,45 @@
+# Shivtej Owner App - Update 5: theme, Quick actions, customers and dues
+
+## U5.1 What changed in this update
+| # | Request | What was done | Where |
+|---|---------|---------------|-------|
+| 1 | Dashboard theme settings | The theme screen already existed (Settings > Theme & wallpaper); it was not removed. A "Theme" button is now on the Dashboard. | `ui/Dashboard.kt`, `ui/Theme.kt` |
+| 2 | Light / Dark / Custom | Added **Custom**: the owner picks a background colour (8 swatches). Text, cards and buttons switch to dark or light so they stay readable. Existing System / Light / Dark / Red & White kept. | `ui/Theme.kt`, `data/Prefs.kt` |
+| 3 | Wallpaper from gallery, fit/crop, readability | Existing gallery wallpaper kept. Added "Fill screen" or "Whole picture" and the existing cover slider. Saved on the phone. | `ui/Theme.kt` |
+| 4 | Quick actions | Pencil icon on the Dashboard opens an editor: add, remove, reorder (arrows), restore default. 16 shortcuts available, including the 8 original ones. Saved on the phone. | `ui/QuickActions.kt`, `ui/Dashboard.kt`, `data/Prefs.kt` |
+| 5 | Customer outstanding | Dashboard "Customer dues" card, same figures as the customer ledgers. The Customers screen sorts by Most spent, Highest due or Oldest due, and shows "since <date>". Opening: `Dues` screen from the dashboard. | `util/Ledger.kt`, `ui/Customers.kt`, `ui/Dashboard.kt`, `MainActivity.kt` |
+| 6 | Opening balance | A per-customer opening balance (dues before the app), entered in Add/Edit customer. Shown as the first ledger row. Never changed by sales; kept when the server copy is synced. New DB column (version 6 to 7, additive). | `data/Db.kt` (MIGRATION_6_7), `util/Ledger.kt`, `data/Repo.kt` |
+| 7 | Contacts | "Pick from phone contacts" in Add customer (asks permission only when tapped). Pasted "+91 98765 43210" is reduced to 10 digits. | `ui/Customers.kt`, `ui/Billing.kt`, `AndroidManifest.xml` |
+| 8 | Billing lookup | While typing a name (2+ letters) or mobile digits, matching saved customers are listed under the fields. Tap one to load name, city, outstanding ("Owes now, before this bill") and the last 3 bills. | `ui/Billing.kt` |
+| 9 | Keep existing data | Fixed an existing bug: saving a bill rebuilt the customer row without the profile photo, so the photo was lost. The photo and opening balance are now kept. | `data/Repo.kt` |
+
+## U5.2 Verification (this update)
+| Check | Result |
+|---|---|
+| JVM ledger tests (`LedgerTest` 6, `LedgerReturnsTest` 19, `LedgerOpeningTest` 8 new) | **33 of 33 passed** (local, JUnit 4.13.2, Kotlin 2.0.21) |
+| Android compile (Kotlin, Compose, Room) and the APK build | **Not run yet.** There is no Android SDK here. The GitHub Actions run decides this. See the run result in the final message. |
+| Phone tests: theme on each screen, wallpaper, Quick actions after restart, contacts, outstanding after a restart | **NOT RUN.** Needs the installed APK on a phone. |
+| Live Supabase sync of opening balances | **NOT RUN.** The opening balance is on this phone only (see U5.4). |
+
+## U5.3 Test steps for the owner (to tick on the phone)
+1. Dashboard: tap the pencil, remove one shortcut, add "Customer Dues", move it up, tap Done. Close and reopen the app: the order stays.
+2. Settings > Theme & wallpaper (or the Dashboard "Theme" button): choose Custom and a background. Close and reopen: it stays.
+3. Add customer: enter a name and mobile, and an opening balance of 500. Open the customer: "Outstanding 500", first ledger row "Opening balance".
+4. New Bill: type the first 3 digits of that mobile. Its name is listed below. Tap it: name, city, "Owes now" and recent bills appear.
+5. Record a payment of 200 on account: outstanding becomes 300. Dashboard "Customer dues" shows the same total as the sum of the customer ledgers.
+6. Enter the same mobile again in Add customer: the app offers "Open customer" and does not create a second one.
+
+## U5.4 Limits and decisions
+- **Opening balance is on this phone only.** The server (website and Supabase) does not know it yet, so website reports do not include it.
+  The SQL for the server column has not been written; say if you want it.
+- **Oldest due** is the oldest sale that still has an amount due (not a strict first-in-first-out match of payments to bills).
+- **Saving a new customer from a bill** is still automatic (as before). It is not an offer.
+- **Wallpaper on every screen** needs "All main screens" in the wallpaper section; the default is the Dashboard only (as before).
+- **Contrast:** the colour rules are coded for the Custom theme and the cards, but the visual result was not seen on a phone, so please check it on the phone.
+- **Signing:** unchanged. The release APK is still signed with the debug key until the original keystore secrets are added (see section 5).
+
+---
+
 # Shivtej Owner App - Final update: change summary and test report
 
 ## 1. What to do, in order

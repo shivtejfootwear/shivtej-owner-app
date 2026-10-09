@@ -389,7 +389,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 val old = dao.posCustomer(bill.customerMobile)
                 val name = if (cName.isNotEmpty()) cName else old?.name ?: ""
                 val addr = if (cAddr.isNotEmpty()) cAddr else old?.address ?: ""
-                dao.putPosCustomer(PosCustomerE(bill.customerMobile, name, addr, old?.createdAt ?: now, true))
+                dao.putPosCustomer(PosCustomerE(bill.customerMobile, name, addr, old?.createdAt ?: now, true,
+                    photoPath = old?.photoPath ?: "", photoUrl = old?.photoUrl ?: "", openingBalance = old?.openingBalance ?: 0.0))
                 enqueue("UPSERT_CUSTOMER", bill.customerMobile, JSONObject().put("mobile", bill.customerMobile)
                     .put("name", cName).put("address", cAddr).put("force", false)
                     .put("created_at", java.time.Instant.ofEpochMilli(old?.createdAt ?: now).toString()))
@@ -429,16 +430,22 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     // ---------------------------------------------------------- shop customers (one row per mobile number)
     /** Adds or edits a customer from the Customers screen. The values typed here replace the saved ones. */
-    suspend fun saveCustomer(mobile: String, name: String, address: String, photoPath: String? = null): PosCustomerE {
+    suspend fun saveCustomer(
+        mobile: String, name: String, address: String, photoPath: String? = null, openingBalance: Double? = null
+    ): PosCustomerE {
         val m = BillMath.normMobile(mobile)
         require(m.length == 10) { "Mobile number must be 10 digits" }
         require(name.trim().isNotEmpty()) { "Customer name is required" }
+        require(openingBalance == null || (openingBalance.isFinite() && kotlin.math.abs(openingBalance) < 100_000_000.0)) {
+            "Opening balance is not a valid amount"
+        }
         var saved: PosCustomerE? = null
         db.withTransaction {
             val old = dao.posCustomer(m)
             val photo = photoPath ?: old?.photoPath ?: ""
             val c = PosCustomerE(m, name.trim(), address.trim(), old?.createdAt ?: System.currentTimeMillis(), true,
-                photoPath = photo, photoUrl = if (photo.isBlank()) "" else old?.photoUrl ?: "")
+                photoPath = photo, photoUrl = if (photo.isBlank()) "" else old?.photoUrl ?: "",
+                openingBalance = openingBalance?.let { BillMath.round2(it) } ?: old?.openingBalance ?: 0.0)
             dao.putPosCustomer(c)
             enqueue("UPSERT_CUSTOMER", m, JSONObject().put("mobile", m).put("name", c.name).put("address", c.address)
                 .put("force", true).put("created_at", iso(c.createdAt)))
@@ -471,7 +478,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val payments = dao.allCustomerPayments()
             val orders = ledgerOrders(dao.allOrders())
             val returns = ledgerReturns(dao.allReturns())
-            val sum = Ledger.summaryOf(m, bills, payments, orders, returns)
+            val sum = Ledger.summaryOf(m, bills, payments, orders, returns, openingsNow())
             require(sum.outstanding > 0.0) { "This customer has no balance due" }
             require(amt <= sum.outstanding + 0.005) { "Amount is more than the balance due (${sum.outstanding})" }
             if (billId.isNotBlank()) {
@@ -664,7 +671,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     private suspend fun maxCashRefundIn(refType: String, refId: String, backValue: Double, outValue: Double): Double =
         Ledger.maxCashRefund(refType, refId, backValue, outValue, dao.allBills(), ledgerOrders(dao.allOrders()),
-            dao.allCustomerPayments(), ledgerReturns(dao.allReturns()))
+            dao.allCustomerPayments(), ledgerReturns(dao.allReturns()), openingsNow())
+
+    /** The opening balances of all shop customers (only the non-zero ones), keyed by mobile. */
+    private suspend fun openingsNow(): Map<String, Double> =
+        dao.allPosCustomers().filter { it.openingBalance != 0.0 }.associate { BillMath.normMobile(it.mobile) to it.openingBalance }
 
     suspend fun processReturn(
         refType: String, refId: String, kind: String, reason: String, restock: Boolean, refund: Double,
@@ -959,7 +970,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             if (m.isBlank() || m in protectedIds) continue
             val old = dao.posCustomer(m)
             list.add(PosCustomerE(m, o.str("name"), o.str("address"), parseTime(o.str("created_at")), false,
-                photoPath = old?.photoPath ?: "", photoUrl = o.str("photo_url").ifBlank { old?.photoUrl ?: "" }))
+                photoPath = old?.photoPath ?: "", photoUrl = o.str("photo_url").ifBlank { old?.photoUrl ?: "" },
+                openingBalance = old?.openingBalance ?: 0.0))
         }
         dao.putPosCustomers(list)
     }

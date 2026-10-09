@@ -43,8 +43,9 @@ object ThemeBus {
 
 /** The colour scheme chosen in Settings. Text colours are dark on light surfaces and light on dark surfaces. */
 fun buildScheme(prefs: Prefs, systemDark: Boolean): ColorScheme {
-    val dark = isDarkNow(prefs, systemDark)
     val accent = if (prefs.accentArgb != 0) Color(prefs.accentArgb) else null
+    if (prefs.themeMode == "custom") return customScheme(Color(prefs.customBgArgb), accent)
+    val dark = isDarkNow(prefs, systemDark)
     return if (dark) darkColorScheme(
         primary = accent ?: Color(0xFFEF9A9A), onPrimary = Color(0xFF2B0000),
         secondary = Color(0xFFFFCDD2),
@@ -62,6 +63,34 @@ fun buildScheme(prefs: Prefs, systemDark: Boolean): ColorScheme {
     )
 }
 
+/**
+ * The "custom" theme: the owner's own background colour. Text, cards and buttons are chosen to stay readable on it:
+ * a dark background gets light text, a light background gets dark text and white cards.
+ */
+private fun customScheme(bg: Color, accent: Color?): ColorScheme {
+    return if (bg.luminance() < 0.5f) darkColorScheme(
+        primary = accent ?: Color(0xFFEF9A9A), onPrimary = Color(0xFF2B0000),
+        secondary = Color(0xFFFFCDD2),
+        background = bg, onBackground = Color(0xFFF5F5F5),
+        surface = lerp(bg, Color.White, 0.08f), onSurface = Color(0xFFF5F5F5),
+        surfaceVariant = lerp(bg, Color.White, 0.14f), onSurfaceVariant = Color(0xFFE0E0E0),
+        outline = Color(0xFF9E9E9E)
+    ) else lightColorScheme(
+        primary = accent ?: Color(0xFFC62828), onPrimary = Color.White,
+        secondary = Color(0xFF8E0000),
+        background = bg, onBackground = Color(0xFF111111),
+        surface = Color.White, onSurface = Color(0xFF111111),
+        surfaceVariant = Color(0xFFF2F2F2), onSurfaceVariant = Color(0xFF333333),
+        outline = Color(0xFF6B6B6B)
+    )
+}
+
+/** Background colours offered for the "custom" theme. */
+val CUSTOM_BACKGROUNDS: List<Int> = listOf(
+    0xFFFFFFFF.toInt(), 0xFFFFF8E1.toInt(), 0xFFE8F5E9.toInt(), 0xFFE3F2FD.toInt(),
+    0xFFFCE4EC.toInt(), 0xFFEEEEEE.toInt(), 0xFF263238.toInt(), 0xFF000000.toInt()
+)
+
 /** On a dark background, brand colours are lightened so text and icons stay easy to read. Light themes keep the colour. */
 @Composable
 fun readableTone(c: Color): Color =
@@ -70,6 +99,7 @@ fun readableTone(c: Color): Color =
 fun isDarkNow(prefs: Prefs, systemDark: Boolean): Boolean = when (prefs.themeMode) {
     "dark" -> true
     "light", "redwhite" -> false
+    "custom" -> Color(prefs.customBgArgb).luminance() < 0.5f
     else -> systemDark
 }
 
@@ -86,7 +116,10 @@ val BUILTIN_WALLS = listOf(
 
 /** Draws the wallpaper (built-in gradient or the gallery picture) with the readability cover on top. */
 @Composable
-fun WallpaperFill(kind: String, builtinId: String, path: String, overlayPct: Int, dark: Boolean, modifier: Modifier = Modifier) {
+fun WallpaperFill(
+    kind: String, builtinId: String, path: String, overlayPct: Int, dark: Boolean, modifier: Modifier = Modifier,
+    fit: String = "crop"    // "crop" = fill the screen (edges cut) / "fit" = the whole picture, nothing cut
+) {
     Box(modifier) {
         when {
             kind == "builtin" -> {
@@ -94,7 +127,8 @@ fun WallpaperFill(kind: String, builtinId: String, path: String, overlayPct: Int
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(w.top, w.bottom))))
             }
             kind == "gallery" && path.isNotBlank() && File(path).exists() ->
-                AsyncImage(model = File(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                AsyncImage(model = File(path), contentDescription = null,
+                    contentScale = if (fit == "fit") ContentScale.Fit else ContentScale.Crop, modifier = Modifier.matchParentSize())
         }
         val alpha = overlayPct.coerceIn(0, 90) / 100f
         Box(Modifier.matchParentSize().background((if (dark) Color.Black else Color.White).copy(alpha = alpha)))
@@ -110,7 +144,7 @@ fun WallpaperLayer(app: App, isDashboard: Boolean) {
     if (!show) return
     val dark = isDarkNow(p, androidx.compose.foundation.isSystemInDarkTheme())
     key(version) {
-        WallpaperFill(p.wallKind, p.wallBuiltin, p.wallPath, p.wallOverlay, dark, Modifier.fillMaxSize())
+        WallpaperFill(p.wallKind, p.wallBuiltin, p.wallPath, p.wallOverlay, dark, Modifier.fillMaxSize(), fit = p.wallFit)
     }
 }
 
@@ -133,6 +167,8 @@ fun ThemeSettingsScreen(app: App) {
     var pendPath by remember(version) { mutableStateOf(p.wallPath) }
     var pendScope by remember(version) { mutableStateOf(p.wallScope) }
     var pendOverlay by remember(version) { mutableIntStateOf(p.wallOverlay) }
+    var pendFit by remember(version) { mutableStateOf(p.wallFit) }
+    var customBg by remember(version) { mutableIntStateOf(p.customBgArgb) }
     var busy by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -151,12 +187,26 @@ fun ThemeSettingsScreen(app: App) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Theme", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("system" to "System", "light" to "Light", "dark" to "Dark", "redwhite" to "Red & White").forEach { (id, label) ->
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("system" to "System", "light" to "Light", "dark" to "Dark", "redwhite" to "Red & White", "custom" to "Custom").forEach { (id, label) ->
                         FilterChip(selected = mode == id, onClick = {
                             mode = id; p.themeMode = id; ThemeBus.changed()
                         }, label = { Text(label) })
                     }
+                }
+                if (mode == "custom") {
+                    Text("Custom background colour", fontWeight = FontWeight.SemiBold)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CUSTOM_BACKGROUNDS.forEach { c ->
+                            Box(Modifier.size(36.dp).clip(RoundedCornerShape(18.dp)).background(Color(c))
+                                .clickable { customBg = c; p.customBgArgb = c; ThemeBus.changed() },
+                                contentAlignment = Alignment.Center) {
+                                if (customBg == c) Text("✓", color = if (Color(c).luminance() < 0.5f) Color.White else Color.Black, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    Text("Text, cards and buttons change colour so they stay readable on this background.", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text("Accent colour", fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -192,7 +242,7 @@ fun ThemeSettingsScreen(app: App) {
 
                 Text("Preview", fontWeight = FontWeight.SemiBold)
                 Box(Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(12.dp))) {
-                    WallpaperFill(pendKind, pendBuiltin, pendPath, pendOverlay, dark, Modifier.fillMaxSize())
+                    WallpaperFill(pendKind, pendBuiltin, pendPath, pendOverlay, dark, Modifier.fillMaxSize(), fit = pendFit)
                     Column(Modifier.align(Alignment.Center).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                             Column(Modifier.padding(12.dp)) {
@@ -208,6 +258,11 @@ fun ThemeSettingsScreen(app: App) {
                     FilterChip(selected = pendScope == "dashboard", onClick = { pendScope = "dashboard" }, label = { Text("Dashboard only") })
                     FilterChip(selected = pendScope == "app", onClick = { pendScope = "app" }, label = { Text("All main screens") })
                 }
+                Text("Picture size", fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = pendFit == "crop", onClick = { pendFit = "crop" }, label = { Text("Fill screen") })
+                    FilterChip(selected = pendFit == "fit", onClick = { pendFit = "fit" }, label = { Text("Whole picture") })
+                }
                 Text("Cover for readability: ${pendOverlay}%", fontWeight = FontWeight.SemiBold)
                 Slider(value = pendOverlay.toFloat(), onValueChange = { pendOverlay = it.toInt() }, valueRange = 0f..90f, steps = 17)
 
@@ -219,6 +274,7 @@ fun ThemeSettingsScreen(app: App) {
                     }
                     p.wallScope = pendScope
                     p.wallOverlay = pendOverlay
+                    p.wallFit = pendFit
                     ThemeBus.changed()
                     toast(ctx, "Wallpaper applied")
                 }, modifier = Modifier.fillMaxWidth()) { Text("Apply wallpaper") }
@@ -229,8 +285,8 @@ fun ThemeSettingsScreen(app: App) {
                         toast(ctx, "Wallpaper removed")
                     }) { Text("Remove wallpaper") }
                     TextButton(onClick = {
-                        mode = "system"; accent = 0; pendKind = "none"; pendScope = "dashboard"; pendOverlay = 60
-                        p.themeMode = "system"; p.accentArgb = 0; p.wallKind = "none"; p.wallScope = "dashboard"; p.wallOverlay = 60
+                        mode = "system"; accent = 0; pendKind = "none"; pendScope = "dashboard"; pendOverlay = 60; pendFit = "crop"
+                        p.themeMode = "system"; p.accentArgb = 0; p.wallKind = "none"; p.wallScope = "dashboard"; p.wallOverlay = 60; p.wallFit = "crop"
                         ThemeBus.changed()
                         toast(ctx, "Default theme restored")
                     }) { Text("Restore default theme") }
