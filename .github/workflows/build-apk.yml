@@ -188,7 +188,7 @@ jobs:
             echo "===== $(basename "$f") (last 250 lines)"
             tail -n 250 "$f"
           done
-          grep -hE '^e: |What went wrong|FAILED|Caused by|BUILD FAILED' "${LOGS[@]}" 2>/dev/null | head -60 | while IFS= read -r line; do
+          { grep -hE '^e: |What went wrong|FAILED|Caused by|BUILD FAILED' "${LOGS[@]}" 2>/dev/null || true; } | head -60 | while IFS= read -r line; do
             echo "::error title=Gradle::${line//$'\r'/}"
           done
 
