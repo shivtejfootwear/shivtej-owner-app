@@ -80,9 +80,13 @@ jobs:
           gradle-version: '8.9'
 
       # Runs the JVM tests (ledger, returns and refunds, offline assistant rules). A failing test stops the build.
+      # Gradle output is kept in $RUNNER_TEMP so that the errors can be shown as annotations and uploaded.
       - name: Unit tests
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace :app:testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/gradle-unit-tests.log"
 
       # Lint is reported but does not stop the build (the app has many screens; warnings are listed in the report).
       - name: Lint (report only)
@@ -112,7 +116,10 @@ jobs:
 
       - name: Build the debug APK
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee "$RUNNER_TEMP/gradle-debug-build.log"
 
       - name: Build the release APK
         working-directory: ${{ steps.locate.outputs.dir }}
@@ -121,7 +128,10 @@ jobs:
           SHIVTEJ_KEYSTORE_PASSWORD: ${{ secrets.SHIVTEJ_KEYSTORE_PASSWORD }}
           SHIVTEJ_KEY_ALIAS: ${{ secrets.SHIVTEJ_KEY_ALIAS }}
           SHIVTEJ_KEY_PASSWORD: ${{ secrets.SHIVTEJ_KEY_PASSWORD }}
-        run: gradle --no-daemon --stacktrace :app:assembleRelease
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/gradle-release-build.log"
 
       - name: Collect the APKs
         working-directory: ${{ steps.locate.outputs.dir }}
@@ -165,6 +175,31 @@ jobs:
           path: dist/Shivtej-Owner-App-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      # Shows the compiler and test errors as annotations (readable through the GitHub API) and in this step's log.
+      - name: Show compile and test errors
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          LOGS=("$RUNNER_TEMP"/gradle-*.log)
+          if [ ${#LOGS[@]} -eq 0 ]; then echo "No Gradle log was written."; exit 0; fi
+          for f in "${LOGS[@]}"; do
+            echo "===== $(basename "$f") (last 250 lines)"
+            tail -n 250 "$f"
+          done
+          grep -hE '^e: |What went wrong|FAILED|Caused by|BUILD FAILED' "${LOGS[@]}" 2>/dev/null | head -60 | while IFS= read -r line; do
+            echo "::error title=Gradle::${line//$'\r'/}"
+          done
+
+      - name: Upload the Gradle logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs
+          path: ${{ runner.temp }}/gradle-*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload the unit test reports (always)
         if: always()
