@@ -23,11 +23,13 @@ object SecretStore {
     fun aiKey(ctx: Context): String = try { prefs(ctx)?.getString(KEY_AI, "") ?: "" } catch (e: Exception) { "" }
 
     /** Saves the key, or removes it when [key] is blank. Returns false if the secure store is not available. */
-    fun setAiKey(ctx: Context, key: String): Boolean = try {
-        val p = prefs(ctx) ?: return false
-        if (key.isBlank()) p.edit().remove(KEY_AI).apply() else p.edit().putString(KEY_AI, key.trim()).apply()
-        true
-    } catch (e: Exception) { false }
+    fun setAiKey(ctx: Context, key: String): Boolean {
+        return try {
+            val p = prefs(ctx) ?: return false
+            if (key.isBlank()) p.edit().remove(KEY_AI).apply() else p.edit().putString(KEY_AI, key.trim()).apply()
+            true
+        } catch (e: Exception) { false }
+    }
 
     fun hasAiKey(ctx: Context): Boolean = aiKey(ctx).isNotBlank()
 }
