@@ -136,10 +136,11 @@ The app asks for these only when you open the Printer screen or print. Printing 
   Nothing is dropped, reset or rewritten.
 
 ## Known limits (update 4)
-- The Android code could not be compiled in the environment where it was written (no Android SDK there). The GitHub build is the first real compile.
-  The pure logic (`BillMath`, `Ledger`, `Assistant`) was compiled with the Kotlin 2.0 compiler: 21 standalone checks passed, and the JVM
-  tests `LedgerTest` (6) and `LedgerReturnsTest` (19) passed (25 in total). The Android screens and `Repo.kt` were not compiled.
-  The GitHub workflow runs `./gradlew :app:testDebugUnitTest` as its first build step.
+- GitHub Actions run 37918973021 (repository shivtejfootwear/shivtej-owner-app, commit 069c8a5) succeeded: unit tests, debug APK,
+  release APK, APK collection and the signature check all passed. The release APK was signed with the DEBUG key, because the keystore
+  secrets are not set. The APK itself was not downloaded or installed, so it is not verified on a phone.
+  Earlier runs failed on compile errors that were then fixed (SecretStore.kt, Theme.kt); see CHANGES_AND_TEST_REPORT.md section 2.
+  Local tests: 21 standalone logic checks and 25 JVM tests (`LedgerTest` 6, `LedgerReturnsTest` 19) passed in the working environment.
 - Not tested on a phone or against the live server: camera and gallery pickers, videos, notifications, the Bluetooth printer, online AI
   (no API key was available), photo / video / payment sync with Supabase.
 - Reminders run with WorkManager, so they can be a few minutes late and battery saving can delay them. They are not exact alarms.
@@ -148,8 +149,9 @@ The app asks for these only when you open the Printer screen or print. Printing 
   those refunds as cash given, so such a customer's balance can be higher than before. Nothing was changed in the saved records:
   check those customers in Customers > account ledger and correct the return if needed.
 - Website payments made online outside the app are not known to the app. They show as owed until recorded (Receive payment > On account).
-- Release signing: without the four secrets (see section 3) the release APK is signed with the debug key, and a new build can refuse to
-  install over an older one ("package conflicts"). Back up the data, uninstall the old app once, then install.
+- Release signing: the original signing key is NOT available here. Without the four secrets (see section 3) the release APK is signed
+  with the debug key, and it cannot install over an app signed with another key ("package conflicts"). Back up the data in the app,
+  add the original key as the secrets (preferred), or uninstall the old app once and then install. Do not uninstall without a backup.
 
 ## Known limits (update 2)
 - The Android code has not been compiled or run in the environment where it was written. The first GitHub build and a test on a real phone and the

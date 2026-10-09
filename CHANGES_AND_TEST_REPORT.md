@@ -4,28 +4,33 @@
 1. Supabase SQL, in the SQL editor, once each, in this order: `supabase/owner_update_2_migration.sql`,
    `supabase/owner_update_3_supplier_bill_file.sql`, `supabase/owner_update_4_media_ledger_tasks.sql`.
    The last update made no change to the SQL files. Do not run `owner_app_setup.sql` again (it is only for a new project).
-2. Build with GitHub Actions (`.github/workflows/build-apk.yml`). The run tests first, then builds the release and debug APKs.
-   For a release key that lets updates install, add the four secrets described in `README.md` section 3.
+2. Build with GitHub Actions (`.github/workflows/build-apk.yml`, repository `shivtejfootwear/shivtej-owner-app`). The run tests first,
+   then builds the release and debug APKs. Last run: 37918973021, success (see section 2).
+   For a release key that lets updates install, add the four secrets described in `README.md` section 3. They are not set yet.
 3. Before installing over the old app: Settings > Backup, then sync. If the old app was signed with a different key, it must be
    uninstalled once (see section 5). Then install the new APK, sign in with the owner code, and wait for the sync to finish.
 
 ## 2. Verification status (what was really run)
 | Check | Result |
 |---|---|
-| Standalone logic checks (`tools/logic-check`): real `BillMath.kt`, `Ledger.kt`, `Assistant.kt` with stub data, Kotlin 2.0.21 | **21 of 21 passed** |
-| Total JVM tests (`LedgerTest` + `LedgerReturnsTest`) | **25 of 25 passed** |
-| JVM unit tests `LedgerTest` (6 tests, original rules) | **6 of 6 passed** |
-| JVM unit tests `LedgerReturnsTest` (19 tests: returns, refunds, exchanges, website orders, "Returned" status, paid orders, on-account payments, rejected records, cash cap over the whole account, no double counting, ledger balance = customer net) | **19 of 19 passed** |
-| Android compile (Kotlin, Compose, Room with KSP) | **NOT RUN** - no Android SDK in the working environment |
-| Gradle unit tests (`./gradlew :app:testDebugUnitTest`) | **NOT RUN** - same reason; the GitHub workflow runs them as its first step |
-| APK build | **NOT BUILT - NOT VERIFIED** |
-| GitHub push | **NOT DONE** - no GitHub account is linked to this session (the GitHub token is invalid) and the repository name (owner/repo) was not given |
-| GitHub Actions run | **NOT RUN** - it can only run after the push |
-| Android build endpoints (Google Maven, dl.google.com) | **Blocked by the proxy policy** (403 on CONNECT). Not circumvented |
+| Standalone logic checks (`tools/logic-check`): real `BillMath.kt`, `Ledger.kt`, `Assistant.kt` with stub data, Kotlin 2.0.21 | **21 of 21 passed** (local) |
+| JVM unit tests `LedgerTest` (6, original rules) and `LedgerReturnsTest` (19, returns, refunds, exchanges, website orders, cash cap, no double counting) | **25 of 25 passed** (local, JUnit 4.13.2) |
+| GitHub Actions run 37918973021 on commit 069c8a5: step "Unit tests" (`./gradlew :app:testDebugUnitTest`) | **Passed** (step result only; the per-test log is not readable from here) |
+| GitHub Actions run 37918973021: "Build the debug APK" and "Build the release APK" (Gradle, Kotlin compile, KSP, Room) | **Passed** |
+| GitHub Actions run 37918973021: "Collect the APKs", "Check the APK signatures", artifact uploads | **Passed**. Artifacts `Shivtej-Owner-App` (release, about 23 MiB) and `Shivtej-Owner-App-debug` (about 29 MiB) were uploaded. |
+| Signing of the release APK | **Debug key.** The run's warning says: "No release keystore secret (SHIVTEJ_KEYSTORE_BASE64). The release APK will be signed with the debug key." The original key is not available. |
+| APK installed and run on a phone | **NOT DONE.** The artifacts could not be downloaded from this environment (GitHub returned Forbidden), so the APK was not inspected or installed. |
+| GitHub push | **Done.** Commits on `main` of `shivtej-owner-app`, latest 069c8a5. The website repository `shivtej-footwear` was not changed. |
 | Phone tests (camera, gallery, video, notifications, printer), live Supabase sync, online AI with a real key | **NOT RUN** |
 
-The JVM tests were compiled with the Kotlin compiler bundled in the local Gradle installation and run with JUnit 4.13.2. They use
-stub data classes with the same field names as the Room entities, so they test the rules, not the Room mapping.
+**Earlier CI runs** (the reason for each change):
+- Set up Android SDK with `android-actions/setup-android@v3` failed in about 20 seconds. Replaced by the preinstalled SDK with a verify step.
+- Kotlin compile failed on `SecretStore.kt` (expression-body return) and on `Theme.kt` (missing `horizontalScroll` and `luminance` imports).
+  Fixed in commit 219865d; the unit tests then passed.
+- Run 37918107176 (commit 219865d): all build steps passed, but "Show compile and test errors" failed because its `grep` returned
+  no match and `pipefail` made the step fail. Fixed in commit 069c8a5. Run 37918973021 passed everywhere.
+
+The JVM tests use stub data classes with the same field names as the Room entities. They test the rules, not the Room mapping.
 
 ## 3. Feature status
 Status meanings: **Code done** = written and read through; **Logic checked** = the pure rules were run in the tests above;
@@ -36,15 +41,15 @@ Status meanings: **Code done** = written and read through; **Logic checked** = t
 | 1 | Dashboard colours and readability | Code done. Dashboard cards use the theme surface; coloured figures are lightened on dark backgrounds. Reports and orders screens still use some fixed colours. | `ui/Dashboard.kt`, `ui/Theme.kt` |
 | 2 | Theme: Light / Dark / Red & White / System, accent, 6 built-in wallpapers, gallery wallpaper, preview, overlay, remove, restore default | Code done. Not run. | `ui/Theme.kt`, `data/Prefs.kt`, `MainActivity.kt` |
 | 3a | Offline assistant answers from local data | **Logic checked** (21 standalone checks). UI code done. | `util/Assistant.kt`, `ui/AssistantSettings.kt` |
-| 3b | Optional online AI, key in encrypted storage, never in source | Code done. Not run (no key). | `util/AiClient.kt`, `util/SecretStore.kt` |
+| 3b | Optional online AI, key in encrypted storage, never in source | Code compiled in CI. Not run (no key). | `util/AiClient.kt`, `util/SecretStore.kt` |
 | 4 | Product videos (max 25 MB): add, preview, replace, remove, sync | Code done. Not run. Not shown on the website yet. | `ui/ProductEdit.kt`, `util/Videos.kt`, `sync/SyncManager.kt` |
-| 5 | Customer udhaar: outstanding, payments (full / partial / on account), ledger, returns and refunds, website orders | **Logic checked** (18 JVM tests). UI code done, not compiled. | `util/Ledger.kt`, `data/LedgerInput.kt`, `data/Repo.kt`, `ui/Customers.kt`, `ui/CustomerLedger.kt`, `ui/Returns.kt` |
+| 5 | Customer udhaar: outstanding, payments (full / partial / on account), ledger, returns and refunds, website orders | **Logic checked** (25 JVM tests). UI code compiled in CI; not run on a phone. | `util/Ledger.kt`, `data/LedgerInput.kt`, `data/Repo.kt`, `ui/Customers.kt`, `ui/CustomerLedger.kt`, `ui/Returns.kt` |
 | 6 | Bills from the customer detail (purchase history and ledger rows open the receipt) | Code done. Not run. | `ui/Customers.kt`, `ui/CustomerLedger.kt` |
 | 7 | Supplier bill photo / PDF | Carried over from update 3. Not re-tested in this update. | `ui/Suppliers.kt`, `owner_update_3` |
 | 8 | Customer and supplier photos: select, preview, replace, remove, sync | Code done. Not run. | `ui/CustomerLedger.kt`, `ui/Customers.kt`, `ui/Suppliers.kt` |
 | 9 | Tasks and reminders with Android notifications | Code done. Not run. Tasks are on this phone only. | `ui/Tasks.kt`, `util/Reminders.kt` |
 | 10 | Database and sync safety: additive migration 5 to 6, no reset | Code done. The migration and Room defaults were checked by reading. Not run on a phone. | `data/Db.kt`, `data/DbGuard.kt`, `util/BackupRestore.kt` |
-| 11 | Release signing that can stay the same across updates (optional secrets, debug-key fallback) | Code done. Not run. Needs the owner's key (section 5). | `app/build.gradle.kts`, `.github/workflows/build-apk.yml` |
+| 11 | Release signing that can stay the same across updates (optional secrets, debug-key fallback) | Code compiled in CI and the build passed. Signed with the debug key until the owner's key is added (section 5). | `app/build.gradle.kts`, `.github/workflows/build-apk.yml` |
 
 ## 4. Returns, refunds and website orders (final rules)
 These rules are in `util/Ledger.kt` and are the same in the customer outstanding, the purchase history and the account ledger.
@@ -84,16 +89,18 @@ These rules are in `util/Ledger.kt` and are the same in the customer outstanding
 - `data/Repo.kt`: payment check uses the full ledger; return save checks the cash cap; `maxCashRefund` added.
 - `ui/Returns.kt`: refund default limited to the cash cap, with a note on the screen.
 - `ui/Customers.kt`, `ui/CustomerLedger.kt`, `util/Assistant.kt`, `ui/AssistantSettings.kt`: pass orders and returns to the ledger.
-- `app/src/test/java/com/shivtej/owner/util/LedgerReturnsTest.kt` (new): 12 JVM tests.
+- `app/src/test/java/com/shivtej/owner/util/LedgerReturnsTest.kt` (new): 19 JVM tests.
 - `app/build.gradle.kts`: optional release signing from environment variables; debug-key fallback unchanged.
 - `.github/workflows/build-apk.yml`: unit tests first, lint (report only), debug and release APKs, keystore from secrets, test report artifact.
-  A copy is in `github-workflow-copy/`. The YAML was parsed and is valid. The workflow has not been run.
+  A copy is in `github-workflow-copy/`. The workflow ran successfully in run 37918973021.
+- `util/SecretStore.kt`, `ui/Theme.kt`: compile fixes found by CI (see section 2).
 - `README.md`, `CHANGES_AND_TEST_REPORT.md`: updated.
+- Repository: `shivtejfootwear/shivtej-owner-app`, the private Owner App repository (not the website). Commits from this pass: 4ed6c84, bb77832, d76c3f8, 219865d, 069c8a5.
 
 ## 7. Known problems and limits
-0. **Blockers for the final step:** (a) the original release key (or permission to create a new one with an uninstall of the old app);
-   (b) the GitHub account connection and the repository owner/repo name, needed for the push and the Actions run.
-1. **Not compiled on Android.** The Android screens and `Repo.kt` were checked by reading only. The first real compile is the GitHub build.
+0. **Open decision for the owner:** (a) the original release key, added as the GitHub secrets, so that updates install over the installed app;
+   or (b) if the key is lost, a new key, with the installed app uninstalled once after a backup. Nothing was uninstalled or changed.
+1. **Compiled and built in CI, not run on a phone.** The APK was built and signed with the debug key; it was not downloaded or installed here.
 2. **Old returns:** returns saved before this update kept the refund the screen proposed (the full value, even on udhaar). The ledger now reads
    those as cash given back, so such a customer's balance can be higher. Nothing was changed in the saved records. Check them in
    Customers > account ledger.
@@ -105,3 +112,5 @@ These rules are in `util/Ledger.kt` and are the same in the customer outstanding
 7. **Tasks** are on this phone only.
 8. **Videos** are not shown on the website yet.
 9. **Supplier bill photo / PDF** was not re-tested in this update.
+10. **Stray file:** `build-apk.yml` in the repository root is not used by the build. It was left unchanged; it can be deleted once you confirm.
+11. **Website repository access:** the GitHub App still lists `shivtej-footwear`. Remove it from the app's repository access on GitHub.
