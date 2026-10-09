@@ -58,10 +58,15 @@ object Receipt {
         return Bitmap.createBitmap(bmp, 0, 0, W, (y + 40f).toInt().coerceAtMost(height))
     }
 
+    /** One page: the bill picture scaled to the width of an A4 sheet (595 pt), as long as the bill is. */
     fun savePdf(ctx: Context, bmp: Bitmap, billNo: String): File {
         val doc = PdfDocument()
-        val page = doc.startPage(PdfDocument.PageInfo.Builder(bmp.width, bmp.height, 1).create())
-        page.canvas.drawBitmap(bmp, 0f, 0f, null)
+        val pageW = 595
+        val scale = pageW.toFloat() / bmp.width
+        val pageH = Math.ceil((bmp.height * scale).toDouble()).toInt().coerceAtLeast(1)
+        val page = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, 1).create())
+        page.canvas.scale(scale, scale)
+        page.canvas.drawBitmap(bmp, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
         doc.finishPage(page)
         val dir = File(ctx.filesDir, "receipts").apply { mkdirs() }
         val f = File(dir, "Receipt-$billNo.pdf")
@@ -78,6 +83,25 @@ object Receipt {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         ctx.startActivity(Intent.createChooser(i, "Share receipt").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    /** Opens WhatsApp with the PDF ready to send (the owner picks the chat). Falls back to the normal share list. */
+    fun shareWhatsApp(ctx: Context, file: File, text: String) {
+        val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file)
+        for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b")) {
+            try {
+                val i = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    setPackage(pkg)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_TEXT, text)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(i)
+                return
+            } catch (e: Exception) { /* not installed: try the next one */ }
+        }
+        share(ctx, file)
     }
 
     fun print(ctx: Context, bmp: Bitmap, jobName: String) {

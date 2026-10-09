@@ -51,4 +51,14 @@ object Images {
         val f = File(dir, "cap_" + UUID.randomUUID() + ".jpg")
         return f to FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
     }
+
+    /**
+     * Deletes ONLY the temporary camera captures in the cache folder (a photo is copied to the images folder at once,
+     * so these are leftovers of interrupted captures). Products, photos, stock, bills, returns and the database are not touched.
+     */
+    fun clearTempCache(ctx: Context): Int {
+        val dir = File(ctx.cacheDir, "camera")
+        val files = dir.listFiles()?.filter { it.isFile } ?: return 0
+        return files.count { it.delete() }
+    }
 }

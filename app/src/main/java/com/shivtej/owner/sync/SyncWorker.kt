@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
+        if (App.dbRefusal != null) return Result.success()   // the database is refused: nothing is opened or changed
         val app = applicationContext as App
         if (app.prefs.ownerCode.isBlank()) return Result.success()
         return if (app.sync.syncNow()) Result.success() else Result.retry()

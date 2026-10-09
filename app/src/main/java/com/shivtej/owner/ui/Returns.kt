@@ -61,7 +61,7 @@ fun ReturnFormScreen(app: App, nav: Nav, refType: String, refId: String) {
     }
     val earlier = allReturns.filter { it.refType == refType && it.refId == refId }
     val doneQty = remember(earlier) {
-        earlier.flatMap { parseRetLines(it.itemsInJson) }.groupBy { retLineKey(it) }.mapValues { e -> e.value.sumOf { it.qty } }
+        earlier.filter { it.status != "REJECTED" }.flatMap { parseRetLines(it.itemsInJson) }.groupBy { retLineKey(it) }.mapValues { e -> e.value.sumOf { it.qty } }
     }
 
     var kind by remember { mutableStateOf("RETURN") }
@@ -190,6 +190,7 @@ fun ReturnFormScreen(app: App, nav: Nav, refType: String, refId: String) {
             earlier.forEach { r ->
                 Text((if (r.kind == "EXCHANGE") "Exchange" else "Return") + " · " + fmt.format(Date(r.createdAt)) +
                     " · " + parseRetLines(r.itemsInJson).sumOf { it.qty } + " pc" +
+                    (if (r.status == "REJECTED") " · REJECTED by server, not counted" else "") +
                     (if (r.pendingSync) " · waiting to sync" else ""), fontSize = 13.sp)
             }
         }
@@ -242,9 +243,11 @@ fun ReturnsScreen(app: App, nav: Nav) {
                         Text("$pieces pc" + (if (r.reason.isNotBlank()) " · " + r.reason else "") + (if (!r.restock) " · not restocked" else ""),
                             fontSize = 13.sp, maxLines = 1)
                         Text(fmt.format(Date(r.createdAt)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (r.status == "REJECTED") Text("REJECTED by server: ${r.rejectReason}", fontSize = 11.sp, color = RedOut, maxLines = 2)
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text(if (r.refund < 0) "Paid " + money(app, -r.refund) else "Refund " + money(app, r.refund), fontWeight = FontWeight.Bold)
+                        if (r.status == "REJECTED") Text("Not counted", fontWeight = FontWeight.Bold, color = RedOut)
+                        else Text(if (r.refund < 0) "Paid " + money(app, -r.refund) else "Refund " + money(app, r.refund), fontWeight = FontWeight.Bold)
                         if (r.pendingSync) Text("waiting to sync", fontSize = 10.sp, color = AmberLow)
                     }
                 }

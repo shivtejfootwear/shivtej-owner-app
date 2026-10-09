@@ -37,24 +37,36 @@ class Net(app: Application) {
 }
 
 class App : Application() {
+    companion object {
+        /** Set when the phone's database can not be opened safely; the app then shows this message and touches nothing. */
+        @Volatile var dbRefusal: String? = null
+    }
+
     lateinit var prefs: Prefs
     lateinit var db: AppDb
     lateinit var repo: Repo
     lateinit var sync: SyncManager
     lateinit var net: Net
     lateinit var cart: com.shivtej.owner.data.CartStore
+    lateinit var printer: com.shivtej.owner.util.PrinterManager
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
+        com.shivtej.owner.data.BillMeta.rememberLegacy(prefs)   // shop details of bills made before update 2 (taken once)
+        // a restore chosen in Settings is applied here, before Room opens the database (nothing else is running yet)
+        dbRefusal = com.shivtej.owner.util.BackupRestore.applyPending(this) ?: com.shivtej.owner.data.DbGuard.check(this)
         db = AppDb.build(this)
         repo = Repo(db, prefs)
         sync = SyncManager(repo, prefs, scope, this)
         net = Net(this)
         cart = com.shivtej.owner.data.CartStore(prefs)
+        printer = com.shivtej.owner.util.PrinterManager(this, prefs)
         repo.onChanged = { sync.kick() }
-        SyncWorker.schedule(this)
-        scope.launch { net.online.collect { if (it) sync.kick() } }
+        if (dbRefusal == null) {
+            SyncWorker.schedule(this)
+            scope.launch { net.online.collect { if (it) sync.kick() } }
+        }
     }
 }

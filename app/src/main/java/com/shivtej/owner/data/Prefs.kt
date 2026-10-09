@@ -6,6 +6,13 @@ import org.json.JSONObject
 class Prefs(ctx: Context) {
     private val sp = ctx.getSharedPreferences("owner_prefs", Context.MODE_PRIVATE)
 
+    companion object {
+        const val DEFAULT_NOTES = "Thank you for shopping with Shivtej Footwear.\n" +
+            "No return or exchange on used footwear.\n" +
+            "For any issues, please contact within 7 days with original bill.\n" +
+            "Keep this bill for warranty / exchange reference."
+    }
+
     var ownerCode: String
         get() = sp.getString("owner_code", "") ?: ""
         set(v) = sp.edit().putString("owner_code", v).apply()
@@ -47,6 +54,68 @@ class Prefs(ctx: Context) {
     var billCounter: Int
         get() = sp.getInt("bill_counter", 0)
         set(v) = sp.edit().putInt("bill_counter", v).apply()
+
+    // ---- shop / bill settings (update 2) --------------------------------------------------------
+    // storeName / storeAddress / storePhone above are the shop name, address and mobile number.
+    var shopTagline: String
+        get() = sp.getString("shop_tagline", "FOOTWEAR FOR EVERY STEP") ?: ""
+        set(v) = sp.edit().putString("shop_tagline", v).apply()
+    var shopEmail: String
+        get() = sp.getString("shop_email", "") ?: ""
+        set(v) = sp.edit().putString("shop_email", v).apply()
+    var shopWebsite: String
+        get() = sp.getString("shop_website", "") ?: ""
+        set(v) = sp.edit().putString("shop_website", v).apply()
+    var shopInstagram: String
+        get() = sp.getString("shop_instagram", "") ?: ""
+        set(v) = sp.edit().putString("shop_instagram", v).apply()
+    var shopWhatsapp: String
+        get() = sp.getString("shop_whatsapp", "") ?: ""
+        set(v) = sp.edit().putString("shop_whatsapp", v).apply()
+    var shopGstin: String
+        get() = sp.getString("shop_gstin", "") ?: ""
+        set(v) = sp.edit().putString("shop_gstin", v).apply()
+    var shopLogoPath: String            // empty = the Shivtej Footwear logo that is built into the app
+        get() = sp.getString("shop_logo_path", "") ?: ""
+        set(v) = sp.edit().putString("shop_logo_path", v).apply()
+    var billThanks: String
+        get() = sp.getString("bill_thanks", "Thank you!") ?: ""
+        set(v) = sp.edit().putString("bill_thanks", v).apply()
+    var billFooter: String
+        get() = sp.getString("bill_footer", "") ?: ""
+        set(v) = sp.edit().putString("bill_footer", v).apply()
+    var billNotes: String               // one note per line
+        get() = sp.getString("bill_notes", DEFAULT_NOTES) ?: ""
+        set(v) = sp.edit().putString("bill_notes", v).apply()
+    var taxPercent: Double              // GST % added on the bill (0 = no tax line)
+        get() = (sp.getString("tax_percent", "0") ?: "0").toDoubleOrNull() ?: 0.0
+        set(v) = sp.edit().putString("tax_percent", v.toString()).apply()
+    var billThemeJson: String           // the default bill design (empty = built-in Shivtej Red)
+        get() = sp.getString("bill_theme", "") ?: ""
+        set(v) = sp.edit().putString("bill_theme", v).apply()
+    /** Shop details of bills made BEFORE update 2 (they were saved without any); taken once, so they never change afterwards. */
+    var legacyShopJson: String
+        get() = sp.getString("legacy_shop", "") ?: ""
+        set(v) = sp.edit().putString("legacy_shop", v).apply()
+
+    // ---- billing screen memory
+    var lastSalesPersonId: String
+        get() = sp.getString("last_sales_person", "") ?: ""
+        set(v) = sp.edit().putString("last_sales_person", v).apply()
+    var draftMeta: String               // customer / sales person / payment typed on the bill in progress
+        get() = sp.getString("draft_meta", "") ?: ""
+        set(v) = sp.edit().putString("draft_meta", v).apply()
+
+    // ---- Bluetooth receipt printer
+    var printerAddress: String
+        get() = sp.getString("printer_address", "") ?: ""
+        set(v) = sp.edit().putString("printer_address", v).apply()
+    var printerName: String
+        get() = sp.getString("printer_name", "") ?: ""
+        set(v) = sp.edit().putString("printer_name", v).apply()
+    var printMode: String               // "graphic" = full bill picture (logo, QR, any language) / "text" = plain text
+        get() = sp.getString("print_mode", "graphic") ?: "graphic"
+        set(v) = sp.edit().putString("print_mode", v).apply()
 
     // local image path -> uploaded public URL
     fun uploadedUrl(path: String): String? =

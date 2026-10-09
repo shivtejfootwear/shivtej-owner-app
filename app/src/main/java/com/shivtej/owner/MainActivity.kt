@@ -45,6 +45,21 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = application as App
 
+        App.dbRefusal?.let { msg ->
+            // nothing is opened, changed or deleted: the data stays on the phone as it is
+            setContent {
+                MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFFC62828))) {
+                    Surface(Modifier.fillMaxSize()) {
+                        androidx.compose.foundation.layout.Column(Modifier.padding(20.dp)) {
+                            androidx.compose.material3.Text("Shivtej Owner App can not start safely", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                            androidx.compose.material3.Text(msg, modifier = Modifier.padding(top = 12.dp))
+                        }
+                    }
+                }
+            }
+            return
+        }
+
         // near real-time: while the app is on screen, sync every 15 seconds when online
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -176,7 +191,11 @@ fun Shell(app: App) {
         DrawerItem("Shipping", Icons.Filled.LocalShipping, Route.Orders("shipping")),
         DrawerItem("Returns & Exchanges", Icons.Filled.Replay, Route.Returns),
         DrawerItem("Customers", Icons.Filled.People, Route.Customers),
+        DrawerItem("Staff", Icons.Filled.Group, Route.Staff),
+        DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers),
         DrawerItem("Reports", Icons.Filled.BarChart, Route.Reports),
+        DrawerItem("Printer", Icons.Filled.Print, Route.Printer),
+        DrawerItem("Shop & Bill Settings", Icons.Filled.Receipt, Route.ShopSettings),
         DrawerItem("AI Assistant", Icons.Filled.SmartToy, Route.Assistant),
         DrawerItem("Settings", Icons.Filled.Settings, Route.Settings)
     )
@@ -195,6 +214,16 @@ fun Shell(app: App) {
         is Route.Orders -> if (route.mode == "shipping") "Shipping" else "Online Orders"
         is Route.OrderDetail -> "Order"
         Route.Customers -> "Customers"
+        Route.CustomerNew -> "Add customer"
+        is Route.CustomerDetail -> "Customer"
+        Route.Staff -> "Staff & Sales"
+        is Route.StaffDetail -> "Staff history"
+        Route.Suppliers -> "Suppliers & Purchases"
+        is Route.SupplierDetail -> "Supplier"
+        is Route.PurchaseForm -> "New purchase bill"
+        Route.Printer -> "Bluetooth Printer"
+        Route.ShopSettings -> "Shop & Bill Settings"
+        Route.BillDesign -> "Bill Design"
         is Route.ReturnForm -> "Return / Exchange"
         Route.Returns -> "Returns & Exchanges"
         Route.Reports -> "Reports"
@@ -259,12 +288,22 @@ fun Shell(app: App) {
                     is Route.Receipt -> ReceiptScreen(app, nav, route.billId)
                     is Route.Orders -> OrdersScreen(app, nav, route.mode)
                     is Route.OrderDetail -> OrderDetailScreen(app, nav, route.id)
-                    Route.Customers -> CustomersScreen(app)
+                    Route.Customers -> CustomersScreen(app, nav)
+                    Route.CustomerNew -> CustomersScreen(app, nav, openAdd = true)
+                    is Route.CustomerDetail -> CustomerDetailScreen(app, nav, route.mobile)
+                    Route.Staff -> StaffScreen(app, nav)
+                    is Route.StaffDetail -> StaffDetailScreen(app, nav, route.id)
+                    Route.Suppliers -> SuppliersScreen(app, nav)
+                    is Route.SupplierDetail -> SupplierDetailScreen(app, nav, route.id)
+                    is Route.PurchaseForm -> PurchaseFormScreen(app, nav, route.supplierId)
+                    Route.Printer -> PrinterScreen(app)
+                    Route.ShopSettings -> ShopSettingsScreen(app, nav)
+                    Route.BillDesign -> BillDesignScreen(app, nav)
                     is Route.ReturnForm -> ReturnFormScreen(app, nav, route.refType, route.refId)
                     Route.Returns -> ReturnsScreen(app, nav)
                     Route.Reports -> ReportsScreen(app, nav)
                     Route.Assistant -> AssistantScreen(app)
-                    Route.Settings -> SettingsScreen(app)
+                    Route.Settings -> SettingsScreen(app) { nav.go(it) }
                 }
             }
         }

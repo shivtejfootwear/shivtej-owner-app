@@ -45,6 +45,17 @@ sealed interface Route {
     object Reports : Route
     object Assistant : Route
     object Settings : Route
+    // ---- update 2
+    object Staff : Route
+    object CustomerNew : Route
+    data class StaffDetail(val id: String) : Route
+    data class CustomerDetail(val mobile: String) : Route
+    object Suppliers : Route
+    data class SupplierDetail(val id: String) : Route
+    data class PurchaseForm(val supplierId: String) : Route
+    object Printer : Route
+    object ShopSettings : Route
+    object BillDesign : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {
@@ -62,6 +73,14 @@ fun imgModel(s: String): Any = if (s.startsWith("/")) File(s) else s
 fun toast(ctx: android.content.Context, msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
 
 fun money(app: App, v: Double): String = com.shivtej.owner.util.Receipt.money(app.prefs, v)
+
+/** Same as [money] but with thousands separators (1,23,456) - used on the dashboard and reports of update 2. */
+fun moneyG(app: App, v: Double): String = com.shivtej.owner.util.Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, v)
+
+val BrandRed = Color(0xFFE30613)
+val BrandInk = Color(0xFF111111)
+val SoftRed = Color(0xFFFDECEC)
+val SoftGrey = Color(0xFFF6F6F7)
 
 val GreenOk = Color(0xFF2E7D32)
 val AmberLow = Color(0xFFEF6C00)

@@ -78,4 +78,7 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
     implementation("androidx.print:print:1.0.0")
+
+    // QR codes on the bill (website / Instagram), drawn on the phone
+    implementation("com.google.zxing:core:3.5.3")
 }

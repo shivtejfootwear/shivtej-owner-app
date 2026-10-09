@@ -27,7 +27,9 @@ data class SyncState(
     val running: Boolean = false,
     val lastSync: Long = 0,
     val lastError: String? = null,
-    val authError: Boolean = false
+    val authError: Boolean = false,
+    /** Not an error: staff / customers / suppliers stay on this phone until "owner_update_2_migration.sql" is run. */
+    val notice: String? = null
 )
 
 /**
@@ -46,6 +48,11 @@ class SyncManager(
     private val mutex = Mutex()
     private val kicks = Channel<Unit>(Channel.CONFLATED)
 
+    /** Set while a sync run finds that the update-2 SQL is not installed on the server yet. */
+    private var update2Missing = false
+
+    private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
+
     init {
         scope.launch {
             for (k in kicks) {
@@ -63,6 +70,7 @@ class SyncManager(
     suspend fun syncNow(): Boolean = mutex.withLock {
         if (prefs.ownerCode.isBlank()) return@withLock false
         state.update { it.copy(running = true, lastError = null) }
+        update2Missing = false
         try {
             withContext(Dispatchers.IO) {
                 push()
@@ -70,7 +78,10 @@ class SyncManager(
             }
             val now = System.currentTimeMillis()
             prefs.lastSync = now
-            state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null) }
+            val note = if (update2Missing)
+                "Staff, customers, suppliers and purchases are saved on this phone. Run owner_update_2_migration.sql in Supabase to share them with the server."
+            else null
+            state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
             true
         } catch (e: CancellationException) {
             state.update { it.copy(running = false) }
@@ -98,6 +109,8 @@ class SyncManager(
     private suspend fun push() {
         val code = prefs.ownerCode
         for (op in repo.pendingOps()) {
+            // the purchase this payment belongs to was refused (kept as REJECTED on this phone): never send it
+            if (op.type == "ADD_SUPPLIER_PAYMENT" && repo.paymentRejected(op.refId)) continue
             try {
                 execute(op, code)
                 repo.markOp(op.id, "DONE", null)
@@ -105,14 +118,32 @@ class SyncManager(
                     "CREATE_POS_BILL" -> repo.billSynced(op.refId)
                     "UPDATE_ORDER" -> repo.orderSyncedIfIdle(op.refId)
                     "RETURN_EXCHANGE" -> repo.returnSynced(op.refId)
+                    "UPSERT_STAFF" -> repo.staffSyncedIfIdle(op.refId)
+                    "UPSERT_CUSTOMER" -> repo.posCustomerSyncedIfIdle(op.refId)
+                    "UPSERT_SUPPLIER" -> repo.supplierSyncedIfIdle(op.refId)
+                    "CREATE_PURCHASE" -> repo.purchaseSynced(op.refId)
+                    "ADD_SUPPLIER_PAYMENT" -> repo.paymentSynced(op.refId)
                 }
             } catch (e: ApiError) {
+                if (e.code == "PGRST202" && op.type in UPDATE2_OPS) {
+                    // the update-2 SQL is not installed yet: keep the change waiting (nothing is lost) and carry on with the rest
+                    update2Missing = true
+                    continue
+                }
                 if (e.isAuth || e.status >= 500 || e.code == "PGRST202") throw e
-                repo.markOp(op.id, "FAILED", e.message)
-                if (op.type == "RETURN_EXCHANGE") repo.dropRejectedReturn(op.refId)
+                // a clear refusal (400 / 409 / 422) keeps the record on this phone as REJECTED with the reason; timeouts and
+                // rate limits stay FAILED and are retried
+                val refused = e.status == 400 || e.status == 409 || e.status == 422
+                val why = e.message ?: "Refused by the server"
+                when {
+                    refused && op.type == "RETURN_EXCHANGE" -> repo.markRejectedReturn(op.id, op.refId, why)
+                    refused && op.type == "CREATE_PURCHASE" -> repo.markRejectedPurchase(op.id, op.refId, why)
+                    refused && op.type == "ADD_SUPPLIER_PAYMENT" -> repo.markRejectedPayment(op.id, op.refId, why)
+                    else -> repo.markOp(op.id, "FAILED", e.message)
+                }
             }
         }
-        repo.purgeOldDone()
+        // sent operations are kept (no automatic deletion of sync history)
     }
 
     private suspend fun execute(op: OpE, code: String) {
@@ -132,6 +163,11 @@ class SyncManager(
             }
             "CREATE_POS_BILL" -> Api.rpc("owner_create_bill", a(code).put("p", JSONObject(op.payload)))
             "RETURN_EXCHANGE" -> Api.rpc("owner_process_return", a(code).put("p", JSONObject(op.payload)))
+            "UPSERT_STAFF" -> Api.rpc("owner_upsert_staff", a(code).put("p", JSONObject(op.payload)))
+            "UPSERT_CUSTOMER" -> Api.rpc("owner_upsert_customer", a(code).put("p", JSONObject(op.payload)))
+            "UPSERT_SUPPLIER" -> Api.rpc("owner_upsert_supplier", a(code).put("p", JSONObject(op.payload)))
+            "CREATE_PURCHASE" -> Api.rpc("owner_create_purchase", a(code).put("p", JSONObject(op.payload)))
+            "ADD_SUPPLIER_PAYMENT" -> Api.rpc("owner_add_supplier_payment", a(code).put("p", JSONObject(op.payload)))
             "UPDATE_ORDER" -> {
                 val p = JSONObject(op.payload)
                 Api.rpc("owner_update_order", a(code)
@@ -186,6 +222,20 @@ class SyncManager(
         (Api.rpc("owner_stock_log", a(code).put("p_after", prefs.lastLogId)) as? JSONArray)?.let {
             val max = repo.applyServerLog(it)
             if (max > prefs.lastLogId) prefs.lastLogId = max
+        }
+        // update 2 lists: when the extra SQL is not installed yet they are simply skipped (a normal state, not an error)
+        pullUpdate2("owner_list_staff") { repo.applyServerStaff(it) }
+        pullUpdate2("owner_list_pos_customers") { repo.applyServerPosCustomers(it) }
+        pullUpdate2("owner_list_suppliers") { repo.applyServerSuppliers(it) }
+        pullUpdate2("owner_list_purchases") { repo.applyServerPurchases(it) }
+        pullUpdate2("owner_list_supplier_payments") { repo.applyServerSupplierPayments(it) }
+    }
+
+    private suspend fun pullUpdate2(fn: String, apply: suspend (JSONArray) -> Unit) {
+        try {
+            (Api.rpc(fn, a(prefs.ownerCode)) as? JSONArray)?.let { apply(it) }
+        } catch (e: ApiError) {
+            if (e.code == "PGRST202") update2Missing = true else throw e
         }
     }
 

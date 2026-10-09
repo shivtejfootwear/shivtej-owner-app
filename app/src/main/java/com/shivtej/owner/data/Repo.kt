@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,6 +13,8 @@ import java.time.OffsetDateTime
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import com.shivtej.owner.util.BillMath
+import com.shivtej.owner.util.MathLine
 
 // ------------------------------------------------------------------ models
 data class SizeStock(val size: String, val qty: Int, val barcode: String)
@@ -44,13 +47,15 @@ data class CartLine(
     val size: String,
     val barcode: String,
     val qty: Int,
-    val price: Double,
-    val maxQty: Int
+    val price: Double,                 // SELLING RATE (the owner can change it while billing)
+    val maxQty: Int,
+    val mrp: Double = 0.0              // printed MRP (0 = unknown -> the rate is used)
 ) { val total: Double get() = price * qty }
 
 data class BillItem(
     val productId: String, val article: String, val name: String, val colour: String,
-    val size: String, val barcode: String, val qty: Int, val price: Double
+    val size: String, val barcode: String, val qty: Int, val price: Double,
+    val mrp: Double = 0.0
 )
 
 val ORDER_STATUSES = listOf("New", "Confirmed", "Packed", "Shipped", "Delivered", "Cancelled")
@@ -97,7 +102,33 @@ fun parseBillItems(json: String): List<BillItem> = try {
     (0 until a.length()).map { i ->
         val o = a.getJSONObject(i)
         BillItem(o.str("productId"), o.str("article"), o.str("name"), o.str("colour"), o.str("size"),
-            o.str("barcode"), o.optInt("qty", 1), o.optDouble("price", 0.0))
+            o.str("barcode"), o.optInt("qty", 1), o.optDouble("price", 0.0), o.optDouble("mrp", 0.0))
+    }
+} catch (e: Exception) { emptyList() }
+
+/** Extra details saved with a POS bill. */
+data class BillExtra(
+    val salesPersonId: String = "",
+    val salesPerson: String = "",
+    val customerName: String = "",
+    val customerMobile: String = "",
+    val customerAddress: String = "",
+    val taxPercent: Double = 0.0,
+    val amountPaid: Double? = null        // null = paid in full
+)
+
+/** One line of a supplier purchase bill. */
+data class PurchaseLine(
+    val productId: String, val article: String, val name: String,
+    val colour: String, val size: String, val qty: Int, val cost: Double
+)
+
+fun parsePurchaseLines(json: String): List<PurchaseLine> = try {
+    val a = JSONArray(json)
+    (0 until a.length()).mapNotNull { i ->
+        val o = a.optJSONObject(i) ?: return@mapNotNull null
+        PurchaseLine(o.str("productId"), o.str("article"), o.str("name"), o.str("colour"), o.str("size"),
+            o.optInt("qty", 0), o.optDouble("cost", 0.0))
     }
 } catch (e: Exception) { emptyList() }
 
@@ -133,6 +164,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     val orders = dao.observeOrders()
     val customers = dao.observeCustomers()
     val returns = dao.observeReturns()
+    val staff = dao.observeStaff()
+    val posCustomers = dao.observePosCustomers()
+    val suppliers = dao.observeSuppliers()
+    val purchases = dao.observePurchases()
+    val supplierPayments = dao.observeSupplierPayments()
     val pendingOps = dao.observePending()
     val failedOps = dao.observeFailed()
     val failedOpList = dao.observeFailedOps()
@@ -188,6 +224,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         }
         db.withTransaction {
             val old = dao.sizesOf(p.id).associateBy { it.colour + "|" + it.size }
+            // a colour / size that still has stock can not be removed from the product (its stock would vanish without a log)
+            val kept = p.variants.flatMap { v -> v.sizes.map { v.colour + "|" + it.size } }.toSet()
+            for ((key, o) in old) require(key in kept || o.qty == 0) {
+                "Can not remove ${o.colour} / ${o.size}: it still has ${o.qty} in stock. Save it with stock 0 first, then remove it."
+            }
             val now = System.currentTimeMillis()
             dao.putProduct(ProductE(p.id, p.article.trim(), p.name.trim(), p.brand.trim(), p.category.trim(),
                 p.description.trim(), p.mrp, p.price, p.active, p.newItem, p.images.toJsonText(), now))
@@ -220,6 +261,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun deleteProduct(id: String) {
         db.withTransaction {
+            // the stock of this product is written to the stock history first, so it is never lost without a trace
+            val now = System.currentTimeMillis()
+            val art = dao.product(id)?.article ?: ""
+            for (s in dao.sizesOf(id)) if (s.qty != 0) dao.putLog(StockLogE(UUID.randomUUID().toString(), id, art,
+                s.colour, s.size, -s.qty, 0, "PRODUCT_DELETED", now, true))
             dao.delProduct(id); dao.delVariants(id); dao.delSizes(id)
             enqueue("DELETE_PRODUCT", id, JSONObject().put("id", id))
         }
@@ -285,17 +331,37 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return "B" + SimpleDateFormat("yyMMdd", Locale.US).format(Date()) + "-" + n.toString().padStart(4, '0')
     }
 
-    suspend fun createBill(lines: List<CartLine>, method: String): BillE {
+    /** The number the NEXT bill will get (shown on the billing screen; the counter itself only moves when a bill is saved). */
+    fun peekBillNo(): String =
+        "B" + SimpleDateFormat("yyMMdd", Locale.US).format(Date()) + "-" + (prefs.billCounter + 1).toString().padStart(4, '0')
+
+    /**
+     * Saves a POS bill. The stock part is exactly what it always was (one atomic change per line, log id "<billId>#<line>",
+     * same id on the server). New in update 2: customer, sales person, MRP / discount / tax / payment details and
+     * the shop + design snapshot are saved with the bill. Discount = MRP - selling rate (never an item column).
+     */
+    suspend fun createBill(lines: List<CartLine>, method: String, extra: BillExtra = BillExtra()): BillE {
         require(lines.isNotEmpty()) { "Bill is empty" }
         val id = UUID.randomUUID().toString()
         val no = nextBillNo()
         val now = System.currentTimeMillis()
-        val total = lines.sumOf { it.total }
+        val t = BillMath.compute(lines.map { MathLine(it.mrp, it.price, it.qty) }, extra.taxPercent)
+        val total = t.grandTotal
+        val paid = BillMath.round2((extra.amountPaid ?: total).coerceAtLeast(0.0))
+        val balance = BillMath.balance(total, paid)
+        val mobile = BillMath.normMobile(extra.customerMobile)
+        val cName = extra.customerName.trim()
+        val cAddr = extra.customerAddress.trim()
         val items = JSONArray()
         for (l in lines) items.put(JSONObject().put("productId", l.productId).put("article", l.article)
             .put("name", l.name).put("colour", l.colour).put("size", l.size).put("barcode", l.barcode)
-            .put("qty", l.qty).put("price", l.price))
-        val bill = BillE(id, no, total, method, items.toString(), now, false)
+            .put("qty", l.qty).put("price", l.price).put("mrp", BillMath.lineMrp(l.mrp, l.price)))
+        val meta = BillMeta.snapshot(prefs)
+        val bill = BillE(id, no, total, method, items.toString(), now, false,
+            salesPersonId = extra.salesPersonId, salesPerson = extra.salesPerson.trim(),
+            customerName = cName, customerMobile = if (mobile.length == 10) mobile else "", customerAddress = cAddr,
+            totalMrp = t.totalMrp, totalDiscount = t.totalDiscount, subTotal = t.subTotal,
+            taxPercent = t.taxPercent, taxAmount = t.taxAmount, amountPaid = paid, balance = balance, metaJson = meta)
         db.withTransaction {
             dao.putBill(bill)
             lines.forEachIndexed { i, l ->
@@ -307,13 +373,158 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             }
             enqueue("CREATE_POS_BILL", id, JSONObject().put("id", id).put("bill_no", no).put("total", total)
                 .put("payment_method", method).put("items", items)
-                .put("created_at", java.time.Instant.ofEpochMilli(now).toString()))
+                .put("created_at", java.time.Instant.ofEpochMilli(now).toString())
+                .put("sales_person_id", extra.salesPersonId).put("sales_person", bill.salesPerson)
+                .put("customer_name", cName).put("customer_mobile", bill.customerMobile).put("customer_address", cAddr)
+                .put("total_mrp", t.totalMrp).put("total_discount", t.totalDiscount).put("sub_total", t.subTotal)
+                .put("tax_percent", t.taxPercent).put("tax_amount", t.taxAmount)
+                .put("amount_paid", paid).put("balance", balance).put("meta", JSONObject(meta)))
+            // the customer is remembered by mobile number (one customer = one row, never duplicated)
+            if (bill.customerMobile.isNotEmpty()) {
+                val old = dao.posCustomer(bill.customerMobile)
+                val name = if (cName.isNotEmpty()) cName else old?.name ?: ""
+                val addr = if (cAddr.isNotEmpty()) cAddr else old?.address ?: ""
+                dao.putPosCustomer(PosCustomerE(bill.customerMobile, name, addr, old?.createdAt ?: now, true))
+                enqueue("UPSERT_CUSTOMER", bill.customerMobile, JSONObject().put("mobile", bill.customerMobile)
+                    .put("name", cName).put("address", cAddr).put("force", false)
+                    .put("created_at", java.time.Instant.ofEpochMilli(old?.createdAt ?: now).toString()))
+            }
         }
+        if (extra.salesPersonId.isNotBlank()) prefs.lastSalesPersonId = extra.salesPersonId
         onChanged()
         return bill
     }
 
     suspend fun bill(id: String): BillE? = dao.bill(id)
+
+    // ---------------------------------------------------------- staff (people who make sales)
+    private fun iso(ms: Long): String = java.time.Instant.ofEpochMilli(ms).toString()
+
+    /** Adds a staff member (id = null) or edits one. Nobody is ever deleted: inactive staff keep their sales history. */
+    suspend fun saveStaff(id: String?, name: String, mobile: String, active: Boolean): StaffE {
+        val n = name.trim()
+        require(n.isNotEmpty()) { "Staff name is required" }
+        val m = BillMath.normMobile(mobile)
+        require(mobile.isBlank() || m.length == 10) { "Mobile number must be 10 digits" }
+        var saved: StaffE? = null
+        db.withTransaction {
+            val all = dao.allStaff()
+            require(all.none { it.id != id && it.name.trim().equals(n, true) }) { "A staff member named $n already exists" }
+            val old = if (id == null) null else dao.staffById(id)
+            val s = StaffE(old?.id ?: UUID.randomUUID().toString(), n, if (mobile.isBlank()) "" else m, active,
+                old?.createdAt ?: System.currentTimeMillis(), true)
+            dao.putStaff(s)
+            enqueue("UPSERT_STAFF", s.id, JSONObject().put("id", s.id).put("name", s.name).put("mobile", s.mobile)
+                .put("active", s.active).put("created_at", iso(s.createdAt)))
+            saved = s
+        }
+        onChanged()
+        return saved!!
+    }
+
+    // ---------------------------------------------------------- shop customers (one row per mobile number)
+    /** Adds or edits a customer from the Customers screen. The values typed here replace the saved ones. */
+    suspend fun saveCustomer(mobile: String, name: String, address: String): PosCustomerE {
+        val m = BillMath.normMobile(mobile)
+        require(m.length == 10) { "Mobile number must be 10 digits" }
+        require(name.trim().isNotEmpty()) { "Customer name is required" }
+        var saved: PosCustomerE? = null
+        db.withTransaction {
+            val old = dao.posCustomer(m)
+            val c = PosCustomerE(m, name.trim(), address.trim(), old?.createdAt ?: System.currentTimeMillis(), true)
+            dao.putPosCustomer(c)
+            enqueue("UPSERT_CUSTOMER", m, JSONObject().put("mobile", m).put("name", c.name).put("address", c.address)
+                .put("force", true).put("created_at", iso(c.createdAt)))
+            saved = c
+        }
+        onChanged()
+        return saved!!
+    }
+
+    // ---------------------------------------------------------- suppliers, purchase bills, payments
+    suspend fun saveSupplier(id: String?, name: String, mobile: String, address: String, notes: String, active: Boolean): SupplierE {
+        val n = name.trim()
+        require(n.isNotEmpty()) { "Supplier name is required" }
+        val m = BillMath.normMobile(mobile)
+        require(mobile.isBlank() || m.length == 10) { "Mobile number must be 10 digits" }
+        var saved: SupplierE? = null
+        db.withTransaction {
+            val all = dao.allSuppliers()
+            require(all.none { it.id != id && it.name.trim().equals(n, true) }) { "A supplier named $n already exists" }
+            val old = if (id == null) null else dao.supplier(id)
+            val s = SupplierE(old?.id ?: UUID.randomUUID().toString(), n, if (mobile.isBlank()) "" else m,
+                address.trim(), notes.trim(), active, old?.createdAt ?: System.currentTimeMillis(), true)
+            dao.putSupplier(s)
+            enqueue("UPSERT_SUPPLIER", s.id, JSONObject().put("id", s.id).put("name", s.name).put("mobile", s.mobile)
+                .put("address", s.address).put("notes", s.notes).put("active", s.active).put("created_at", iso(s.createdAt)))
+            saved = s
+        }
+        onChanged()
+        return saved!!
+    }
+
+    /**
+     * Saves a purchase bill from a supplier. When [addStock] is on, every item is added to the stock right away
+     * (log id "PUR:<id>:<line>", the same id the server uses, so it can never be counted twice).
+     * A bill with no items is just a money entry (amount only) and changes no stock.
+     * [paidNow] > 0 also saves a payment against this bill.
+     */
+    suspend fun createPurchase(
+        supplierId: String, billNo: String, billDate: Long, lines: List<PurchaseLine>, amountIfNoItems: Double,
+        addStock: Boolean, note: String, paidNow: Double, method: String
+    ): PurchaseE {
+        require(supplierId.isNotBlank()) { "Choose a supplier" }
+        val clean = lines.filter { it.qty > 0 }
+        val amount = BillMath.round2(if (clean.isNotEmpty()) clean.sumOf { it.cost * it.qty } else amountIfNoItems)
+        require(amount > 0.0) { "Purchase amount must be more than 0" }
+        require(paidNow >= 0.0) { "Paid amount can not be negative" }
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val stock = addStock && clean.isNotEmpty()
+        val arr = JSONArray()
+        for (l in clean) arr.put(JSONObject().put("productId", l.productId).put("article", l.article).put("name", l.name)
+            .put("colour", l.colour).put("size", l.size).put("qty", l.qty).put("cost", l.cost))
+        val p = PurchaseE(id, supplierId, billNo.trim(), billDate, amount, arr.toString(), stock, note.trim(), true)
+        db.withTransaction {
+            if (stock) for (l in clean) {
+                require(dao.qtyOf(l.productId, l.colour, l.size) != null) { "${l.name} (${l.colour} / ${l.size}) is not in the stock list" }
+            }
+            dao.putPurchase(p)
+            if (stock) clean.forEachIndexed { i, l ->
+                val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+                dao.adjust(l.productId, l.colour, l.size, l.qty)
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE("PUR:$id:${i + 1}", l.productId, l.article, l.colour, l.size,
+                    after - before, after, "PURCHASE", now, false))
+            }
+            enqueue("CREATE_PURCHASE", id, JSONObject().put("id", id).put("supplier_id", supplierId)
+                .put("bill_no", p.billNo).put("bill_date", iso(billDate)).put("amount", amount)
+                .put("note", p.note).put("add_stock", stock).put("items", arr))
+            if (paidNow > 0.0) {
+                val pid = UUID.randomUUID().toString()
+                dao.putSupplierPayment(SupplierPaymentE(pid, supplierId, id, BillMath.round2(paidNow), method, "", now, true))
+                enqueue("ADD_SUPPLIER_PAYMENT", pid, JSONObject().put("id", pid).put("supplier_id", supplierId).put("bill_id", id)
+                    .put("amount", BillMath.round2(paidNow)).put("method", method).put("note", "").put("paid_at", iso(now)))
+            }
+        }
+        onChanged()
+        return p
+    }
+
+    /** Money paid to a supplier. [billId] empty = a payment on account. It reduces what is still owed. */
+    suspend fun addSupplierPayment(supplierId: String, billId: String, amount: Double, method: String, note: String): SupplierPaymentE {
+        require(amount > 0.0) { "Payment amount must be more than 0" }
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val pay = SupplierPaymentE(id, supplierId, billId, BillMath.round2(amount), method, note.trim(), now, true)
+        db.withTransaction {
+            dao.putSupplierPayment(pay)
+            enqueue("ADD_SUPPLIER_PAYMENT", id, JSONObject().put("id", id).put("supplier_id", supplierId).put("bill_id", billId)
+                .put("amount", pay.amount).put("method", method).put("note", pay.note).put("paid_at", iso(now)))
+        }
+        onChanged()
+        return pay
+    }
 
     // ---------------------------------------------------------- orders
     suspend fun updateOrder(id: String, status: String, tracking: String, courier: String, shipping: Double) {
@@ -378,9 +589,35 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun returnSynced(id: String) = dao.returnSynced(id)
 
-    /** The server refused this return (for example it was already returned elsewhere): forget it on this phone. */
-    suspend fun dropRejectedReturn(id: String) {
-        db.withTransaction { dao.delReturn(id); dao.delLogsStartingWith("RET:$id:") }
+    /**
+     * The server refused this return: it stays on this phone with status REJECTED and its reason (history kept).
+     * Its stock movements are taken back through logged reversals.
+     */
+    suspend fun markRejectedReturn(opId: Long, id: String, why: String) {
+        db.withTransaction {
+            dao.markOp(opId, "REJECTED", why)
+            reverseStockLogs("RET:$id:", "RETURN_REJECTED")
+            dao.markReturnRejected(id, why)
+        }
+    }
+
+    /**
+     * Takes back the stock movements that were logged under [prefix] (exactly what they moved, clamped at 0 like the
+     * stock itself). Each reversal is written to the stock history with its own id. The original movements are kept
+     * (they will never be sent, so they are marked as not waiting).
+     */
+    private suspend fun reverseStockLogs(prefix: String, reason: String) {
+        if (dao.logsStartingWith("REV:$prefix").isNotEmpty()) return    // already taken back: never twice
+        val now = System.currentTimeMillis()
+        for (l in dao.logsStartingWith(prefix)) {
+            val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+            if (dao.qtyOf(l.productId, l.colour, l.size) != null) dao.adjust(l.productId, l.colour, l.size, -l.delta)
+            val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+            val real = after - before
+            if (real != 0) dao.putLog(StockLogE("REV:${l.opId}", l.productId, l.article, l.colour, l.size,
+                real, after, reason, now, true))
+        }
+        dao.markLogsSynced(prefix)
     }
 
     // ---------------------------------------------------------- sync helpers
@@ -390,7 +627,35 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun retryFailed() { dao.retryFailed(); onChanged() }
     suspend fun billSynced(id: String) = dao.billSynced(id)
     suspend fun orderSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPDATE_ORDER") == 0) dao.orderSynced(id) }
-    suspend fun purgeOldDone() = dao.purgeDone(System.currentTimeMillis() - 3L * 24 * 3600 * 1000)
+    suspend fun paymentRejected(id: String) = dao.paymentRejectedCount(id) > 0
+    suspend fun staffSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPSERT_STAFF") == 0) dao.staffSynced(id) }
+    suspend fun posCustomerSyncedIfIdle(mobile: String) { if (dao.pendingCountFor(mobile, "UPSERT_CUSTOMER") == 0) dao.posCustomerSynced(mobile) }
+    suspend fun supplierSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPSERT_SUPPLIER") == 0) dao.supplierSynced(id) }
+    suspend fun purchaseSynced(id: String) = dao.purchaseSynced(id)
+    suspend fun paymentSynced(id: String) = dao.paymentSynced(id)
+
+    /**
+     * The server refused this purchase bill: it, its payments and their queued operations stay on this phone with
+     * status REJECTED (history kept). Its stock is taken back through logged reversals.
+     */
+    suspend fun markRejectedPurchase(opId: Long, id: String, why: String) {
+        db.withTransaction {
+            dao.markOp(opId, "REJECTED", why)
+            if (dao.purchaseById(id) == null) return@withTransaction
+            reverseStockLogs("PUR:$id:", "PURCHASE_REJECTED")
+            dao.markPurchaseRejected(id, why)
+            dao.markPaymentsRejectedOfBill(id, why)
+            for (pay in dao.paymentsOfBill(id)) dao.failPaymentOp(pay.id)
+        }
+    }
+
+    /** A supplier payment the server refused: kept on this phone as REJECTED (not counted in any total). */
+    suspend fun markRejectedPayment(opId: Long, id: String, why: String) {
+        db.withTransaction {
+            dao.markOp(opId, "REJECTED", why)
+            dao.markPaymentRejected(id, why)
+        }
+    }
 
     suspend fun replaceImageRefs(pid: String, map: Map<String, String>) {
         if (map.isEmpty()) return
@@ -444,7 +709,6 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     /** Products whose stock a still-waiting bill / return has already changed on this phone. */
     private fun productsTouchedBy(op: OpE): List<String> {
-        if (op.status != "PENDING") return emptyList()
         return try {
             val p = JSONObject(op.payload)
             val out = ArrayList<String>()
@@ -459,25 +723,24 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         } catch (e: Exception) { emptyList() }
     }
 
+    /**
+     * Downloads products and overwrites the local copy of the products the server sends back. A product that is
+     * missing from the response is NEVER deleted here: an empty, partial (for example a row limit) or failed download
+     * must not remove stock. Products are only removed on this phone by the owner's own Delete action.
+     * An invalid row makes the whole transaction fail, so nothing is half-written.
+     */
     suspend fun applyServerProducts(arr: JSONArray) {
         db.withTransaction {
             // read the open queue INSIDE the transaction so a change made while we were downloading is never overwritten
             val protectedIds = dao.openOps().flatMap { listOf(it.refId) + productsTouchedBy(it) }.toSet()
-            val serverIds = HashSet<String>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val id = o.str("id")
-                if (id.isBlank()) continue
-                serverIds.add(id)
-                if (id in protectedIds) continue
+                if (id.isBlank() || id in protectedIds) continue
                 val (pe, vs, ss) = parseProduct(o)
-                dao.putProduct(pe); dao.delVariants(id); dao.delSizes(id)
+                // upserts only: a size or colour missing from the server is kept here, never deleted (its stock is not lost)
+                dao.putProduct(pe)
                 dao.putVariants(vs); dao.putSizes(ss)
-            }
-            for (p in dao.allProducts()) {
-                if (p.id !in serverIds && p.id !in protectedIds) {
-                    dao.delProduct(p.id); dao.delVariants(p.id); dao.delSizes(p.id)
-                }
             }
         }
     }
@@ -506,10 +769,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun applyServerReturns(arr: JSONArray) {
         val list = ArrayList<ReturnE>()
+        val kept = dao.rejectedReturnIds().toSet()      // refused on this phone: keep the local REJECTED record
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val id = o.str("id")
-            if (id.isBlank()) continue
+            if (id.isBlank() || id in kept) continue
             list.add(ReturnE(id, o.str("kind"), o.str("ref_type"), o.str("ref_id"), o.str("reason"),
                 o.optDouble("refund", 0.0), if (o.isNull("restock")) true else o.optBoolean("restock", true),
                 o.jsonText("items_in", "[]"), o.jsonText("items_out", "[]"), parseTime(o.str("created_at")), false))
@@ -518,11 +782,98 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     }
 
     suspend fun applyServerBills(arr: JSONArray) {
-        val list = (0 until arr.length()).map { arr.getJSONObject(it) }.filter { it.str("id").isNotBlank() }.map {
-            BillE(it.str("id"), it.str("bill_no"), it.optDouble("total", 0.0), it.str("payment_method"),
-                it.jsonText("items", "[]"), parseTime(it.str("created_at")), true)
+        db.withTransaction {
+            // A bill made on this phone keeps its customer / sales person / design even when the server row has no such
+            // details (for example the update SQL was not installed when it was uploaded): server values win only when present.
+            val local = dao.allBills().associateBy { it.id }
+            val list = ArrayList<BillE>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val id = o.str("id")
+                if (id.isBlank()) continue
+                val l = local[id]
+                fun txt(k: String, cur: String?): String = if (o.str(k).isNotBlank()) o.str(k) else cur ?: ""
+                fun num(k: String, cur: Double?, def: Double): Double = if (!o.isNull(k) && o.has(k)) o.optDouble(k, def) else cur ?: def
+                val meta = if (!o.isNull("meta") && o.has("meta")) o.opt("meta").toString() else l?.metaJson ?: ""
+                list.add(BillE(
+                    id, o.str("bill_no"), o.optDouble("total", 0.0), o.str("payment_method"),
+                    o.jsonText("items", "[]"), parseTime(o.str("created_at")), true,
+                    salesPersonId = txt("sales_person_id", l?.salesPersonId), salesPerson = txt("sales_person", l?.salesPerson),
+                    customerName = txt("customer_name", l?.customerName), customerMobile = txt("customer_mobile", l?.customerMobile),
+                    customerAddress = txt("customer_address", l?.customerAddress),
+                    totalMrp = num("total_mrp", l?.totalMrp, 0.0), totalDiscount = num("total_discount", l?.totalDiscount, 0.0),
+                    subTotal = num("sub_total", l?.subTotal, 0.0), taxPercent = num("tax_percent", l?.taxPercent, 0.0),
+                    taxAmount = num("tax_amount", l?.taxAmount, 0.0), amountPaid = num("amount_paid", l?.amountPaid, -1.0),
+                    balance = num("balance", l?.balance, 0.0), metaJson = meta
+                ))
+            }
+            dao.putBills(list)
         }
-        dao.putBills(list)
+    }
+
+    suspend fun applyServerStaff(arr: JSONArray) = db.withTransaction {
+        val protectedIds = dao.pendingStaffIds().toSet()
+        val list = ArrayList<StaffE>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = o.str("id")
+            if (id.isBlank() || id in protectedIds) continue
+            list.add(StaffE(id, o.str("name"), o.str("mobile"), if (o.isNull("active")) true else o.optBoolean("active", true),
+                parseTime(o.str("created_at")), false))
+        }
+        dao.putStaffList(list)
+    }
+
+    suspend fun applyServerPosCustomers(arr: JSONArray) = db.withTransaction {
+        val protectedIds = dao.pendingPosCustomerIds().toSet()
+        val list = ArrayList<PosCustomerE>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val m = o.str("mobile")
+            if (m.isBlank() || m in protectedIds) continue
+            list.add(PosCustomerE(m, o.str("name"), o.str("address"), parseTime(o.str("created_at")), false))
+        }
+        dao.putPosCustomers(list)
+    }
+
+    suspend fun applyServerSuppliers(arr: JSONArray) = db.withTransaction {
+        val protectedIds = dao.pendingSupplierIds().toSet()
+        val list = ArrayList<SupplierE>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = o.str("id")
+            if (id.isBlank() || id in protectedIds) continue
+            list.add(SupplierE(id, o.str("name"), o.str("mobile"), o.str("address"), o.str("notes"),
+                if (o.isNull("active")) true else o.optBoolean("active", true), parseTime(o.str("created_at")), false))
+        }
+        dao.putSuppliers(list)
+    }
+
+    suspend fun applyServerPurchases(arr: JSONArray) = db.withTransaction {
+        val protectedIds = (dao.pendingPurchaseIds() + dao.rejectedPurchaseIds()).toSet()
+        val list = ArrayList<PurchaseE>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = o.str("id")
+            if (id.isBlank() || id in protectedIds) continue
+            list.add(PurchaseE(id, o.str("supplier_id"), o.str("bill_no"), parseTime(o.str("bill_date")),
+                o.optDouble("amount", 0.0), o.jsonText("items", "[]"),
+                if (o.isNull("add_stock")) false else o.optBoolean("add_stock", false), o.str("note"), false))
+        }
+        dao.putPurchases(list)
+    }
+
+    suspend fun applyServerSupplierPayments(arr: JSONArray) = db.withTransaction {
+        val protectedIds = (dao.pendingPaymentIds() + dao.rejectedPaymentIds()).toSet()
+        val list = ArrayList<SupplierPaymentE>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = o.str("id")
+            if (id.isBlank() || id in protectedIds) continue
+            list.add(SupplierPaymentE(id, o.str("supplier_id"), o.str("bill_id"), o.optDouble("amount", 0.0),
+                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false))
+        }
+        dao.putSupplierPayments(list)
     }
 
     /** Returns the highest server log id seen. */
@@ -540,8 +891,4 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return max
     }
 
-    suspend fun clearAll() = withContext(Dispatchers.IO) {
-        db.clearAllTables()
-        prefs.resetSyncState()
-    }
 }

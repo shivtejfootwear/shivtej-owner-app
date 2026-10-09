@@ -190,51 +190,7 @@ fun OrderDetailScreen(app: App, nav: Nav, id: String) {
     }
 }
 
-// ================================================================== CUSTOMERS
-private data class Cust(val mobile: String, val name: String, val email: String, val orders: Int, val spent: Double)
-
-@Composable
-fun CustomersScreen(app: App) {
-    val customers by app.repo.customers.collectAsStateWithLifecycle(emptyList())
-    val orders by app.repo.orders.collectAsStateWithLifecycle(emptyList())
-    var query by remember { mutableStateOf("") }
-
-    val list = remember(customers, orders) {
-        val byMobile = orders.groupBy { custField(it.customerJson, "mobile", "phone") }.filterKeys { it.isNotBlank() }
-        val known = customers.map { c ->
-            val os = byMobile[c.mobile] ?: emptyList()
-            Cust(c.mobile, c.name, c.email, os.size, os.filter { it.orderStatus != "Cancelled" }.sumOf { it.total })
-        }
-        val knownMobiles = customers.map { it.mobile }.toSet()
-        val fromOrders = byMobile.filterKeys { it !in knownMobiles }.map { (m, os) ->
-            Cust(m, custField(os.first().customerJson, "name"), "", os.size, os.filter { it.orderStatus != "Cancelled" }.sumOf { it.total })
-        }
-        (known + fromOrders).sortedByDescending { it.spent }
-    }
-    val shown = list.filter { query.isBlank() || it.name.contains(query, true) || it.mobile.contains(query) || it.email.contains(query, true) }
-
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        SearchField(query, { query = it }, "Search name, mobile, email", Modifier.padding(top = 8.dp))
-        Text("${shown.size} customer(s)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
-        if (shown.isEmpty()) EmptyState("No customers yet.")
-        LazyColumn {
-            items(shown, key = { it.mobile }) { c ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(c.name.ifBlank { "Customer" }, fontWeight = FontWeight.SemiBold)
-                        Text(c.mobile, fontSize = 13.sp)
-                        if (c.email.isNotBlank()) Text(c.email, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(money(app, c.spent), fontWeight = FontWeight.Bold)
-                        Text("${c.orders} order(s)", fontSize = 12.sp)
-                    }
-                }
-                HorizontalDivider()
-            }
-        }
-    }
-}
+// Customers now live in Customers.kt (update 2).
 
 // ================================================================== REPORTS
 @Composable
@@ -256,7 +212,7 @@ fun ReportsScreen(app: App, nav: Nav) {
     val o = orders.filter { it.createdAt >= from && it.orderStatus != "Cancelled" }
     val posTotal = b.sumOf { it.total }
     val onlineTotal = o.sumOf { it.total }
-    val rets = returns.filter { it.createdAt >= from }
+    val rets = returns.filter { it.createdAt >= from && it.status != "REJECTED" }
     val refunds = rets.sumOf { it.refund }
     val byMethod = b.groupBy { it.method }.mapValues { e -> e.value.sumOf { it.total } }
     val sold = b.flatMap { parseBillItems(it.itemsJson) }

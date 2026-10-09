@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shivtej.owner.App
 import com.shivtej.owner.data.*
+import com.shivtej.owner.util.BackupRestore
+import com.shivtej.owner.util.Images
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -145,7 +147,7 @@ private fun answer(app: App, q: String, products: List<Product>, bills: List<Bil
 
 // ================================================================== SETTINGS
 @Composable
-fun SettingsScreen(app: App) {
+fun SettingsScreen(app: App, onOpen: (Route) -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val prefs = app.prefs
@@ -171,11 +173,7 @@ fun SettingsScreen(app: App) {
     val backup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    app.db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").close()
-                    val src = ctx.getDatabasePath(AppDb.FILE)
-                    ctx.contentResolver.openOutputStream(uri)?.use { out -> src.inputStream().use { it.copyTo(out) } }
-                }
+                withContext(Dispatchers.IO) { BackupRestore.exportTo(ctx, app.db, uri) }
                 toast(ctx, "Backup saved")
             } catch (e: Exception) { toast(ctx, "Backup failed: ${e.message}") }
         }
@@ -191,6 +189,7 @@ fun SettingsScreen(app: App) {
                 Text("Waiting to upload: $pending change(s)")
                 Text("Failed: $failed change(s)", color = if (failed > 0) RedOut else MaterialTheme.colorScheme.onSurface)
                 st.lastError?.let { Text(it, color = RedOut, fontSize = 13.sp) }
+                st.notice?.let { Text(it, color = AmberLow, fontSize = 13.sp) }
                 failedList.forEach { Text("• ${it.type}: ${it.error ?: "error"}", fontSize = 12.sp, color = RedOut) }
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(enabled = !st.running, onClick = {
@@ -200,6 +199,21 @@ fun SettingsScreen(app: App) {
                         }
                     }) { Text(if (st.running) "Syncing..." else "Sync now") }
                     if (failed > 0) OutlinedButton(onClick = { scope.launch { app.repo.retryFailed() } }) { Text("Retry failed") }
+                }
+            }
+        }
+
+        SectionTitle("Bill and printer (update 2)")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp)) {
+                TextButton(onClick = { onOpen(Route.ShopSettings) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Shop & bill settings - logo, website, Instagram, GST, notes", modifier = Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = { onOpen(Route.BillDesign) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Bill theme and design - colours, background, picture", modifier = Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = { onOpen(Route.Printer) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Bluetooth printer - ATPOS AT-301 (80 mm)", modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -252,33 +266,36 @@ fun SettingsScreen(app: App) {
         }
 
         SectionTitle("Local data")
-        OutlinedButton(onClick = { confirmClear = true }) { Text("Clear local cache", color = RedOut) }
-        Text("Removes data from this phone and downloads it again from the server. Unsynced changes are lost.", fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(onClick = { confirmClear = true }) { Text("Clear temporary cache") }
+        Text("Deletes only temporary camera photos. Products, photos, stock, bills, returns, purchases, customers and unsynced changes are NOT touched.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(32.dp))
     }
 
     if (confirmClear) ConfirmDialog(
-        "Clear local cache?",
-        if (pending + failed > 0) "${pending + failed} change(s) have NOT been uploaded and will be lost. Sync first if you can. Continue?"
-        else "All local data will be removed and downloaded again from the server.",
-        "Clear", { scope.launch { app.repo.clearAll(); app.cart.clear(); app.sync.kick(); toast(ctx, "Local cache cleared") } },
+        "Clear temporary cache?",
+        "Only temporary camera photos are deleted. Nothing else on this phone is changed.",
+        "Clear",
+        {
+            confirmClear = false
+            scope.launch {
+                val n = withContext(Dispatchers.IO) { Images.clearTempCache(ctx) }
+                toast(ctx, "Temporary cache cleared ($n file(s))")
+            }
+        },
         { confirmClear = false }
     )
     confirmRestore?.let { uri ->
-        ConfirmDialog("Restore backup?", "This replaces everything on this phone with the backup and then closes the app. Open it again afterwards.", "Restore",
+        ConfirmDialog("Restore backup?",
+            "The backup file is checked now; if it is not usable nothing changes. Then the app closes. When you open it again, the current data is kept as a copy in the app folder and the backup replaces the data on this phone.",
+            "Restore",
             {
                 scope.launch {
                     try {
-                        withContext(Dispatchers.IO) {
-                            app.db.close()
-                            val dst = ctx.getDatabasePath(AppDb.FILE)
-                            File(dst.path + "-wal").delete(); File(dst.path + "-shm").delete()
-                            ctx.contentResolver.openInputStream(uri)?.use { inp -> dst.outputStream().use { inp.copyTo(it) } }
-                        }
-                        toast(ctx, "Restored - closing. Open the app again.")
+                        withContext(Dispatchers.IO) { BackupRestore.stage(ctx, uri) }
+                        toast(ctx, "Backup checked. The app will close; open it again to apply the restore.")
                         android.os.Process.killProcess(android.os.Process.myPid())
-                    } catch (e: Exception) { toast(ctx, "Restore failed: ${e.message}") }
+                    } catch (e: Exception) { toast(ctx, "Restore stopped: ${e.message}") }
                 }
             }, { confirmRestore = null })
     }
