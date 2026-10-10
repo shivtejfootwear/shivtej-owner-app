@@ -163,7 +163,7 @@ class SyncManager(
         when (op.type) {
             "ADD_PRODUCT", "UPDATE_PRODUCT", "BARCODE_ASSIGNMENT" -> {
                 val p = JSONObject(op.payload)
-                uploadImagesIn(p, op.refId)
+                uploadImagesIn(p, op.refId, code)
                 Api.rpc("owner_upsert_product", a(code).put("p", p))
                 syncVideos(code, op.refId, p)
             }
@@ -266,7 +266,7 @@ class SyncManager(
         else -> "video/mp4"
     }
 
-    private suspend fun uploadImagesIn(p: JSONObject, pid: String) {
+    private suspend fun uploadImagesIn(p: JSONObject, pid: String, code: String) {
         val mapping = HashMap<String, String>()
         fun fix(arr: JSONArray?): JSONArray {
             val out = JSONArray()
@@ -274,7 +274,7 @@ class SyncManager(
             for (i in 0 until arr.length()) {
                 val s = arr.optString(i)
                 if (s.startsWith("/")) {
-                    val url = upload(s, pid)
+                    val url = upload(s, pid, code)
                     if (url != null) { mapping[s] = url; out.put(url) }
                 } else if (s.isNotBlank()) out.put(s)
             }
@@ -289,13 +289,14 @@ class SyncManager(
         repo.replaceImageRefs(pid, mapping)
     }
 
-    private fun upload(path: String, pid: String): String? {
+    /** Sends one product photo to the private B2 bucket. Returns its object name, saved in products.images. */
+    private fun upload(path: String, pid: String, code: String): String? {
         prefs.uploadedUrl(path)?.let { return it }
         val f = File(path)
         if (!f.exists()) return null
-        val url = Api.uploadImage("$pid/${UUID.randomUUID()}.jpg", f.readBytes(), "image/jpeg")
-        prefs.setUploaded(path, url)
-        return url
+        val name = Api.uploadProductPhoto(code, pid, f.readBytes(), "image/jpeg")
+        prefs.setUploaded(path, name)
+        return name
     }
 
     // ------------------------------------------------------------------ pull
