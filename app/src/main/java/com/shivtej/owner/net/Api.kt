@@ -1,6 +1,7 @@
 package com.shivtej.owner.net
 
 import com.shivtej.owner.BuildConfig
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,5 +68,42 @@ object Api {
             if (!resp.isSuccessful) throw fail(resp.code, text)
         }
         return "$base/storage/v1/object/public/$bucket/$path"
+    }
+
+    private val functionsBase get() = "$base/functions/v1"
+
+    /**
+     * Sends one product photo to the PRIVATE B2 bucket through the owner-only b2-upload function.
+     * Returns the object name (for example "products/<id>/<uuid>.jpg") that is saved in products.images.
+     */
+    fun uploadProductPhoto(code: String, productId: String, bytes: ByteArray, mime: String): String {
+        val req = Request.Builder()
+            .url("$functionsBase/b2-upload")
+            .header("apikey", key)
+            .header("x-owner-code", code)
+            .header("x-kind", "image")
+            .header("x-product-id", productId)
+            .header("Content-Type", mime)
+            .post(bytes.toRequestBody(mime.toMediaType()))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw fail(resp.code, text)
+            return JSONObject(text).getString("file_name")
+        }
+    }
+
+    /** Asks the server for a one-hour signed URL of one private product photo. Needs no owner code. */
+    fun productPhotoUrl(productId: String, fileName: String): String {
+        val url = "$functionsBase/b2-media-url".toHttpUrl().newBuilder()
+            .addQueryParameter("product_id", productId)
+            .addQueryParameter("file", fileName)
+            .build()
+        val req = Request.Builder().url(url).header("apikey", key).get().build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw fail(resp.code, text)
+            return JSONObject(text).getString("url")
+        }
     }
 }

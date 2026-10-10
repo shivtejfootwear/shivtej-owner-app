@@ -206,12 +206,31 @@ function rowToProduct(r,usedIds){
   }).filter(v=>v.colour);
   return {id,sid:String(r.id),name:r.name||"",article:r.article||"",brand:r.brand||"",category:r.category||"",price:Number(r.price)||0,mrp:Number(r.mrp)||Number(r.price)||0,rating:0,reviews:0,newItem:!!r.new_item,desc:r.description||"",variants};
 }
+/* Product photos live in the PRIVATE Backblaze bucket. The database keeps only their names
+   ("products/<id>/<file>.jpg"); the site asks b2-media-url for a one-hour signed link for each one. */
+const sitePhotoCache=new Map();
+async function sitePhotoUrl(name){
+  const hit=sitePhotoCache.get(name);if(hit&&hit.until>Date.now())return hit.url;
+  const pid=name.split("/")[1]||"";
+  try{
+    const r=await fetch(`${SUPABASE_URL}/functions/v1/b2-media-url?product_id=${encodeURIComponent(pid)}&file=${encodeURIComponent(name)}`,{headers:{apikey:SUPABASE_PUBLISHABLE_KEY}});
+    if(!r.ok)return null;
+    const j=await r.json();
+    sitePhotoCache.set(name,{url:j.url,until:Date.now()+50*60*1000});
+    return j.url;
+  }catch(e){return null}
+}
 async function fetchCloudProducts(){
   if(!supabaseClient)return null;
   const pr=await supabaseClient.rpc("site_list_products");
   if(pr.error||!Array.isArray(pr.data))return null;
   const used=new Set();
-  return pr.data.map(r=>rowToProduct(r,used)).filter(p=>p.variants.length);
+  const list=pr.data.map(r=>rowToProduct(r,used)).filter(p=>p.variants.length);
+  // resolve private photo names to signed links before the page shows them
+  const media=[];list.forEach(p=>p.variants.forEach(v=>v.media.forEach(m=>media.push(m))));
+  await Promise.all(media.map(async m=>{if(m.data.startsWith("products/"))m.data=await sitePhotoUrl(m.data)}));
+  list.forEach(p=>p.variants.forEach(v=>{v.media=v.media.filter(m=>m.data)}));
+  return list;
 }
 /* Admin-only actions that change the central database (Billing / Add product) need the owner code.
    It is asked once per browser session, kept only in sessionStorage and sent only to Supabase over HTTPS. */
@@ -226,11 +245,15 @@ function compressImage(file){return new Promise((res,rej)=>{const img=new Image(
   img.onload=()=>{const m=1280,k=Math.min(1,m/Math.max(img.width,img.height)),c=document.createElement("canvas");c.width=Math.max(1,Math.round(img.width*k));c.height=Math.max(1,Math.round(img.height*k));
     c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(u);c.toBlob(b=>b?res(b):rej(new Error("image")),"image/jpeg",.8)};
   img.onerror=()=>{URL.revokeObjectURL(u);rej(new Error("image"))};img.src=u})}
-async function uploadSiteImage(file,pid){
-  const blob=await compressImage(file),path=pid+"/"+Date.now()+"-"+Math.random().toString(36).slice(2,8)+".jpg";
-  const r=await supabaseClient.storage.from("product-images").upload(path,blob,{contentType:"image/jpeg"});
-  if(r.error)throw new Error(r.error.message||"upload");
-  return supabaseClient.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+/* Sends one compressed photo to the private B2 bucket through the owner-only b2-upload function.
+   Returns the object name that is saved in the product's images list. */
+async function uploadSiteImage(file,pid,code){
+  const blob=await compressImage(file);
+  const r=await fetch(`${SUPABASE_URL}/functions/v1/b2-upload`,{method:"POST",
+    headers:{apikey:SUPABASE_PUBLISHABLE_KEY,"x-owner-code":code,"x-kind":"image","x-product-id":pid,"Content-Type":"image/jpeg"},body:blob});
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok||!j.file_name)throw new Error(j.error||"upload");
+  return j.file_name;
 }
 async function createCloudProduct(){
   const name=$("pn").value.trim(),price=+$("pp").value;
@@ -247,8 +270,10 @@ async function createCloudProduct(){
   const code=getOwnerCode();if(!code)return;
   toast("Saving product...");
   let urls=[];
-  try{for(const f of files.filter(f=>f.type.startsWith("image")).slice(0,6))urls.push(await uploadSiteImage(f,pid))}
-  catch(e){toast("Photo upload failed. Check internet and try again.");return}
+  try{for(const f of files.filter(f=>f.type.startsWith("image")).slice(0,6))urls.push(await uploadSiteImage(f,pid,code))}
+  catch(e){
+    if(String(e.message).includes("INVALID_OWNER_CODE")){clearOwnerCode();toast("Wrong owner code");return}
+    toast("Photo upload failed. Check internet and try again.");return}
   let res;
   try{res=await supabaseClient.rpc("owner_upsert_product",{p_code:code,p:{id:pid,article:$("pa").value.trim()||"-",name,description:$("pd").value,brand:$("pb").value.trim()||"Shivtej",
     category:$("pg").value,price,mrp:+$("pm").value||price,active:true,new_item:$("pnew").checked,images:urls,colours}})}catch(e){res={error:{message:"NETWORK"}}}

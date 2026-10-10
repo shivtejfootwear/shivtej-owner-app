@@ -27,6 +27,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.shivtej.owner.App
+import com.shivtej.owner.net.Api
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 // ------------------------------------------------------------------ navigation
@@ -91,16 +94,42 @@ val GreenOk = Color(0xFF2E7D32)
 val AmberLow = Color(0xFFEF6C00)
 val RedOut = Color(0xFFC62828)
 
+/** Private product photos are saved in B2 as names like "products/<id>/<uuid>.jpg". Their signed URLs are cached. */
+private val signedPhotoCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+/** Signed URL for one private product photo name. The URL lasts 1 hour, so it is cached for 50 minutes. */
+suspend fun privatePhotoUrl(name: String): String? = withContext(Dispatchers.IO) {
+    val now = System.currentTimeMillis()
+    signedPhotoCache[name]?.let { (url, until) -> if (now < until) return@withContext url }
+    val pid = name.split("/").getOrNull(1) ?: return@withContext null
+    try {
+        val url = Api.productPhotoUrl(pid, name)
+        signedPhotoCache[name] = url to (now + 50 * 60_000L)
+        url
+    } catch (e: Exception) {
+        null
+    }
+}
+
 @Composable
 fun Thumb(src: String?, size: Dp = 56.dp) {
-    if (src == null) {
+    val isPrivate = src != null && src.startsWith("products/")
+    val remoteUrl by produceState<String?>(null, src) {
+        value = if (src != null && isPrivate) privatePhotoUrl(src) else null
+    }
+    val model: Any? = when {
+        src == null -> null
+        isPrivate -> remoteUrl
+        else -> imgModel(src)
+    }
+    if (model == null) {
         Box(
             Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) { Icon(Icons.Filled.Image, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
     } else {
         AsyncImage(
-            model = imgModel(src), contentDescription = null, contentScale = ContentScale.Crop,
+            model = model, contentDescription = null, contentScale = ContentScale.Crop,
             modifier = Modifier.size(size).clip(RoundedCornerShape(8.dp))
         )
     }
