@@ -9,7 +9,8 @@
 // The customer must give the order number AND the mobile used for the order (same check as tracking),
 // so nobody can download someone else's bill. The bill is only for ONLINE PAID orders, and only once
 // the order is Confirmed (auto-confirmed when the payment is received).
-// No outside libraries: the PDF is written here directly (plain Helvetica text, A4, one page).
+// The bill is not stored anywhere: it is made again each time it is asked for.
+// No outside libraries: the PDF is written here directly (Helvetica text + the shop logo, A4, one page).
 // Secrets: none. Provided automatically by Supabase: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -21,6 +22,9 @@ const SHOP = {
   address: "Bajaj Finance front side, Akluj, Maharashtra - 413101",
   phone: "8898900888",
 };
+// The shop logo is the same file the website uses.
+const LOGO_URL = "https://shivtejfootwear.com/logo.png";
+
 const BILL_STATES = ["Confirmed", "Packed", "Shipped", "Delivered"];
 // The bill is not stored anywhere. It is made again each time it is asked for, and only for this many days after the order.
 const BILL_DAYS = 15;
@@ -29,7 +33,12 @@ function isPaid(s: unknown): boolean {
   const v = String(s ?? "").toLowerCase();
   return v.includes("paid") && !v.includes("unpaid") && !v.includes("pending");
 }
-const TERMS = "No guarantee, No warranty, No return, No exchange";
+// Terms printed at the bottom of the bill (English, as the shop wrote them).
+const TERMS_TEXT = [
+  "GOODS ONCE SOLD WILL NOT BE TAKEN BACK - NO RETURN, NO REFUND.",
+  "NO EXCHANGE OR REPLACEMENT FOR ANY REASON.",
+  "PLEASE CHECK GOODS BEFORE PURCHASE; DAMAGED, USED OR WORN GOODS WILL NOT BE EXCHANGED. NO COMPLAINTS AFTER PURCHASE.",
+];
 
 // Colours (red matches the website), as PDF colour values 0-1.
 const RED = "0.890 0.024 0.075";
@@ -99,30 +108,149 @@ function wrap(text: string, size: number, maxWidth: number): string[] {
   return lines.length ? lines : [""];
 }
 
-// Builds the PDF file bytes from one page of drawing commands.
-function makePdf(content: string): Uint8Array {
-  const objs: string[] = [];
-  objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objs[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
-  objs[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 6 0 R /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> >>";
-  objs[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
-  objs[5] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
-  objs[6] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+// ---------- bytes helpers ----------
+const enc = new TextEncoder();
 
-  let out = "%PDF-1.4\n";
-  const offsets: number[] = [];
-  for (let i = 1; i <= 6; i++) {
-    offsets[i] = out.length;
-    out += `${i} 0 obj\n${objs[i]}\nendobj\n`;
-  }
-  const xref = out.length;
-  out += "xref\n0 7\n0000000000 65535 f \n";
-  for (let i = 1; i <= 6; i++) out += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
-  out += `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return new TextEncoder().encode(out);
+function concat(parts: Uint8Array[]): Uint8Array {
+  let n = 0;
+  for (const p of parts) n += p.length;
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
 }
 
-function buildBill(o: any): Uint8Array {
+async function transform(data: Uint8Array, s: TransformStream<any, any>): Promise<Uint8Array> {
+  const out = new Blob([data]).stream().pipeThrough(s);
+  return new Uint8Array(await new Response(out).arrayBuffer());
+}
+const inflate = (d: Uint8Array) => transform(d, new DecompressionStream("deflate"));
+const deflate = (d: Uint8Array) => transform(d, new CompressionStream("deflate"));
+
+// ---------- logo (PNG, 8-bit RGBA, not interlaced) ----------
+type LogoImg = { w: number; h: number; rgb: Uint8Array; alpha: Uint8Array };
+
+function paeth(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+async function decodePng(url: string): Promise<LogoImg> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("logo HTTP " + res.status);
+  const png = new Uint8Array(await res.arrayBuffer());
+  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let pos = 8;
+  let w = 0, h = 0, bd = 0, ct = 0, il = 0;
+  const idat: Uint8Array[] = [];
+  while (pos + 8 <= png.length) {
+    const len = dv.getUint32(pos);
+    const type = String.fromCharCode(png[pos + 4], png[pos + 5], png[pos + 6], png[pos + 7]);
+    const data = png.subarray(pos + 8, pos + 8 + len);
+    if (type === "IHDR") {
+      w = dv.getUint32(pos + 8);
+      h = dv.getUint32(pos + 12);
+      bd = png[pos + 16];
+      ct = png[pos + 17];
+      il = png[pos + 20];
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    pos += 12 + len;
+  }
+  if (bd !== 8 || ct !== 6 || il !== 0) throw new Error("unsupported logo png");
+
+  const raw = await inflate(concat(idat));
+  const stride = w * 4;
+  const px = new Uint8Array(h * stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)];
+    const src = y * (stride + 1) + 1;
+    const dst = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= 4 ? px[dst + x - 4] : 0;
+      const b = y > 0 ? px[dst - stride + x] : 0;
+      const c = x >= 4 && y > 0 ? px[dst - stride + x - 4] : 0;
+      const v = raw[src + x];
+      let r: number;
+      switch (f) {
+        case 0: r = v; break;
+        case 1: r = v + a; break;
+        case 2: r = v + b; break;
+        case 3: r = v + ((a + b) >> 1); break;
+        default: r = v + paeth(a, b, c); break;
+      }
+      px[dst + x] = r & 255;
+    }
+  }
+
+  // Split colour and transparency. The page is white, so transparent parts show as white.
+  const count = w * h;
+  const rgb = new Uint8Array(count * 3);
+  const alpha = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    rgb[i * 3] = px[i * 4];
+    rgb[i * 3 + 1] = px[i * 4 + 1];
+    rgb[i * 3 + 2] = px[i * 4 + 2];
+    alpha[i] = px[i * 4 + 3];
+  }
+  return { w, h, rgb: await deflate(rgb), alpha: await deflate(alpha) };
+}
+
+let logoPromise: Promise<LogoImg | null> | null = null;
+function loadLogo(): Promise<LogoImg | null> {
+  if (!logoPromise) {
+    logoPromise = decodePng(LOGO_URL).catch((e) => {
+      console.error("order-bill logo error", e);
+      logoPromise = null; // try again next time
+      return null;
+    });
+  }
+  return logoPromise;
+}
+
+// ---------- PDF writer ----------
+function streamObj(n: number, dict: string, data: Uint8Array): Uint8Array {
+  return concat([enc.encode(`${n} 0 obj\n${dict}\nstream\n`), data, enc.encode("\nendstream\nendobj\n")]);
+}
+
+// Builds the PDF file bytes from one page of drawing commands (and the logo, if there is one).
+function makePdf(content: string, logo: LogoImg | null): Uint8Array {
+  const contentBytes = enc.encode(content);
+  const list: Uint8Array[] = [];
+  list.push(enc.encode("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"));
+  list.push(enc.encode("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"));
+  const xobj = logo ? " /XObject << /Im1 7 0 R >>" : "";
+  list.push(enc.encode(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 6 0 R /Resources << /Font << /F1 4 0 R /F2 5 0 R >>${xobj} >> >>\nendobj\n`));
+  list.push(enc.encode("4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n"));
+  list.push(enc.encode("5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n"));
+  list.push(streamObj(6, `<< /Length ${contentBytes.length} >>`, contentBytes));
+  if (logo) {
+    list.push(streamObj(7, `<< /Type /XObject /Subtype /Image /Width ${logo.w} /Height ${logo.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /SMask 8 0 R /Length ${logo.rgb.length} >>`, logo.rgb));
+    list.push(streamObj(8, `<< /Type /XObject /Subtype /Image /Width ${logo.w} /Height ${logo.h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${logo.alpha.length} >>`, logo.alpha));
+  }
+
+  const header = enc.encode("%PDF-1.4\n");
+  const pieces: Uint8Array[] = [header];
+  let pos = header.length;
+  const offs: number[] = [];
+  for (const p of list) { offs.push(pos); pieces.push(p); pos += p.length; }
+  const count = list.length;
+  let x = `xref\n0 ${count + 1}\n0000000000 65535 f \n`;
+  for (const o of offs) x += String(o).padStart(10, "0") + " 00000 n \n";
+  x += `trailer\n<< /Size ${count + 1} /Root 1 0 R >>\nstartxref\n${pos}\n%%EOF\n`;
+  pieces.push(enc.encode(x));
+  return concat(pieces);
+}
+
+// ---------- the bill ----------
+async function buildBill(o: any): Promise<Uint8Array> {
+  const logo = await loadLogo();
   const ops: string[] = [];
   const L = 40;
   const R = 555;
@@ -140,11 +268,16 @@ function buildBill(o: any): Uint8Array {
   // Red band at the top
   fillRect(0, 822, 595, 20, RED);
 
-  // Shop details (left)
-  text(SHOP.name, L, 790, 20, { bold: true });
+  // Shop logo (left) and shop details next to it
+  let NX = L;
+  if (logo) {
+    ops.push(`q 80 0 0 65 ${L} 716 cm /Im1 Do Q`);
+    NX = L + 95;
+  }
+  text(SHOP.name, NX, 790, 20, { bold: true });
   let y = 774;
-  for (const l of wrap(SHOP.address, 9.5, 280)) { text(l, L, y, 9.5, { grey: true }); y -= 12; }
-  text("Phone: " + SHOP.phone, L, y, 9.5, { grey: true });
+  for (const l of wrap(SHOP.address, 9.5, logo ? 190 : 280)) { text(l, NX, y, 9.5, { grey: true }); y -= 12; }
+  text("Phone: " + SHOP.phone, NX, y, 9.5, { grey: true });
 
   // BILL title and order details (right)
   text("BILL", 470, 790, 22, { bold: true, color: RED });
@@ -171,8 +304,8 @@ function buildBill(o: any): Uint8Array {
   const addrLines = wrap([c.address, c.city, c.state, c.pincode ? "PIN " + c.pincode : ""].filter(Boolean).join(", "), 10, 240);
   const leftRows = [String(c.name || ""), "Mobile: " + String(c.mobile || "-"), ...addrLines];
   const rightRows = [
-    "Courier: " + String(o.courier || "Not booked yet"),
-    "Tracking no: " + String(o.tracking_no || "Pending"),
+    "Courier: " + (o.courier ? String(o.courier) : "Will be updated at dispatch"),
+    "Tracking no: " + (o.tracking_no ? String(o.tracking_no) : "Will be shared at dispatch"),
   ];
   const n = Math.max(leftRows.length, rightRows.length);
   for (let i = 0; i < n; i++) {
@@ -229,11 +362,16 @@ function buildBill(o: any): Uint8Array {
   text(money(o.total), 470, boxTop - 19, 12, { bold: true, color: WHITE });
 
   // Terms and thanks at the bottom
-  hline(L, R, 110);
-  text(TERMS, L, 92, 10, { bold: true });
-  text("Thank you for shopping with " + SHOP.name + ".", L, 76, 9.5, { grey: true });
+  hline(L, R, 168);
+  text("Terms and conditions", L, 154, 9.5, { bold: true });
+  let ty = 141;
+  for (const para of TERMS_TEXT) {
+    // Capital letters are wider, so wrap at a narrower width
+    for (const l of wrap(para, 8.5, 380)) { text(l, L, ty, 8.5); ty -= 11; }
+  }
+  text("Thank you for shopping with " + SHOP.name + ".", L, ty - 4, 9.5, { grey: true });
 
-  return makePdf(ops.join("\n"));
+  return makePdf(ops.join("\n"), logo);
 }
 
 Deno.serve(async (req: Request) => {
@@ -264,7 +402,7 @@ Deno.serve(async (req: Request) => {
   if (!isNaN(placed) && Date.now() - placed > BILL_DAYS * 86400000) return fail(403, "EXPIRED");
 
   try {
-    const bytes = buildBill(o);
+    const bytes = await buildBill(o);
     return new Response(bytes, {
       status: 200,
       headers: {
