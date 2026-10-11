@@ -3,7 +3,8 @@
 // POST /functions/v1/order-bill
 //   { "order_id": "SW...", "mobile": "9876543210" }
 //   -> 200 application/pdf  (the bill, downloads as <order_id>.pdf)
-//   -> 400 BAD_INPUT | 403 NOT_READY (not paid yet, or not confirmed, or cancelled) | 404 NOT_FOUND
+//   -> 400 BAD_INPUT | 403 NOT_READY (not paid yet, or not confirmed, or cancelled)
+//      | 403 EXPIRED (more than 15 days after the order) | 404 NOT_FOUND
 //
 // The customer must give the order number AND the mobile used for the order (same check as tracking),
 // so nobody can download someone else's bill. The bill is only for ONLINE PAID orders, and only once
@@ -21,6 +22,8 @@ const SHOP = {
   phone: "8898900888",
 };
 const BILL_STATES = ["Confirmed", "Packed", "Shipped", "Delivered"];
+// The bill is not stored anywhere. It is made again each time it is asked for, and only for this many days after the order.
+const BILL_DAYS = 15;
 // Online payment only (no Cash on Delivery). "Paid" yes; "pending" or "unpaid" no.
 function isPaid(s: unknown): boolean {
   const v = String(s ?? "").toLowerCase();
@@ -257,6 +260,8 @@ Deno.serve(async (req: Request) => {
   if (!o || String(o.customer?.mobile ?? "") !== mobile) return fail(404, "NOT_FOUND");
   if (!isPaid(o.payment_status)) return fail(403, "NOT_READY");
   if (!BILL_STATES.includes(o.order_status)) return fail(403, "NOT_READY");
+  const placed = new Date(o.created_at).getTime();
+  if (!isNaN(placed) && Date.now() - placed > BILL_DAYS * 86400000) return fail(403, "EXPIRED");
 
   try {
     const bytes = buildBill(o);
