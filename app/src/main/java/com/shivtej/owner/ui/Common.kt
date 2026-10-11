@@ -64,6 +64,8 @@ sealed interface Route {
     object Tasks : Route
     // ---- customer dues (opened from the dashboard): the customers who owe money, highest due first
     object Dues : Route
+    // ---- admin portal (website text, shipping charge; orders open the Orders screen)
+    object AdminPortal : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

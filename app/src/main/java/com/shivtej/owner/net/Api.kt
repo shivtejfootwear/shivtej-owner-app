@@ -73,6 +73,26 @@ object Api {
     private val functionsBase get() = "$base/functions/v1"
 
     /**
+     * Uploads one website photo (slot "hero", "band" or "heroart") through the owner-only site-media-upload function.
+     * Returns its public URL, which the Admin Portal saves in the website settings.
+     */
+    fun uploadSiteMedia(code: String, slot: String, bytes: ByteArray, mime: String): String {
+        val req = Request.Builder()
+            .url("$functionsBase/site-media-upload")
+            .header("apikey", key)
+            .header("x-owner-code", code)
+            .header("x-slot", slot)
+            .header("Content-Type", mime)
+            .post(bytes.toRequestBody(mime.toMediaType()))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw fail(resp.code, text)
+            return JSONObject(text).getString("url")
+        }
+    }
+
+    /**
      * Sends one product photo to the PRIVATE B2 bucket through the owner-only b2-upload function.
      * Returns the object name (for example "products/<id>/<uuid>.jpg") that is saved in products.images.
      */

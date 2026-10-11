@@ -233,6 +233,7 @@ fun Shell(app: App) {
         Route.ThemeSettings -> "Theme & Wallpaper"
         Route.Tasks -> "Tasks & Reminders"
         Route.Dues -> "Customer dues"
+        Route.AdminPortal -> "Admin Portal"
     }
 
     ModalNavigationDrawer(
@@ -312,6 +313,7 @@ fun Shell(app: App) {
                     Route.ThemeSettings -> ThemeSettingsScreen(app)
                     Route.Tasks -> TasksScreen(app)
                     Route.Dues -> CustomersScreen(app, nav, initialStatus = "owes")
+                    Route.AdminPortal -> AdminPortalScreen(app, nav)
                 }
             }
         }

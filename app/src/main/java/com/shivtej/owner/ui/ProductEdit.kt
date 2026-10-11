@@ -307,7 +307,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
 }
 
 @Composable
-private fun Field(
+internal fun Field(
     label: String, value: String, modifier: Modifier = Modifier,
     keyboard: KeyboardType = KeyboardType.Text, single: Boolean = true, onChange: (String) -> Unit
 ) {
