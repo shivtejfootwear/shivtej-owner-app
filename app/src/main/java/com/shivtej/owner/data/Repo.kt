@@ -465,6 +465,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return saved!!
     }
 
+    /** Brands already saved on products, A to Z, used as suggestions in the Brand field of Add Product. */
+    suspend fun knownBrands(): List<String> =
+        dao.allProducts().map { it.brand.trim() }.filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+
     /** True when this mobile number is not a saved shop customer yet (the receipt then offers to save it). */
     suspend fun isNewShopCustomer(mobile: String): Boolean {
         val m = BillMath.normMobile(mobile)

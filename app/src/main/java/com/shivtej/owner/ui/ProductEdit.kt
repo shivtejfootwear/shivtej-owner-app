@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -103,10 +104,14 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     var pendingRemove by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var scanTarget by remember { mutableStateOf<SizeDraft?>(null) }
     val withCamera = rememberWithCamera()
+    var brandList by remember { mutableStateOf<List<String>>(emptyList()) }
+    var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
+    var reorderingCategories by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) {
         if (id != null) { app.repo.load(id)?.let { draft.fill(it) }; loaded = true }
     }
+    LaunchedEffect(Unit) { brandList = app.repo.knownBrands() }
 
     // ---- image pickers
     var target by remember { mutableStateOf<SnapshotStateList<String>?>(null) }
@@ -162,6 +167,16 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     if (!loaded) { EmptyState("Loading..."); return }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+        if (reorderingCategories) {
+            CategoryOrderDialog(categories,
+                onSave = { list ->
+                    app.repo.prefs.categoryList = list.joinToString(",")
+                    categories = list
+                    reorderingCategories = false
+                },
+                onCancel = { reorderingCategories = false })
+        }
+
         SectionTitle("Photos")
         ImageRow(draft.images, { pickGallery(draft.images) }, { takePhoto(draft.images) })
 
@@ -171,8 +186,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         SectionTitle("Product details")
         Field("Product name *", draft.name) { draft.name = it }
         Field("Article *", draft.article) { draft.article = it }
-        Field("Brand", draft.brand) { draft.brand = it }
-        Field("Category (Men / Ladies / Kids ...)", draft.category) { draft.category = it }
+        BrandField(draft.brand, brandList) { draft.brand = it }
+        CategoryField(draft.category, categories,
+            onChange = { draft.category = it },
+            onChangeOrder = { reorderingCategories = true })
         Field("Description", draft.description, single = false) { draft.description = it }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Field("MRP", draft.mrp, Modifier.weight(1f), KeyboardType.Decimal) { draft.mrp = it }
@@ -299,6 +316,88 @@ private fun Field(
         keyboardOptions = KeyboardOptions(keyboardType = keyboard),
         modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)
     )
+}
+
+/** Brand field: while typing, the brands already saved on products that match are shown; tap one to fill it. */
+@Composable
+private fun BrandField(value: String, known: List<String>, onChange: (String) -> Unit) {
+    val q = value.trim().lowercase()
+    val matches = if (q.isEmpty()) emptyList() else
+        (known.filter { it.lowercase().startsWith(q) } + known.filter { it.lowercase().contains(q) && !it.lowercase().startsWith(q) })
+            .filter { it.lowercase() != q }.take(8)
+    Column {
+        Field("Brand", value, onChange = onChange)
+        if (matches.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                Column {
+                    matches.forEach { m ->
+                        Text(m, fontSize = 15.sp,
+                            modifier = Modifier.fillMaxWidth().clickable { onChange(m) }.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Category field: a dropdown of the fixed categories. "Change order" moves them up or down (saved permanently). */
+@Composable
+private fun CategoryField(value: String, categories: List<String>, onChange: (String) -> Unit, onChangeOrder: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        OutlinedTextField(
+            value = value, onValueChange = {}, readOnly = true, singleLine = true,
+            label = { Text("Category (Men / Ladies / Boy / Girl ...)") },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Box(Modifier.matchParentSize().clickable { open = true })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            categories.forEach { c ->
+                DropdownMenuItem(text = { Text(c) }, onClick = { onChange(c); open = false })
+            }
+            DropdownMenuItem(text = { Text("Change order (up / down)") }, onClick = { open = false; onChangeOrder() })
+        }
+    }
+}
+
+/** Up and down arrows for the category list. Nothing is added or removed here. */
+@Composable
+private fun CategoryOrderDialog(initial: List<String>, onSave: (List<String>) -> Unit, onCancel: () -> Unit) {
+    var list by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Category order") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Top to bottom, as in the dropdown. Use the arrows to change the order.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                list.forEachIndexed { i, c ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(c, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { list = moveCategory(list, i, i - 1) }, enabled = i > 0) {
+                            Icon(Icons.Filled.KeyboardArrowUp, "Move up")
+                        }
+                        IconButton(onClick = { list = moveCategory(list, i, i + 1) }, enabled = i < list.lastIndex) {
+                            Icon(Icons.Filled.KeyboardArrowDown, "Move down")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(list) }) { Text("Done") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } }
+    )
+}
+
+private fun categoriesFrom(csv: String): List<String> =
+    csv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+private fun moveCategory(list: List<String>, i: Int, j: Int): List<String> {
+    if (i !in list.indices || j !in list.indices) return list
+    val m = list.toMutableList()
+    val t = m[i]; m[i] = m[j]; m[j] = t
+    return m
 }
 
 /** Videos of one product: preview in the phone's video player, replace or remove. Shared with the website later. */

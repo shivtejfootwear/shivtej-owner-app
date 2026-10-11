@@ -9,6 +9,8 @@ class Prefs(ctx: Context) {
     companion object {
         /** The Quick actions shown on the dashboard when the owner has not changed them (ids: see ui/QuickActions.kt). */
         const val DEFAULT_QUICK_ACTIONS = "bill,add_customer,add_product,staff,customers,reports,returns,printer"
+        /** The product categories shown in the Category dropdown when the owner has not changed their order. */
+        const val DEFAULT_CATEGORIES = "Men,Ladies,Boy,Girl,Senior Men,Senior Women"
         const val DEFAULT_NOTES = "Thank you for shopping with Shivtej Footwear.\n" +
             "No return or exchange on used footwear.\n" +
             "For any issues, please contact within 7 days with original bill.\n" +
@@ -141,6 +143,9 @@ class Prefs(ctx: Context) {
     var customBgArgb: Int               // background colour of the "custom" theme (white by default)
         get() = sp.getInt("custom_bg", -1)
         set(v) = sp.edit().putInt("custom_bg", v).apply()
+    var categoryList: String            // product categories in the dropdown order, as comma separated names (permanent)
+        get() = sp.getString("category_list", DEFAULT_CATEGORIES) ?: DEFAULT_CATEGORIES
+        set(v) = sp.edit().putString("category_list", v).apply()
     var quickActions: String            // the dashboard Quick actions, in order, as comma separated ids
         get() = sp.getString("quick_actions", DEFAULT_QUICK_ACTIONS) ?: DEFAULT_QUICK_ACTIONS
         set(v) = sp.edit().putString("quick_actions", v).apply()
