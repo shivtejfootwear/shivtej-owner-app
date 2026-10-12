@@ -695,7 +695,7 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
             Button(onClick = {
                 val text = "Bill ${b.billNo} - ${Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, b.total)}. Thank you for shopping with " +
                     app.prefs.storeName + "."
-                Receipt.shareWhatsApp(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo), text)
+                Receipt.shareWhatsApp(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo), text, BillMath.normMobile(b.customerMobile))
             }, modifier = Modifier.weight(1f).height(50.dp)) { Text("WhatsApp") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {

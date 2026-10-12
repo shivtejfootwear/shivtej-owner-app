@@ -36,11 +36,23 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.shivtej.owner.net.ApiError
 import com.shivtej.owner.ui.*
+import com.shivtej.owner.util.AppLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
+    // the one-day auto lock: remember when the app leaves the screen, and lock when it comes back after a day
+    override fun onStop() {
+        super.onStop()
+        AppLock.onAppStopped((application as App).prefs)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppLock.onAppStarted((application as App).prefs)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as App
@@ -59,6 +71,9 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+
+        // lock at start when the PIN is set and the app was away for a day (checked once per app start, not on rotation)
+        AppLock.checkAtStart(app.prefs)
 
         // near real-time: while the app is on screen, sync every 15 seconds when online
         lifecycleScope.launch {
@@ -85,10 +100,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun Root(app: App) {
     var code by remember { mutableStateOf(app.prefs.ownerCode) }
-    var unlocked by remember { mutableStateOf(app.prefs.appPin.isBlank()) }
     when {
         code.isBlank() -> SetupScreen(app) { code = it }
-        !unlocked -> PinScreen(app) { unlocked = true }
+        AppLock.locked.value -> PinScreen(app) { AppLock.locked.value = false }
         else -> Shell(app)
     }
 }
@@ -150,6 +164,11 @@ fun SetupScreen(app: App, onDone: (String) -> Unit) {
 fun PinScreen(app: App, onOk: () -> Unit) {
     var pin by remember { mutableStateOf("") }
     var bad by remember { mutableStateOf(false) }
+    var forgot by remember { mutableStateOf(false) }
+    var ownerCode by remember { mutableStateOf("") }
+    var resetError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
         Text("Enter PIN", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
@@ -166,6 +185,43 @@ fun PinScreen(app: App, onOk: () -> Unit) {
             onClick = { if (pin == app.prefs.appPin) onOk() else bad = true },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("Unlock") }
+
+        // forgotten PIN: the owner code (checked on the server) removes the PIN; a new one is set in Settings
+        Spacer(Modifier.height(8.dp))
+        if (!forgot) {
+            TextButton(onClick = { forgot = true }) { Text("PIN भूल गए?") }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text("Enter the owner code to remove the PIN. You can set a new PIN in Settings afterwards.", fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = ownerCode, onValueChange = { ownerCode = it; resetError = null },
+                label = { Text("Owner code") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            resetError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 6.dp)) }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                enabled = ownerCode.length >= 4 && !busy,
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        val r = app.sync.verifyCode(ownerCode.trim())
+                        busy = false
+                        if (r.isSuccess) {
+                            app.prefs.appPin = ""
+                            onOk()
+                        } else {
+                            val e = r.exceptionOrNull()
+                            resetError = if (e is ApiError && e.isAuth) "Wrong owner code."
+                                else "Could not check the owner code. It needs internet."
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) { Text(if (busy) "Checking..." else "Remove PIN") }
+        }
     }
 }
 
@@ -191,6 +247,7 @@ fun Shell(app: App) {
         DrawerItem("Shipping", Icons.Filled.LocalShipping, Route.Orders("shipping")),
         DrawerItem("Returns & Exchanges", Icons.Filled.Replay, Route.Returns),
         DrawerItem("Customers", Icons.Filled.People, Route.Customers),
+        DrawerItem("Customer numbers", Icons.Filled.ContactPhone, Route.CustomerNumbers),
         DrawerItem("Staff", Icons.Filled.Group, Route.Staff),
         DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers),
         DrawerItem("Reports", Icons.Filled.BarChart, Route.Reports),
@@ -234,6 +291,7 @@ fun Shell(app: App) {
         Route.Tasks -> "Tasks & Reminders"
         Route.Dues -> "Customer dues"
         Route.AdminPortal -> "Admin Portal"
+        Route.CustomerNumbers -> "Customer numbers"
     }
 
     ModalNavigationDrawer(
@@ -314,6 +372,7 @@ fun Shell(app: App) {
                     Route.Tasks -> TasksScreen(app)
                     Route.Dues -> CustomersScreen(app, nav, initialStatus = "owes")
                     Route.AdminPortal -> AdminPortalScreen(app, nav)
+                    Route.CustomerNumbers -> CustomerNumbersScreen(app)
                 }
             }
         }

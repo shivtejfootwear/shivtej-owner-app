@@ -85,9 +85,14 @@ object Receipt {
         ctx.startActivity(Intent.createChooser(i, "Share receipt").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    /** Opens WhatsApp with the PDF ready to send (the owner picks the chat). Falls back to the normal share list. */
-    fun shareWhatsApp(ctx: Context, file: File, text: String) {
+    /**
+     * Opens WhatsApp with the PDF ready to send. With a 10-digit [mobile] the bill goes straight to that customer's chat
+     * (no contact needed). Without a number the owner picks the chat. Falls back to the normal share list.
+     */
+    fun shareWhatsApp(ctx: Context, file: File, text: String, mobile: String = "") {
         val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file)
+        val digits = mobile.filter { it.isDigit() }
+        val jid = if (digits.length == 10) "91$digits@s.whatsapp.net" else ""
         for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b")) {
             try {
                 val i = Intent(Intent.ACTION_SEND).apply {
@@ -95,6 +100,7 @@ object Receipt {
                     setPackage(pkg)
                     putExtra(Intent.EXTRA_STREAM, uri)
                     putExtra(Intent.EXTRA_TEXT, text)
+                    if (jid.isNotEmpty()) putExtra("jid", jid)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 ctx.startActivity(i)

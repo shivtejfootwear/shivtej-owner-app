@@ -66,6 +66,8 @@ sealed interface Route {
     object Dues : Route
     // ---- admin portal (website text, shipping charge; orders open the Orders screen)
     object AdminPortal : Route
+    // ---- customer numbers (share contacts or CSV)
+    object CustomerNumbers : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

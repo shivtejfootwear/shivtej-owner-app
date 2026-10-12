@@ -18,6 +18,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
+import com.shivtej.owner.util.AppLock
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
@@ -92,8 +94,18 @@ fun DashboardScreen(app: App, nav: Nav) {
     val lowAlerts = products.flatMap { p -> p.variants.flatMap { v -> v.sizes.filter { it.qty <= low }.map { Triple(p, v, it) } } }
         .sortedBy { it.third.qty }.take(5)
 
+    val ctx = LocalContext.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // lock the app now (the PIN is asked again before anyone can use it)
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = {
+                    if (app.prefs.appPin.isBlank()) toast(ctx, "पहले Settings में App PIN लगाएँ")
+                    else AppLock.lockNow(app.prefs)
+                }) { Text("Lock app") }
+            }
+        }
         item {
             if (!online) Banner("You are offline. Everything keeps working and will sync when internet returns.", Color(0xFFFFE0B2))
             st.lastError?.let { if (online) Banner(it, Color(0xFFFFCDD2)) }

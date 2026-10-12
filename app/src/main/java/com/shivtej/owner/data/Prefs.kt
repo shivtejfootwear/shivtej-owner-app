@@ -24,6 +24,9 @@ class Prefs(ctx: Context) {
     var appPin: String   // optional local lock PIN
         get() = sp.getString("app_pin", "") ?: ""
         set(v) = sp.edit().putString("app_pin", v).apply()
+    var lastBackgroundAt: Long   // when the app last went to the background (for the one-day auto lock)
+        get() = sp.getLong("last_background_at", 0L)
+        set(v) = sp.edit().putLong("last_background_at", v).apply()
 
     var storeName: String
         get() = sp.getString("store_name", "Shivtej Footwear") ?: "Shivtej Footwear"
