@@ -26,6 +26,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 
+/** Videos for the top, the middle band and the brand film box: up to 50 MB (photos are sent as small JPEGs). */
+private const val MAX_VIDEO_BYTES = 50L * 1024 * 1024
+
 /**
  * Admin Portal: the website text, photos, social links and shipping charge, the same things the website admin page changes.
  * Online orders open the existing Orders screen.
@@ -54,6 +57,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var heroImage by remember { mutableStateOf("") }
     var heroArtImage by remember { mutableStateOf("") }
     var bandImage by remember { mutableStateOf("") }
+    var filmVideo by remember { mutableStateOf("") }
     var uploadingSlot by remember { mutableStateOf<String?>(null) }
     var pickSlot by remember { mutableStateOf("") }
 
@@ -68,7 +72,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         return when {
             m.contains("INVALID_OWNER_CODE") -> "Owner code is wrong. Check it in Settings."
             m.contains("BAD_SHIPPING") -> "Shipping charge must be between 0 and 5000."
-            m.contains("TOO_BIG") -> "Photo is too big. Choose a smaller photo."
+            m.contains("TOO_BIG") -> "File is too big. Photos up to 5 MB, videos up to 50 MB."
             else -> m.ifBlank { "Could not connect. Check internet and try again." }
         }
     }
@@ -79,17 +83,31 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             scope.launch {
                 uploadingSlot = slot
                 try {
-                    val path = withContext(Dispatchers.IO) { Images.importUri(ctx, uri) }
-                        ?: throw IllegalStateException("This photo can not be read.")
-                    val url = withContext(Dispatchers.IO) {
-                        Api.uploadSiteMedia(code, slot, File(path).readBytes(), "image/jpeg")
+                    val mime = ctx.contentResolver.getType(uri).orEmpty()
+                    val isVideo = mime.startsWith("video/")
+                    val url = if (isVideo) {
+                        withContext(Dispatchers.IO) {
+                            val size = ctx.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+                            if (size > MAX_VIDEO_BYTES) throw IllegalStateException("TOO_BIG")
+                            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                ?: throw IllegalStateException("This video can not be read.")
+                            if (bytes.size > MAX_VIDEO_BYTES) throw IllegalStateException("TOO_BIG")
+                            Api.uploadSiteMedia(code, slot, bytes, mime)
+                        }
+                    } else {
+                        val path = withContext(Dispatchers.IO) { Images.importUri(ctx, uri) }
+                            ?: throw IllegalStateException("This photo can not be read.")
+                        withContext(Dispatchers.IO) {
+                            Api.uploadSiteMedia(code, slot, File(path).readBytes(), "image/jpeg")
+                        }
                     }
                     when (slot) {
                         "hero" -> heroImage = url
                         "band" -> bandImage = url
+                        "film" -> filmVideo = url
                         else -> heroArtImage = url
                     }
-                    toast(ctx, "Photo uploaded. Press Save website.")
+                    toast(ctx, if (isVideo) "Video uploaded. Press Save website." else "Photo uploaded. Press Save website.")
                 } catch (e: ApiError) {
                     toast(ctx, "Upload failed: ${msg(e)}")
                 } catch (e: Exception) {
@@ -102,7 +120,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
 
     fun pickPhoto(slot: String) {
         pickSlot = slot
-        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        // The floating sandal picture stays photo-only; the top, the middle band and the brand film accept video too.
+        val kind = if (slot == "heroart") ActivityResultContracts.PickVisualMedia.ImageOnly
+                   else ActivityResultContracts.PickVisualMedia.ImageAndVideo
+        picker.launch(PickVisualMediaRequest(kind))
     }
 
     LaunchedEffect(Unit) {
@@ -121,6 +142,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             heroImage = s.optString("heroImage", "")
             heroArtImage = s.optString("heroArtImage", "")
             bandImage = s.optString("bandImage", "")
+            filmVideo = s.optString("filmVideo", "")
             shipFee = r?.opt("shippingFee")?.toString()?.removeSuffix(".0") ?: ""
         } catch (e: Exception) {
             error = msg(e)
@@ -142,6 +164,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("heroImage", heroImage)
             .put("heroArtImage", heroArtImage)
             .put("bandImage", bandImage)
+            .put("filmVideo", filmVideo)
         try {
             call("owner_save_site_settings", JSONObject().put("p_value", v))
             toast(ctx, "Website saved. Reload the shop page to check.")
@@ -189,13 +212,16 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         Field("Product article code (opens when the top photo is clicked)", heroArticle) { heroArticle = it }
 
         SectionTitle("Website photos")
-        PhotoRow("1. Top photo", heroImage, uploadingSlot == "hero", ready,
+        PhotoRow("1. Top photo or video", heroImage, uploadingSlot == "hero", ready,
             onPick = { pickPhoto("hero") }, onRemove = { heroImage = "" }, removeLabel = "Remove")
         PhotoRow("2. Top sandal photo (floating)", heroArtImage, uploadingSlot == "heroart", ready,
             onPick = { pickPhoto("heroart") }, onRemove = { heroArtImage = "" }, removeLabel = "Use default photo",
             emptyText = "Default photo is used")
-        PhotoRow("3. Middle band photo", bandImage, uploadingSlot == "band", ready,
+        PhotoRow("3. Middle band photo or video", bandImage, uploadingSlot == "band", ready,
             onPick = { pickPhoto("band") }, onRemove = { bandImage = "" }, removeLabel = "Remove")
+        PhotoRow("4. Brand film video (box above the shop)", filmVideo, uploadingSlot == "film", ready,
+            onPick = { pickPhoto("film") }, onRemove = { filmVideo = "" }, removeLabel = "Remove",
+            emptyText = "No video. The box says Brand film coming soon")
 
         SectionTitle("Middle band")
         Field("Band heading", bandTitle) { bandTitle = it }
@@ -223,7 +249,7 @@ private fun PhotoRow(
     Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(Modifier.padding(12.dp)) {
             Text(title, fontWeight = FontWeight.SemiBold)
-            Text(if (url.isBlank()) emptyText else "Photo is set", fontSize = 12.sp,
+            Text(if (url.isBlank()) emptyText else "Uploaded", fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onPick, enabled = enabled && !busy) {

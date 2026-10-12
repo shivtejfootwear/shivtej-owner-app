@@ -1,13 +1,15 @@
-// Shivtej Footwear - website photo upload for the owner app's Admin Portal (Supabase Edge Function).
+// Shivtej Footwear - website photo / video upload for the owner app's Admin Portal (Supabase Edge Function).
 //
-// Request (from the owner app):
+// Request (from the owner app and the website admin):
 //   POST /functions/v1/site-media-upload
-//   Headers: x-owner-code, x-slot ("hero" | "band" | "heroart"), Content-Type ("image/jpeg" | "image/png" | "image/webp")
-//   Body:    the raw image bytes (the app already makes a JPEG of about 1280 px)
+//   Headers: x-owner-code, x-slot ("hero" | "band" | "heroart" | "film"), Content-Type (the file type)
+//   Body:    the raw file bytes (the app sends a JPEG of about 1280 px for photos, the video as it is)
 //
 // What it does:
 //   1. Checks the owner code (same owner_ping() check as every other owner action).
-//   2. Checks slot, MIME type and the real file size (max 5 MB).
+//   2. Checks slot, file type and the real file size.
+//        photos: image/jpeg, image/png, image/webp, max 5 MB
+//        videos: video/mp4, video/webm, max 50 MB
 //   3. Uploads the file to the public "site-media" bucket with the service role key.
 //      The key is never sent to the app.
 //   4. Returns the public URL. The website admin page and the shop read the same bucket.
@@ -19,13 +21,16 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 const BUCKET = "site-media";
-const MAX_BYTES = 5 * 1024 * 1024;
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
 };
-const SLOTS = ["hero", "band", "heroart"];
+const SLOTS = ["hero", "band", "heroart", "film"];
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -76,7 +81,8 @@ Deno.serve(async (req: Request) => {
 
   const bytes = new Uint8Array(await req.arrayBuffer());
   if (bytes.length === 0) return json(400, { message: "EMPTY" });
-  if (bytes.length > MAX_BYTES) return json(413, { message: "TOO_BIG" });
+  const limit = mime.startsWith("video/") ? MAX_VIDEO_BYTES : MAX_PHOTO_BYTES;
+  if (bytes.length > limit) return json(413, { message: "TOO_BIG" });
 
   const name = `${slot}-${Date.now()}.${ext}`;
   const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${name}`, {
