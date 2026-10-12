@@ -126,4 +126,51 @@ object Api {
             return JSONObject(text).getString("url")
         }
     }
+
+    // ---- Supabase admin login, needed only for Shiprocket shipping (the server checks the admin list) ----
+
+    /** Logs in with the website admin email and password. Returns the session (access_token, refresh_token, expires_in). */
+    fun adminSignIn(email: String, password: String): JSONObject =
+        authToken("password", JSONObject().put("email", email).put("password", password))
+
+    /** Renews a login with its refresh token. Returns a new session. */
+    fun adminRefresh(refreshToken: String): JSONObject =
+        authToken("refresh_token", JSONObject().put("refresh_token", refreshToken))
+
+    private fun authToken(grant: String, body: JSONObject): JSONObject {
+        val req = Request.Builder()
+            .url("$base/auth/v1/token?grant_type=$grant")
+            .header("apikey", key)
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiError(resp.code, "LOGIN_FAILED", "LOGIN_FAILED")
+            return JSONObject(text)
+        }
+    }
+
+    /**
+     * Calls the shiprocket-ship function with a logged-in admin token.
+     * Body: {"action":"couriers","order_id":...} to list couriers, or {"order_id":...,"courier_id":...} to create the shipment.
+     * On an error the ApiError code is the server code (for example NOT_READY or NOT_ADMIN).
+     */
+    fun shiprocketCall(token: String, body: JSONObject): JSONObject {
+        val req = Request.Builder()
+            .url("$functionsBase/shiprocket-ship")
+            .header("apikey", key)
+            .header("Authorization", "Bearer $token")
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val serverCode = try { JSONObject(text).optString("error") } catch (_: Exception) { "" }
+                throw ApiError(resp.code, serverCode.ifBlank { null }, serverCode.ifBlank { "HTTP ${resp.code}" })
+            }
+            return JSONObject(text)
+        }
+    }
 }

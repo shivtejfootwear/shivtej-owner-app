@@ -5,8 +5,9 @@
 //   POST /functions/v1/trk
 //   Header x-api-key: <the security token you set in Shiprocket>
 //   Body: { awb, current_status, courier_name, order_id, sr_order_id, scans, ... }
-// It finds the order by AWB, saves the live status for the customer, and moves the order to
-// Shipped / Delivered. It never reverses a Delivered order and never touches a Cancelled one.
+// It finds the order by AWB, saves the live status and the scan history (shipment_scans) for the
+// customer's Track order screen, and moves the order to Shipped / Delivered.
+// It never reverses a Delivered order and never touches a Cancelled one.
 // Always answers 200 for a valid, signed call (Shiprocket retries otherwise).
 //
 // Secrets: SHIPROCKET_WEBHOOK_TOKEN (same value as the one set in Shiprocket).
@@ -34,6 +35,21 @@ export function mapStatus(status: string): string | null {
 
 const RANK: Record<string, number> = { New: 0, Confirmed: 1, Packed: 2, Shipped: 3, Delivered: 4 };
 
+// Shiprocket scan events -> short list for the customer's timeline: { at, status, activity, location }.
+// At most 60 events, short text only.
+export function normScans(raw: unknown): Record<string, string>[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Record<string, string>[] = [];
+  for (const s of raw.slice(0, 60)) {
+    const at = String((s as any)?.date ?? (s as any)?.timestamp ?? "").slice(0, 40);
+    const status = String((s as any)?.status ?? "").slice(0, 120);
+    const activity = String((s as any)?.activity ?? (s as any)?.["sr-status-label"] ?? "").slice(0, 300);
+    const location = String((s as any)?.location ?? "").slice(0, 120);
+    if (at || status || activity) out.push({ at, status, activity, location });
+  }
+  return out;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json(405, { error: "METHOD" });
   if (!SUPABASE_URL || !SERVICE_KEY || !WEBHOOK_TOKEN) {
@@ -60,6 +76,8 @@ Deno.serve(async (req: Request) => {
 
     const next = mapStatus(status);
     const change: Record<string, unknown> = { shipment_status: status, updated_at: new Date().toISOString() };
+    const scans = normScans(body?.scans);
+    if (scans.length) change.shipment_scans = scans; // an empty list never erases the saved history
     if (next && o.order_status !== "Cancelled" && (RANK[next] ?? 0) > (RANK[o.order_status] ?? -1)) {
       change.order_status = next;
     }

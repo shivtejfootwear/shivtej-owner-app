@@ -169,6 +169,14 @@ fun OrderDetailScreen(app: App, nav: Nav, id: String) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
 
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        Text("Ship with Shiprocket", fontWeight = FontWeight.SemiBold)
+        ShipmentSection(app, o.id, o.orderStatus, o.trackingNo) { awb, courierName, pickup ->
+            if (awb.isNotBlank()) tracking = awb
+            if (courierName.isNotBlank()) courier = courierName
+            if (pickup) status = "Shipped"
+        }
+
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = {

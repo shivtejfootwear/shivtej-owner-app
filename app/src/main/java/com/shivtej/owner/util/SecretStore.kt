@@ -32,4 +32,18 @@ object SecretStore {
     }
 
     fun hasAiKey(ctx: Context): Boolean = aiKey(ctx).isNotBlank()
+
+    // Shiprocket admin login (access and refresh token as JSON). Empty = not logged in.
+    private const val KEY_ADMIN = "admin_session"
+
+    fun adminSession(ctx: Context): String = try { prefs(ctx)?.getString(KEY_ADMIN, "") ?: "" } catch (e: Exception) { "" }
+
+    /** Saves the admin login, or removes it when [json] is blank. Returns false if the secure store is not available. */
+    fun setAdminSession(ctx: Context, json: String): Boolean {
+        return try {
+            val p = prefs(ctx) ?: return false
+            if (json.isBlank()) p.edit().remove(KEY_ADMIN).apply() else p.edit().putString(KEY_ADMIN, json).apply()
+            true
+        } catch (e: Exception) { false }
+    }
 }
