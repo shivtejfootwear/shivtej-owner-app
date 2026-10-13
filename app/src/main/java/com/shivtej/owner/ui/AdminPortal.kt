@@ -77,6 +77,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var heroArtImage by remember { mutableStateOf("") }
     var bandImage by remember { mutableStateOf("") }
     var filmVideo by remember { mutableStateOf("") }
+    var filmArticle by remember { mutableStateOf("") }
     var uploadingSlot by remember { mutableStateOf<String?>(null) }
     var pickSlot by remember { mutableStateOf("") }
     var pickIndex by remember { mutableStateOf(-1) }
@@ -207,6 +208,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             heroArtImage = s.optString("heroArtImage", "")
             bandImage = s.optString("bandImage", "")
             filmVideo = s.optString("filmVideo", "")
+            filmArticle = s.optString("filmArticle", "")
             slides.clear()
             s.optJSONArray("slides")?.let { arr ->
                 for (k in 0 until arr.length()) {
@@ -268,6 +270,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("heroArtImage", heroArtImage)
             .put("bandImage", bandImage)
             .put("filmVideo", filmVideo)
+            .put("filmArticle", filmArticle.trim())
             .put("slides", slideArr)
         try {
             call("owner_save_site_settings", JSONObject().put("p_value", v))
@@ -448,6 +451,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         PhotoRow("4. Brand film video (box above the shop)", filmVideo, uploadingSlot == "film", ready,
             onPick = { pickPhoto("film") }, onRemove = { filmVideo = "" }, removeLabel = "Remove",
             emptyText = "No video. The box says Brand film coming soon")
+        Field("Product article code (click on the film opens this product, optional)", filmArticle) { filmArticle = it }
 
         SectionTitle("Home slider (swap screens)")
         Text("The first screen is the red top screen (it stays as it is). Add up to $MAX_SLIDES more screens below. " +

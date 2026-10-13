@@ -217,7 +217,7 @@ begin
   select jsonb_object_agg(k, p_value -> k) into v_pick
     from unnest(array['heroTitle','heroText','heroAnim','heroArticle',
                       'bandTitle','bandText','instagram','facebook','whatsapp',
-                      'heroImage','heroArtImage','bandImage','filmVideo','slides','offer']) as k
+                      'heroImage','heroArtImage','bandImage','filmVideo','filmArticle','slides','offer']) as k
    where p_value ? k;
   insert into site_settings (key, value, updated_at)
   values ('site', coalesce(v_old, '{}'::jsonb) || coalesce(v_pick, '{}'::jsonb), now())
