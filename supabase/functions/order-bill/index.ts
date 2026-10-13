@@ -354,6 +354,9 @@ async function buildBill(o: any): Promise<Uint8Array> {
     y -= 17;
   };
   totRow("Items total", money(o.subtotal));
+  if (Number(o.discount ?? 0) > 0) {
+    totRow(`Coupon ${String(o.coupon_code ?? "")}`.trim(), "- " + money(o.discount));
+  }
   totRow("Shipping", money(o.shipping));
   // y is now 17 below the Shipping line, so the red box starts 14 below that line
   const boxTop = y + 3;

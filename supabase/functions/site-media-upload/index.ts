@@ -2,7 +2,7 @@
 //
 // Request (from the owner app and the website admin):
 //   POST /functions/v1/site-media-upload
-//   Headers: x-owner-code, x-slot ("hero" | "band" | "heroart" | "film"), Content-Type (the file type)
+//   Headers: x-owner-code, x-slot ("hero" | "band" | "heroart" | "film" | "slide"), Content-Type (the file type)
 //   Body:    the raw file bytes (the app sends a JPEG of about 1280 px for photos, the video as it is)
 //
 // What it does:
@@ -30,7 +30,7 @@ const TYPES: Record<string, string> = {
   "video/mp4": "mp4",
   "video/webm": "webm",
 };
-const SLOTS = ["hero", "band", "heroart", "film"];
+const SLOTS = ["hero", "band", "heroart", "film", "slide"];
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {

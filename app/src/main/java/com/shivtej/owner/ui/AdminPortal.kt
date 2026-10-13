@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,16 +24,34 @@ import com.shivtej.owner.util.Images
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
 /** Videos for the top, the middle band and the brand film box: up to 50 MB (photos are sent as small JPEGs). */
 private const val MAX_VIDEO_BYTES = 50L * 1024 * 1024
 
+/** Extra screens in the home slider (the red top screen is always there and is not counted). */
+private const val MAX_SLIDES = 6
+
+/** One extra screen of the home slider. kind is "photo" or "video" (empty url = plain red background). */
+private data class SlideDraft(
+    val isVideo: Boolean = false, val url: String = "", val title: String = "",
+    val text: String = "", val article: String = "", val active: Boolean = true
+)
+
+/** One coupon from the database. category "" = all categories. */
+private data class CouponRow(
+    val code: String, val kind: String, val value: Double, val category: String,
+    val active: Boolean, val used: Int
+)
+
 /**
- * Admin Portal: the website text, photos, social links and shipping charge, the same things the website admin page changes.
+ * Admin Portal: the website text, photos, home slider, coupons, social links and shipping charge,
+ * the same things the website admin page changes.
  * Online orders open the existing Orders screen.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdminPortalScreen(app: App, nav: Nav) {
     val ctx = LocalContext.current
@@ -60,6 +79,29 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var filmVideo by remember { mutableStateOf("") }
     var uploadingSlot by remember { mutableStateOf<String?>(null) }
     var pickSlot by remember { mutableStateOf("") }
+    var pickIndex by remember { mutableStateOf(-1) }
+
+    // Home slider: the extra screens, in order. They are saved with "Save website".
+    val slides = remember { mutableStateListOf<SlideDraft>() }
+
+    // Coupons: saved one by one with "Save coupon" (not with "Save website").
+    var coupons by remember { mutableStateOf<List<CouponRow>>(emptyList()) }
+    var cCode by remember { mutableStateOf("") }
+    var cKind by remember { mutableStateOf("percent") }
+    var cValue by remember { mutableStateOf("") }
+    var cCategory by remember { mutableStateOf("") }
+    val categories = remember {
+        app.repo.prefs.categoryList.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    }
+
+    // Today's offer popup on the website. Its coupon is saved together with it (only when the popup is on).
+    var offerOn by remember { mutableStateOf(false) }
+    var offerTitle by remember { mutableStateOf("Today's offer") }
+    var offerText by remember { mutableStateOf("") }
+    var offerCode by remember { mutableStateOf("") }
+    var offerKind by remember { mutableStateOf("percent") }
+    var offerValue by remember { mutableStateOf("") }
+    var offerCategory by remember { mutableStateOf("") }
 
     // Until the current website settings are loaded, nothing may be saved (it would overwrite them with blanks).
     val ready = !loading && error == null
@@ -72,6 +114,9 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         return when {
             m.contains("INVALID_OWNER_CODE") -> "Owner code is wrong. Check it in Settings."
             m.contains("BAD_SHIPPING") -> "Shipping charge must be between 0 and 5000."
+            m.contains("BAD_COUPON_CODE") -> "Coupon code must be 3 to 20 letters or numbers."
+            m.contains("BAD_COUPON_KIND") -> "Choose rupees off or percent off."
+            m.contains("BAD_COUPON_VALUE") -> "Value is not right. Percent must be 1 to 100, rupees more than 0."
             m.contains("TOO_BIG") -> "File is too big. Photos up to 5 MB, videos up to 50 MB."
             else -> m.ifBlank { "Could not connect. Check internet and try again." }
         }
@@ -79,9 +124,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         val slot = pickSlot
+        val idx = pickIndex
         if (uri != null && slot.isNotEmpty()) {
             scope.launch {
-                uploadingSlot = slot
+                uploadingSlot = if (slot == "slide") "slide$idx" else slot
                 try {
                     val mime = ctx.contentResolver.getType(uri).orEmpty()
                     val isVideo = mime.startsWith("video/")
@@ -105,6 +151,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                         "hero" -> heroImage = url
                         "band" -> bandImage = url
                         "film" -> filmVideo = url
+                        "slide" -> if (idx in slides.indices) slides[idx] = slides[idx].copy(url = url, isVideo = isVideo)
                         else -> heroArtImage = url
                     }
                     toast(ctx, if (isVideo) "Video uploaded. Press Save website." else "Photo uploaded. Press Save website.")
@@ -118,12 +165,29 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         }
     }
 
-    fun pickPhoto(slot: String) {
+    fun pickPhoto(slot: String, index: Int = -1) {
         pickSlot = slot
-        // The floating sandal picture stays photo-only; the top, the middle band and the brand film accept video too.
+        pickIndex = index
+        // The floating sandal picture stays photo-only; the top, the middle band, the brand film and the slider screens accept video too.
         val kind = if (slot == "heroart") ActivityResultContracts.PickVisualMedia.ImageOnly
                    else ActivityResultContracts.PickVisualMedia.ImageAndVideo
         picker.launch(PickVisualMediaRequest(kind))
+    }
+
+    suspend fun loadCoupons() {
+        val arr = call("owner_list_coupons", JSONObject()) as? JSONArray ?: return
+        coupons = (0 until arr.length()).mapNotNull { k ->
+            arr.optJSONObject(k)?.let { o ->
+                CouponRow(
+                    code = o.optString("code"),
+                    kind = o.optString("kind"),
+                    value = o.optDouble("value", 0.0),
+                    category = if (o.isNull("category")) "" else o.optString("category"),
+                    active = o.optBoolean("active", true),
+                    used = o.optInt("used", 0)
+                )
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -143,14 +207,53 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             heroArtImage = s.optString("heroArtImage", "")
             bandImage = s.optString("bandImage", "")
             filmVideo = s.optString("filmVideo", "")
+            slides.clear()
+            s.optJSONArray("slides")?.let { arr ->
+                for (k in 0 until arr.length()) {
+                    val o = arr.optJSONObject(k) ?: continue
+                    slides.add(SlideDraft(
+                        isVideo = o.optString("kind") == "video",
+                        url = o.optString("url"),
+                        title = o.optString("title"),
+                        text = o.optString("text"),
+                        article = o.optString("article"),
+                        active = o.optBoolean("active", true)
+                    ))
+                }
+            }
+            s.optJSONObject("offer")?.let { o ->
+                offerOn = o.optBoolean("on", false)
+                offerTitle = o.optString("title", "Today's offer")
+                offerText = o.optString("text")
+                offerCode = o.optString("code")
+                offerKind = o.optString("kind", "percent")
+                val v = o.optDouble("value", 0.0)
+                offerValue = if (v <= 0.0) "" else if (v % 1.0 == 0.0) v.toLong().toString() else v.toString()
+                offerCategory = if (o.isNull("category")) "" else o.optString("category")
+            }
             shipFee = r?.opt("shippingFee")?.toString()?.removeSuffix(".0") ?: ""
         } catch (e: Exception) {
             error = msg(e)
         }
         loading = false
+        try {
+            loadCoupons()
+        } catch (e: Exception) {
+            toast(ctx, "Could not load coupons: ${msg(e)}")
+        }
     }
 
     fun saveWebsite() = scope.launch {
+        val slideArr = JSONArray()
+        slides.forEach { s ->
+            slideArr.put(JSONObject()
+                .put("kind", if (s.isVideo) "video" else "photo")
+                .put("url", s.url)
+                .put("title", s.title.trim())
+                .put("text", s.text.trim())
+                .put("article", s.article.trim())
+                .put("active", s.active))
+        }
         val v = JSONObject()
             .put("heroTitle", heroTitle.trim())
             .put("heroText", heroText.trim())
@@ -165,6 +268,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("heroArtImage", heroArtImage)
             .put("bandImage", bandImage)
             .put("filmVideo", filmVideo)
+            .put("slides", slideArr)
         try {
             call("owner_save_site_settings", JSONObject().put("p_value", v))
             toast(ctx, "Website saved. Reload the shop page to check.")
@@ -179,6 +283,68 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         try {
             call("owner_set_shipping_fee", JSONObject().put("p_fee", n))
             toast(ctx, "Shipping charge saved.")
+        } catch (e: Exception) {
+            toast(ctx, "Save failed: ${msg(e)}")
+        }
+    }
+
+    fun saveCoupon() = scope.launch {
+        val value = cValue.trim().toDoubleOrNull()
+        if (cCode.trim().length < 3) { toast(ctx, "Coupon code must be at least 3 letters or numbers."); return@launch }
+        if (value == null || value <= 0 || (cKind == "percent" && value > 100)) {
+            toast(ctx, if (cKind == "percent") "Percent must be between 1 and 100." else "Enter the rupee amount.")
+            return@launch
+        }
+        val c = JSONObject().put("code", cCode.trim()).put("kind", cKind).put("value", value).put("active", true)
+        if (cCategory.isNotEmpty()) c.put("category", cCategory)
+        try {
+            call("owner_save_coupon", JSONObject().put("p_coupon", c))
+            toast(ctx, "Coupon saved.")
+            cCode = ""; cValue = ""; cCategory = ""
+            loadCoupons()
+        } catch (e: Exception) {
+            toast(ctx, "Save failed: ${msg(e)}")
+        }
+    }
+
+    fun saveOffer() = scope.launch {
+        val code = offerCode.trim().uppercase()
+        val value = offerValue.trim().toDoubleOrNull()
+        if (offerOn) {
+            if (code.length < 3) { toast(ctx, "Offer code must be at least 3 letters or numbers."); return@launch }
+            if (value == null || value <= 0 || (offerKind == "percent" && value > 100)) {
+                toast(ctx, if (offerKind == "percent") "Percent must be between 1 and 100." else "Enter the rupee amount.")
+                return@launch
+            }
+        }
+        try {
+            if (offerOn && code.length >= 3 && value != null) {
+                val c = JSONObject().put("code", code).put("kind", offerKind).put("value", value).put("active", true)
+                if (offerCategory.isNotEmpty()) c.put("category", offerCategory)
+                call("owner_save_coupon", JSONObject().put("p_coupon", c))
+            }
+            val o = JSONObject()
+                .put("on", offerOn)
+                .put("title", offerTitle.trim())
+                .put("text", offerText.trim())
+                .put("code", code)
+                .put("kind", offerKind)
+                .put("value", value ?: 0.0)
+                .put("category", offerCategory)
+            call("owner_save_site_settings", JSONObject().put("p_value", JSONObject().put("offer", o)))
+            toast(ctx, if (offerOn) "Offer is on. Reload the shop page to check." else "Offer popup is off.")
+            if (offerOn) loadCoupons()
+        } catch (e: Exception) {
+            toast(ctx, "Save failed: ${msg(e)}")
+        }
+    }
+
+    fun setCouponActive(row: CouponRow, active: Boolean) = scope.launch {
+        val c = JSONObject().put("code", row.code).put("kind", row.kind).put("value", row.value).put("active", active)
+        if (row.category.isNotEmpty()) c.put("category", row.category)
+        try {
+            call("owner_save_coupon", JSONObject().put("p_coupon", c))
+            loadCoupons()
         } catch (e: Exception) {
             toast(ctx, "Save failed: ${msg(e)}")
         }
@@ -199,6 +365,66 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         Field("Shipping charge (0 to 5000)", shipFee, keyboard = KeyboardType.Decimal) { shipFee = it }
         Button(onClick = { saveShipping() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             Text("Save shipping charge")
+        }
+
+        SectionTitle("Coupons")
+        Text("A coupon takes rupees or percent off the items total at checkout. The customer types the code. " +
+            "Nothing is applied on its own. Turn a coupon off when you do not need it.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Field("Coupon code (3 to 20 letters or numbers, e.g. SAVE10)", cCode) { cCode = it.uppercase() }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+            FilterChip(selected = cKind == "percent", onClick = { cKind = "percent" }, label = { Text("% off") })
+            FilterChip(selected = cKind == "flat", onClick = { cKind = "flat" }, label = { Text("₹ off") })
+        }
+        Field(if (cKind == "percent") "Percent off (1 to 100)" else "Rupees off", cValue, keyboard = KeyboardType.Decimal) { cValue = it }
+        Text("Applies to", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = cCategory.isEmpty(), onClick = { cCategory = "" }, label = { Text("All categories") })
+            categories.forEach { c ->
+                FilterChip(selected = cCategory == c, onClick = { cCategory = c }, label = { Text(c) })
+            }
+        }
+        Button(onClick = { saveCoupon() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            Text("Save coupon")
+        }
+        coupons.forEach { c ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(c.code, fontWeight = FontWeight.SemiBold)
+                    Text(couponLine(c), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = { setCouponActive(c, !c.active) }, enabled = ready) {
+                        Text(if (c.active) "Turn off" else "Turn on")
+                    }
+                }
+            }
+        }
+
+        SectionTitle("Today's offer popup (website)")
+        Text("A box that opens on the website with a coupon code. It opens once per browser, and a new offer opens again. " +
+            "Turn it off when you do not need it.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(offerOn, { offerOn = it }); Spacer(Modifier.width(8.dp)); Text("Show the offer popup on the website")
+        }
+        Field("Heading (e.g. Today's offer)", offerTitle) { offerTitle = it }
+        Field("Short text (optional)", offerText, single = false) { offerText = it }
+        Field("Coupon code (3 to 20 letters or numbers, e.g. TODAY10)", offerCode) { offerCode = it.uppercase() }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+            FilterChip(selected = offerKind == "percent", onClick = { offerKind = "percent" }, label = { Text("% off") })
+            FilterChip(selected = offerKind == "flat", onClick = { offerKind = "flat" }, label = { Text("₹ off") })
+        }
+        Field(if (offerKind == "percent") "Percent off (1 to 100)" else "Rupees off", offerValue, keyboard = KeyboardType.Decimal) { offerValue = it }
+        Text("Applies to", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = offerCategory.isEmpty(), onClick = { offerCategory = "" }, label = { Text("All categories") })
+            categories.forEach { c ->
+                FilterChip(selected = offerCategory == c, onClick = { offerCategory = c }, label = { Text(c) })
+            }
+        }
+        Button(onClick = { saveOffer() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            Text("Save offer")
         }
 
         SectionTitle("Edit website")
@@ -223,6 +449,57 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             onPick = { pickPhoto("film") }, onRemove = { filmVideo = "" }, removeLabel = "Remove",
             emptyText = "No video. The box says Brand film coming soon")
 
+        SectionTitle("Home slider (swap screens)")
+        Text("The first screen is the red top screen (it stays as it is). Add up to $MAX_SLIDES more screens below. " +
+            "Each screen can have a photo or video, a heading, a short text and one product (type its article code). " +
+            "The screens change by themselves and can be swiped.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        slides.forEachIndexed { i, s ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Extra screen ${i + 1}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text("Show", fontSize = 12.sp)
+                        Switch(s.active, { slides[i] = slides[i].copy(active = it) })
+                    }
+                    Text(
+                        when {
+                            s.url.isBlank() -> "No photo or video (red background)"
+                            s.isVideo -> "Video uploaded"
+                            else -> "Photo uploaded"
+                        },
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { pickPhoto("slide", i) },
+                            enabled = ready && uploadingSlot == null) {
+                            Text(if (uploadingSlot == "slide$i") "Uploading..." else "Choose photo or video")
+                        }
+                        if (s.url.isNotBlank()) {
+                            TextButton(onClick = { slides[i] = slides[i].copy(url = "", isVideo = false) },
+                                enabled = ready && uploadingSlot == null) { Text("Remove") }
+                        }
+                    }
+                    Field("Heading", s.title) { slides[i] = slides[i].copy(title = it) }
+                    Field("Short text", s.text, single = false) { slides[i] = slides[i].copy(text = it) }
+                    Field("Product article code (optional)", s.article) { slides[i] = slides[i].copy(article = it) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { slides.add(i - 1, slides.removeAt(i)) }, enabled = i > 0) { Text("Move up") }
+                        TextButton(onClick = { slides.add(i + 1, slides.removeAt(i)) },
+                            enabled = i < slides.size - 1) { Text("Move down") }
+                        TextButton(onClick = { slides.removeAt(i) }) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
+        if (slides.size < MAX_SLIDES) {
+            OutlinedButton(onClick = { slides.add(SlideDraft()) }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                Text("Add a screen")
+            }
+        }
+
         SectionTitle("Middle band")
         Field("Band heading", bandTitle) { bandTitle = it }
         Field("Band text", bandText, single = false) { bandText = it }
@@ -238,6 +515,14 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         }
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/** "10% off · All categories · used 3 · On" */
+private fun couponLine(c: CouponRow): String {
+    fun n(v: Double) = if (v % 1.0 == 0.0) v.toLong().toString() else v.toString()
+    val amount = if (c.kind == "percent") "${n(c.value)}% off" else "₹${n(c.value)} off"
+    val where = if (c.category.isEmpty()) "All categories" else c.category
+    return "$amount · $where · used ${c.used} · ${if (c.active) "On" else "Off"}"
 }
 
 @Composable
