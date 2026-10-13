@@ -14,12 +14,9 @@ create table if not exists public.otp_codes (
 );
 create index if not exists otp_codes_mobile_idx on public.otp_codes (mobile, created_at desc);
 
-create table if not exists public.customers (
-  id          uuid primary key default gen_random_uuid(),
-  mobile      text not null unique,
-  name        text,
-  created_at  timestamptz not null default now()
-);
+-- The "customers" table already exists (website orders use it, key = mobile).
+-- Only add an id column to it; nothing else in that table changes.
+alter table public.customers add column if not exists id uuid unique default gen_random_uuid();
 
 create table if not exists public.customer_sessions (
   token_hash   text primary key,
@@ -29,8 +26,8 @@ create table if not exists public.customer_sessions (
 );
 
 alter table public.otp_codes         enable row level security;
-alter table public.customers         enable row level security;
 alter table public.customer_sessions enable row level security;
+-- customers: RLS is NOT turned on here (the website and owner app still read that table).
 
 -- Old codes are removed after 1 day (keeps the table small).
 -- Run this manually when needed, or schedule it in Supabase Cron later:

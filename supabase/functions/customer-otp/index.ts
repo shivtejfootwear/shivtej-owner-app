@@ -9,12 +9,13 @@
 //           502 SEND_FAILED (Meta rejected the message; details only in the function log)
 //
 // Secrets (Supabase Dashboard > Edge Functions > Secrets, never in code):
-//   WA_PHONE_NUMBER_ID  - Meta "Phone number ID" of the shop's WhatsApp Business number
-//   WA_ACCESS_TOKEN     - Meta permanent (system user) access token
-//   WA_OTP_TEMPLATE     - name of the approved AUTHENTICATION template, e.g. "shivtej_login_otp"
-//   WA_OTP_LANG         - language code of that template, default "en"
-//   OTP_PEPPER          - long random text; used to hash codes and session tokens
-//   WA_API_VERSION      - optional, default "v21.0"
+//   WHATSAPP_PHONE_NUMBER_ID - Meta "Phone number ID" of the shop's WhatsApp number (+91 92092 54920)
+//   WHATSAPP_TOKEN           - Meta permanent (system user) access token
+//   OTP_PEPPER               - long random text; used to hash codes and session tokens
+//   WA_OTP_TEMPLATE          - optional, default "shivtej_otp" (approved AUTHENTICATION template)
+//   WA_OTP_LANG              - optional, default "en"
+//   WA_API_VERSION           - optional, default "v21.0"
+// The older names WA_PHONE_NUMBER_ID and WA_ACCESS_TOKEN are still read if the new ones are not set.
 // Provided automatically by Supabase: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (server only, never returned).
 //
 // Rules: at most 3 codes per number in 10 minutes; a code lasts 5 minutes and allows 5 tries;
@@ -22,9 +23,9 @@
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const WA_PHONE_NUMBER_ID = Deno.env.get("WA_PHONE_NUMBER_ID") ?? "";
-const WA_ACCESS_TOKEN = Deno.env.get("WA_ACCESS_TOKEN") ?? "";
-const WA_OTP_TEMPLATE = Deno.env.get("WA_OTP_TEMPLATE") ?? "";
+const WA_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") ?? Deno.env.get("WA_PHONE_NUMBER_ID") ?? "";
+const WA_ACCESS_TOKEN = Deno.env.get("WHATSAPP_TOKEN") ?? Deno.env.get("WA_ACCESS_TOKEN") ?? "";
+const WA_OTP_TEMPLATE = Deno.env.get("WA_OTP_TEMPLATE") ?? "shivtej_otp";
 const WA_OTP_LANG = Deno.env.get("WA_OTP_LANG") ?? "en";
 const OTP_PEPPER = Deno.env.get("OTP_PEPPER") ?? "";
 const WA_API_VERSION = Deno.env.get("WA_API_VERSION") ?? "v21.0";
@@ -170,7 +171,8 @@ async function handleVerify(mobile: string, code: string): Promise<Response> {
   const customerQuery = `customers?mobile=eq.${mobile}&select=id,mobile,name`;
   let customer = (await dbSelect(customerQuery))[0];
   if (!customer) {
-    await dbInsert("customers", { mobile });
+    const nowIso = new Date().toISOString();
+    await dbInsert("customers", { mobile, created_at: nowIso, updated_at: nowIso });
     customer = (await dbSelect(customerQuery))[0];
   }
 
