@@ -58,7 +58,9 @@ data class CustRow(
     val photoPath: String = "",
     val photoUrl: String = "",
     val oldestDueAt: Long = 0L,         // when the oldest unpaid amount was made (Ledger.OPENING_AT = before the app)
-    val openingBalance: Double = 0.0    // dues from before the app, entered by the owner
+    val openingBalance: Double = 0.0,   // dues from before the app, entered by the owner
+    val shop: Boolean = false,          // a shop (offline) customer: saved in the shop list or has shop bills
+    val online: Boolean = false         // an online (website) customer: has a website account or website orders
 )
 
 /** Every customer the phone knows about, merged by mobile number so the same customer never appears twice. */
@@ -71,14 +73,19 @@ fun buildCustRows(
         var photoPath = ""; var photoUrl = ""
     }
     val map = LinkedHashMap<String, Acc>()
+    // shop (offline) and online (website) numbers are kept apart: a number is "shop" if it is in the shop list or
+    // has a shop bill, and "online" if it has a website account or a website order. Only the list is split; no data moves.
+    val shopMobiles = HashSet<String>()
+    val onlineMobiles = HashSet<String>()
     fun acc(raw: String): Acc? {
         val m = BillMath.normMobile(raw)
         if (m.length != 10) return null
         return map.getOrPut(m) { Acc(m) }
     }
-    for (c in posC) acc(c.mobile)?.let { it.name = c.name; it.address = c.address; it.photoPath = c.photoPath; it.photoUrl = c.photoUrl }
-    for (c in webC) acc(c.mobile)?.let { if (it.name.isBlank()) it.name = c.name; if (it.email.isBlank()) it.email = c.email }
+    for (c in posC) acc(c.mobile)?.let { shopMobiles.add(it.mobile); it.name = c.name; it.address = c.address; it.photoPath = c.photoPath; it.photoUrl = c.photoUrl }
+    for (c in webC) acc(c.mobile)?.let { onlineMobiles.add(it.mobile); if (it.name.isBlank()) it.name = c.name; if (it.email.isBlank()) it.email = c.email }
     for (b in bills) acc(b.customerMobile)?.let {
+        shopMobiles.add(it.mobile)
         it.count++; it.spent += b.total; it.last = maxOf(it.last, b.createdAt)
         if (it.name.isBlank()) it.name = b.customerName
         if (it.address.isBlank()) it.address = b.customerAddress
@@ -86,6 +93,7 @@ fun buildCustRows(
     for (o in orders) {
         if (o.orderStatus == "Cancelled") continue
         acc(custField(o.customerJson, "mobile", "phone"))?.let {
+            onlineMobiles.add(it.mobile)
             it.count++; it.spent += o.total; it.last = maxOf(it.last, o.createdAt)
             if (it.name.isBlank()) it.name = custField(o.customerJson, "name")
         }
@@ -95,7 +103,8 @@ fun buildCustRows(
     return map.values.map {
         CustRow(it.mobile, it.name, it.address, it.email, it.count, BillMath.round2(it.spent), it.last,
             outstanding = sums[it.mobile]?.outstanding ?: 0.0, photoPath = it.photoPath, photoUrl = it.photoUrl,
-            oldestDueAt = sums[it.mobile]?.oldestDueAt ?: 0L, openingBalance = openings[it.mobile] ?: 0.0)
+            oldestDueAt = sums[it.mobile]?.oldestDueAt ?: 0L, openingBalance = openings[it.mobile] ?: 0.0,
+            shop = it.mobile in shopMobiles, online = it.mobile in onlineMobiles)
     }
         .sortedWith(compareByDescending<CustRow> { it.spent }.thenBy { it.name.lowercase() })
 }
@@ -125,13 +134,17 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
     val returns by app.repo.returns.collectAsStateWithLifecycle(emptyList())
     var query by remember { mutableStateOf("") }
     var status by remember { mutableStateOf(initialStatus) }      // all | owes | clear
+    var kind by remember { mutableStateOf("all") }                // all | shop (offline) | online (website)
     var sort by remember { mutableStateOf(if (initialStatus == "owes") "due" else "spent") }  // spent | due | oldest
     var adding by remember { mutableStateOf(openAdd) }
     val rows = remember(posC, webC, bills, orders, pays, returns) { buildCustRows(posC, webC, bills, orders, pays, returns) }
 
     val q = query.trim()
     val digits = q.filter { it.isDigit() }
-    val byStatus = rows.filter { r ->
+    val byKind = rows.filter { r ->
+        when (kind) { "shop" -> r.shop; "online" -> r.online; else -> true }
+    }
+    val byStatus = byKind.filter { r ->
         when (status) { "owes" -> r.outstanding > 0.0; "clear" -> r.outstanding <= 0.0; else -> true }
     }
     val shown = byStatus.filter { r ->
@@ -178,6 +191,11 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
                 Chip("No dues", status == "clear") { status = "clear" }
             }
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+                Chip("Everyone", kind == "all") { kind = "all" }
+                Chip("Shop (offline)", kind == "shop") { kind = "shop" }
+                Chip("Online (website)", kind == "online") { kind = "online" }
+            }
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
                 Chip("Most spent", sort == "spent") { sort = "spent" }
                 Chip("Highest due", sort == "due") { sort = "due" }
                 Chip("Oldest due", sort == "oldest") { sort = "oldest" }
@@ -208,6 +226,11 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
                         PersonAvatar(c.name, c.photoPath, c.photoUrl, 40.dp)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(c.name.ifBlank { "Customer" }, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            Text(when {
+                                c.shop && c.online -> "Shop + Online customer"
+                                c.online -> "Online (website) customer"
+                                else -> "Shop (offline) customer"
+                            }, fontSize = 11.sp, color = if (c.online) BrandRed else MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(c.mobile + if (c.address.isNotBlank()) " · " + c.address else "", fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                         }
