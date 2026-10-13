@@ -162,6 +162,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         }
 
     val bills = dao.observeBills()
+    val deletedBills = dao.observeDeletedBills()
     val stockLog = dao.observeLog()
     val orders = dao.observeOrders()
     val customers = dao.observeCustomers()
@@ -427,15 +428,46 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 if (before == null) { notRestored++; return@forEachIndexed }
                 dao.adjust(l.productId, l.colour, l.size, l.qty)
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
-                dao.putLog(StockLogE("$billId#del${i + 1}", l.productId, l.article, l.colour, l.size,
+                dao.putLog(StockLogE("$billId#del${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_DELETE", now, false))
             }
             dao.markBillDeleted(billId, now)
             dao.markPaymentsDeletedOfBill(billId)
-            enqueue("DELETE_POS_BILL", billId, JSONObject().put("id", billId).put("deleted_at", iso(now)))
+            enqueue("DELETE_POS_BILL", billId, JSONObject().put("id", billId).put("deleted_at", iso(now))
+                .put("cycle", now.toString()))
         }
         onChanged()
         return notRestored
+    }
+
+    /**
+     * Restores a deleted bill ("रिस्टोर"): its items are taken out of stock again and its customer payments count again.
+     * Nothing changes unless every line is still in stock (the product must exist and have enough pieces).
+     */
+    suspend fun restoreBill(billId: String) {
+        db.withTransaction {
+            val b = dao.bill(billId) ?: throw IllegalArgumentException("This bill was not found")
+            require(b.deleted) { "This bill is not deleted" }
+            val items = parseBillItems(b.itemsJson)
+            // check every line first
+            for (l in items) {
+                val have = dao.qtyOf(l.productId, l.colour, l.size)
+                    ?: throw IllegalArgumentException("${l.article} ${l.colour} ${l.size}: यह प्रोडक्ट या साइज़ अब मौजूद नहीं है")
+                require(have >= l.qty) { "${l.article} ${l.colour} ${l.size}: स्टॉक सिर्फ़ $have बचा है, ${l.qty} चाहिए" }
+            }
+            val now = System.currentTimeMillis()
+            items.forEachIndexed { i, l ->
+                val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+                dao.adjust(l.productId, l.colour, l.size, -l.qty)
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE("$billId#res${i + 1}:$now", l.productId, l.article, l.colour, l.size,
+                    after - before, after, "BILL_RESTORE", now, false))
+            }
+            dao.markBillRestored(billId)
+            dao.markPaymentsRestoredOfBill(billId)
+            enqueue("RESTORE_POS_BILL", billId, JSONObject().put("id", billId).put("cycle", now.toString()))
+        }
+        onChanged()
     }
 
     // ---------------------------------------------------------- staff (people who make sales)
@@ -554,15 +586,16 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun applyServerCustomerPayments(arr: JSONArray) = db.withTransaction {
         val protectedIds = (dao.pendingCustomerPaymentIds() + dao.rejectedCustomerPaymentIds()).toSet()
-        val reversedHere = dao.deletedCustomerPaymentIds().toSet()   // reversed by a bill deletion: never counted again
+        // payments of a bill whose delete / restore is still on its way to the server keep this phone's state
+        val billsInFlight = dao.billOpsInFlight().toSet()
         val list = ArrayList<CustomerPaymentE>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val id = o.str("id")
-            if (id.isBlank() || id in protectedIds) continue
+            if (id.isBlank() || id in protectedIds || o.str("bill_id") in billsInFlight) continue
             list.add(CustomerPaymentE(id, BillMath.normMobile(o.str("mobile")), o.str("bill_id"), o.optDouble("amount", 0.0),
                 o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false,
-                deleted = o.optBoolean("deleted", false) || id in reversedHere))
+                deleted = o.optBoolean("deleted", false)))
         }
         dao.putCustomerPayments(list)
     }
@@ -971,6 +1004,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             // A bill made on this phone keeps its customer / sales person / design even when the server row has no such
             // details (for example the update SQL was not installed when it was uploaded): server values win only when present.
             val local = dao.allBillsWithDeleted().associateBy { it.id }
+            // a delete or restore that has not reached the server yet decides the state on this phone for now
+            val inFlight = dao.billOpsInFlight().toSet()
             val list = ArrayList<BillE>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -980,8 +1015,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 fun txt(k: String, cur: String?): String = if (o.str(k).isNotBlank()) o.str(k) else cur ?: ""
                 fun num(k: String, cur: Double?, def: Double): Double = if (!o.isNull(k) && o.has(k)) o.optDouble(k, def) else cur ?: def
                 val meta = if (!o.isNull("meta") && o.has("meta")) o.opt("meta").toString() else l?.metaJson ?: ""
-                // a deletion is never undone by a pull: once this phone (or any other phone) deleted the bill, it stays deleted
-                val deleted = o.optBoolean("deleted", false) || l?.deleted == true
+                val deleted = if (id in inFlight && l != null) l.deleted else o.optBoolean("deleted", false)
                 list.add(BillE(
                     id, o.str("bill_no"), o.optDouble("total", 0.0), o.str("payment_method"),
                     o.jsonText("items", "[]"), parseTime(o.str("created_at")), true,

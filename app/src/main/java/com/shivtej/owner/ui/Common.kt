@@ -68,6 +68,8 @@ sealed interface Route {
     object AdminPortal : Route
     // ---- customer numbers (share contacts or CSV)
     object CustomerNumbers : Route
+    // ---- deleted bills (history of every deleted bill; they can be restored, never erased)
+    object DeletedBills : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

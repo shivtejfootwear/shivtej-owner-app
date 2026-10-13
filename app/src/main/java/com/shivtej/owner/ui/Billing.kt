@@ -638,13 +638,15 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
         }
     }
     val r = rendered ?: run { EmptyState("Preparing the bill..."); return }
-    SaveCustomerOffer(app, b)
+    if (!b.deleted) SaveCustomerOffer(app, b)
 
     var printing by remember { mutableStateOf(false) }
     var printMsg by remember { mutableStateOf<String?>(null) }
     var printOk by remember { mutableStateOf(false) }
     var askDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var askRestore by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(false) }
     val withBt = rememberWithBluetooth(app)
 
     fun printBill() {
@@ -668,6 +670,35 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                 printMsg = if (res.isSuccess) "Sent to printer." else (res.exceptionOrNull()?.message ?: "Could not print.")
             }
         }
+    }
+
+    // Restore: the bill counts again, its items leave stock again (refused, with nothing changed, if stock is short)
+    if (askRestore) {
+        AlertDialog(
+            onDismissRequest = { askRestore = false },
+            title = { Text("बिल ${b.billNo} रिस्टोर करें?") },
+            text = {
+                Text("सामान फिर से स्टॉक से घटेगा और ग्राहक के पैसे फिर हिसाब में जुड़ेंगे। अगर किसी आइटम का स्टॉक कम है, तो रिस्टोर नहीं होगा।",
+                    fontSize = 13.sp)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    askRestore = false
+                    restoring = true
+                    scope.launch {
+                        try {
+                            app.repo.restoreBill(b.id)
+                            toast(ctx, "बिल रिस्टोर हुआ")
+                            nav.back()
+                        } catch (e: Exception) {
+                            restoring = false
+                            toast(ctx, e.message ?: "बिल रिस्टोर नहीं हो सका")
+                        }
+                    }
+                }) { Text("रिस्टोर", color = GreenOk, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { askRestore = false }) { Text("रद्द") } }
+        )
     }
 
     // Delete = full reversal: stock goes back, the customer's payments on this bill are reversed (see Repo.deleteBill)
@@ -705,13 +736,25 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-        OutlinedButton(
-            onClick = { askDelete = true }, enabled = !deleting,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
-            modifier = Modifier.fillMaxWidth().height(50.dp)
-        ) {
-            Icon(Icons.Filled.Delete, null); Spacer(Modifier.width(6.dp))
-            Text("डिलीट", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        if (b.deleted) {
+            Text("यह बिल डिलीट है", color = RedOut, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 6.dp))
+            Button(
+                onClick = { askRestore = true }, enabled = !restoring,
+                colors = ButtonDefaults.buttonColors(containerColor = GreenOk),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
+            ) {
+                Icon(Icons.Filled.Restore, null); Spacer(Modifier.width(6.dp))
+                Text("रिस्टोर", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        } else {
+            OutlinedButton(
+                onClick = { askDelete = true }, enabled = !deleting,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
+            ) {
+                Icon(Icons.Filled.Delete, null); Spacer(Modifier.width(6.dp))
+                Text("डिलीट", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         }
         Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Image(r.bmp.asImageBitmap(), "Receipt", Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)

@@ -57,7 +57,7 @@ class SyncManager(
 
     private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
     private val UPDATE4_OPS = setOf("ADD_CUSTOMER_PAYMENT", "SET_CUSTOMER_PHOTO", "SET_SUPPLIER_PHOTO")
-    private val UPDATE6_OPS = setOf("DELETE_POS_BILL")
+    private val UPDATE6_OPS = setOf("DELETE_POS_BILL", "RESTORE_POS_BILL")
 
     init {
         scope.launch {
@@ -89,7 +89,7 @@ class SyncManager(
             val note = when {
                 update2Missing -> "Staff, customers, suppliers and purchases are saved on this phone. Run owner_update_2_migration.sql in Supabase to share them with the server."
                 update4Missing -> "Customer payments, photos and product videos are saved on this phone. Run owner_update_4_media_ledger_tasks.sql in Supabase to share them with the server."
-                update6Missing -> "Bill deletions are saved on this phone. Run owner_update_6_bill_delete.sql in Supabase to share them with the server."
+                update6Missing -> "Bill deletions are saved on this phone. Run owner_update_6_bill_delete.sql and owner_update_6b_bill_restore.sql in Supabase to share them with the server."
                 else -> null
             }
             state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
@@ -188,6 +188,7 @@ class SyncManager(
             "CREATE_POS_BILL" -> Api.rpc("owner_create_bill", a(code).put("p", JSONObject(op.payload)))
             "ADD_CUSTOMER_PAYMENT" -> Api.rpc("owner_add_customer_payment", a(code).put("p", JSONObject(op.payload)))
             "DELETE_POS_BILL" -> Api.rpc("owner_delete_bill", a(code).put("p", JSONObject(op.payload)))
+            "RESTORE_POS_BILL" -> Api.rpc("owner_restore_bill", a(code).put("p", JSONObject(op.payload)))
             "SET_CUSTOMER_PHOTO" -> {
                 val p = JSONObject(op.payload)
                 val url = photoUrlFor(p.optString("photo_local", ""), "customers/${p.getString("mobile")}") ?: return

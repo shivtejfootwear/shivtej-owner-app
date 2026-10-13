@@ -289,6 +289,11 @@ interface AppDao {
     // deleted bills are hidden everywhere (lists, reports, ledgers); only the server merge reads them all
     @Query("SELECT * FROM bills WHERE deleted = 0 ORDER BY createdAt DESC") fun observeBills(): Flow<List<BillE>>
     @Query("UPDATE bills SET deleted = 1, deletedAt = :at WHERE id = :id") suspend fun markBillDeleted(id: String, at: Long)
+    @Query("UPDATE bills SET deleted = 0, deletedAt = 0 WHERE id = :id") suspend fun markBillRestored(id: String)
+    @Query("SELECT * FROM bills WHERE deleted = 1 ORDER BY deletedAt DESC") fun observeDeletedBills(): Flow<List<BillE>>
+    // bills whose delete / restore has not reached the server yet (PENDING or FAILED): this phone's state wins until then
+    @Query("SELECT DISTINCT refId FROM ops WHERE status IN ('PENDING','FAILED') AND type IN ('DELETE_POS_BILL','RESTORE_POS_BILL')")
+    suspend fun billOpsInFlight(): List<String>
     @Query("SELECT * FROM bills WHERE id = :id") suspend fun bill(id: String): BillE?
     @Query("UPDATE bills SET synced = 1 WHERE id = :id") suspend fun billSynced(id: String)
     @Query("SELECT COUNT(*) FROM bills") suspend fun billCount(): Int
@@ -344,9 +349,9 @@ interface AppDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCustomerPayments(p: List<CustomerPaymentE>)
     @Query("SELECT * FROM customer_payments WHERE deleted = 0 ORDER BY paidAt DESC") fun observeCustomerPayments(): Flow<List<CustomerPaymentE>>
     @Query("SELECT * FROM customer_payments WHERE deleted = 0") suspend fun allCustomerPayments(): List<CustomerPaymentE>
-    @Query("SELECT id FROM customer_payments WHERE deleted = 1") suspend fun deletedCustomerPaymentIds(): List<String>
     // reverses the payments made against a deleted bill (they stop counting; the rows stay for history)
     @Query("UPDATE customer_payments SET deleted = 1 WHERE billId = :billId") suspend fun markPaymentsDeletedOfBill(billId: String)
+    @Query("UPDATE customer_payments SET deleted = 0 WHERE billId = :billId") suspend fun markPaymentsRestoredOfBill(billId: String)
     @Query("SELECT id FROM customer_payments WHERE pendingSync = 1") suspend fun pendingCustomerPaymentIds(): List<String>
     @Query("SELECT id FROM customer_payments WHERE status = 'REJECTED'") suspend fun rejectedCustomerPaymentIds(): List<String>
     @Query("UPDATE customer_payments SET pendingSync = 0 WHERE id = :id") suspend fun customerPaymentSynced(id: String)
