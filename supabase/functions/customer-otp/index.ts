@@ -4,7 +4,8 @@
 // POST /functions/v1/customer-otp
 //   { "action": "send",   "mobile": "9876543210" }                  -> 200 { ok: true, expires_in: 300 }
 //   { "action": "verify", "mobile": "9876543210", "code": "123456" } -> 200 { ok: true, token, customer: { id, mobile, name } }
-//   Errors: 400 BAD_MOBILE | BAD_CODE | BAD_ACTION | WRONG_CODE | EXPIRED
+//   { "action": "orders", "token": "..." }                           -> 200 { ok: true, customer, orders: [...] } (all orders of the logged-in mobile)
+//   Errors: 400 BAD_MOBILE | BAD_CODE | BAD_ACTION | WRONG_CODE | EXPIRED | 401 NOT_LOGGED_IN (orders)
 //           429 TOO_MANY (sends) | TOO_MANY_TRIES (wrong codes)
 //           502 SEND_FAILED (Meta rejected the message; details only in the function log)
 //
@@ -187,6 +188,57 @@ async function handleVerify(mobile: string, code: string): Promise<Response> {
   return json(200, { ok: true, token, customer });
 }
 
+// ---------- my orders (login token -> all orders of that mobile number) ----------
+
+async function handleOrders(token: string): Promise<Response> {
+  if (!/^[a-f0-9]{64}$/.test(token)) return json(401, { error: "NOT_LOGGED_IN" });
+  const sessions = await dbSelect(
+    `customer_sessions?token_hash=eq.${await sha256Hex(`session:${token}:${OTP_PEPPER}`)}&select=customer_id,expires_at`,
+  );
+  const session = sessions[0];
+  if (!session || new Date(session.expires_at).getTime() < Date.now()) return json(401, { error: "NOT_LOGGED_IN" });
+
+  const found = await dbSelect(`customers?id=eq.${session.customer_id}&select=mobile,name`);
+  const me = found[0];
+  if (!me || !MOBILE_RE.test(String(me.mobile))) return json(401, { error: "NOT_LOGGED_IN" });
+
+  // Every order placed with this mobile number (old orders too), newest first.
+  const rows = await dbSelect(
+    `orders?customer->>mobile=eq.${me.mobile}&order=created_at.desc&limit=100` +
+      `&select=id,created_at,total,subtotal,shipping,payment_status,order_status,shipment_status,courier,tracking_no,items,customer`,
+  );
+
+  const orders = rows.map((o: any) => {
+    const c = o.customer ?? {};
+    const shipTo = [c.address, c.city, c.state, c.pincode].filter((x: unknown) => x && String(x).trim()).join(", ");
+    return {
+      id: o.id,
+      created_at: o.created_at,
+      total: o.total,
+      subtotal: o.subtotal,
+      shipping: o.shipping,
+      payment_status: o.payment_status,
+      order_status: o.order_status,
+      shipment_status: o.shipment_status,
+      courier: o.courier,
+      tracking_no: o.tracking_no,
+      ship_to: shipTo,
+      ship_name: c.name ?? "",
+      items: (Array.isArray(o.items) ? o.items : []).map((it: any) => ({
+        productId: it.productId ?? it.id ?? "",
+        name: it.name ?? "",
+        article: it.article ?? "",
+        colour: it.colour ?? "",
+        size: it.size ?? "",
+        qty: it.qty ?? 1,
+        price: it.price ?? 0,
+      })),
+    };
+  });
+
+  return json(200, { ok: true, customer: { name: me.name ?? "", mobile: me.mobile }, orders });
+}
+
 // ---------- entry point ----------
 
 Deno.serve(async (req: Request) => {
@@ -203,6 +255,15 @@ Deno.serve(async (req: Request) => {
     body = await req.json();
   } catch {
     return json(400, { error: "BAD_JSON" });
+  }
+
+  if (body?.action === "orders") {
+    try {
+      return await handleOrders(String(body?.token ?? "").trim());
+    } catch (e) {
+      console.error("customer-otp orders error", e);
+      return json(500, { error: "SERVER" });
+    }
   }
 
   const mobile = String(body?.mobile ?? "").trim();
