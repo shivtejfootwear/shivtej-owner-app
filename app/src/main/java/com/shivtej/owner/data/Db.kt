@@ -71,7 +71,10 @@ data class BillE(
     val taxAmount: Double = 0.0,
     val amountPaid: Double = -1.0,      // -1 = not recorded (older bill) -> treated as fully paid
     val balance: Double = 0.0,
-    val metaJson: String = ""           // shop details + bill design exactly as they were when the bill was made
+    val metaJson: String = "",          // shop details + bill design exactly as they were when the bill was made
+    // ---- added in database version 8: a deleted bill is kept (not erased) so its history stays traceable; lists hide it
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val deletedAt: Long = 0L
 ) {
     /** What was actually paid (older bills have no payment record: they were paid in full). */
     val paid: Double get() = if (amountPaid < 0.0) total else amountPaid
@@ -147,7 +150,9 @@ data class CustomerPaymentE(
     val paidAt: Long,
     val pendingSync: Boolean,
     @androidx.room.ColumnInfo(defaultValue = "'OK'") val status: String = "OK",
-    @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = ""
+    @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = "",
+    // version 8: a payment made against a bill that was deleted is reversed (kept, but it no longer counts anywhere)
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted: Boolean = false
 )
 
 /** A task or reminder kept on this phone (not synced). dueAt 0 = no due date. Added in version 6. */
@@ -281,7 +286,9 @@ interface AppDao {
     // ---- bills
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putBill(b: BillE)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putBills(b: List<BillE>)
-    @Query("SELECT * FROM bills ORDER BY createdAt DESC") fun observeBills(): Flow<List<BillE>>
+    // deleted bills are hidden everywhere (lists, reports, ledgers); only the server merge reads them all
+    @Query("SELECT * FROM bills WHERE deleted = 0 ORDER BY createdAt DESC") fun observeBills(): Flow<List<BillE>>
+    @Query("UPDATE bills SET deleted = 1, deletedAt = :at WHERE id = :id") suspend fun markBillDeleted(id: String, at: Long)
     @Query("SELECT * FROM bills WHERE id = :id") suspend fun bill(id: String): BillE?
     @Query("UPDATE bills SET synced = 1 WHERE id = :id") suspend fun billSynced(id: String)
     @Query("SELECT COUNT(*) FROM bills") suspend fun billCount(): Int
@@ -309,7 +316,8 @@ interface AppDao {
     @Query("SELECT * FROM stock_log WHERE opId LIKE :prefix || '%'") suspend fun logsStartingWith(prefix: String): List<StockLogE>
 
     // ---- bills (version 3)
-    @Query("SELECT * FROM bills") suspend fun allBills(): List<BillE>
+    @Query("SELECT * FROM bills WHERE deleted = 0") suspend fun allBills(): List<BillE>
+    @Query("SELECT * FROM bills") suspend fun allBillsWithDeleted(): List<BillE>
     @Query("SELECT * FROM orders") suspend fun allOrders(): List<OrderE>
     @Query("SELECT * FROM return_log") suspend fun allReturns(): List<ReturnE>
 
@@ -334,8 +342,11 @@ interface AppDao {
     // ---- customer payments and tasks (version 6)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCustomerPayment(p: CustomerPaymentE)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCustomerPayments(p: List<CustomerPaymentE>)
-    @Query("SELECT * FROM customer_payments ORDER BY paidAt DESC") fun observeCustomerPayments(): Flow<List<CustomerPaymentE>>
-    @Query("SELECT * FROM customer_payments") suspend fun allCustomerPayments(): List<CustomerPaymentE>
+    @Query("SELECT * FROM customer_payments WHERE deleted = 0 ORDER BY paidAt DESC") fun observeCustomerPayments(): Flow<List<CustomerPaymentE>>
+    @Query("SELECT * FROM customer_payments WHERE deleted = 0") suspend fun allCustomerPayments(): List<CustomerPaymentE>
+    @Query("SELECT id FROM customer_payments WHERE deleted = 1") suspend fun deletedCustomerPaymentIds(): List<String>
+    // reverses the payments made against a deleted bill (they stop counting; the rows stay for history)
+    @Query("UPDATE customer_payments SET deleted = 1 WHERE billId = :billId") suspend fun markPaymentsDeletedOfBill(billId: String)
     @Query("SELECT id FROM customer_payments WHERE pendingSync = 1") suspend fun pendingCustomerPaymentIds(): List<String>
     @Query("SELECT id FROM customer_payments WHERE status = 'REJECTED'") suspend fun rejectedCustomerPaymentIds(): List<String>
     @Query("UPDATE customer_payments SET pendingSync = 0 WHERE id = :id") suspend fun customerPaymentSynced(id: String)
@@ -434,6 +445,18 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
 }
 
 /**
+ * Version 7 -> 8: bill deletion. A deleted bill and its reversed payments are kept with deleted = 1 (nothing is erased).
+ * ADD COLUMN only, default 0 (not deleted), so every existing bill and payment stays exactly as it is.
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `bills` ADD COLUMN `deleted` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `bills` ADD COLUMN `deletedAt` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `customer_payments` ADD COLUMN `deleted` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
  * Version 6 -> 7: an opening balance per shop customer (dues from before the app). ADD COLUMN only; every existing
  * customer gets 0.0, so nothing changes until the owner enters a figure.
  */
@@ -479,7 +502,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -489,7 +512,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }

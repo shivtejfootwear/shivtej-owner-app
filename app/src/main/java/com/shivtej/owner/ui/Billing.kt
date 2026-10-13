@@ -623,6 +623,7 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
     val scope = rememberCoroutineScope()
     var bill by remember { mutableStateOf<BillE?>(null) }
     LaunchedEffect(billId) { bill = app.repo.bill(billId) }
+    val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
     val b = bill ?: run { EmptyState("Loading receipt..."); return }
 
     // the picture is drawn off the main thread; if the new design fails for any reason the plain receipt is used
@@ -642,6 +643,8 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
     var printing by remember { mutableStateOf(false) }
     var printMsg by remember { mutableStateOf<String?>(null) }
     var printOk by remember { mutableStateOf(false) }
+    var askDelete by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
     val withBt = rememberWithBluetooth(app)
 
     fun printBill() {
@@ -667,8 +670,50 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
         }
     }
 
+    // Delete = full reversal: stock goes back, the customer's payments on this bill are reversed (see Repo.deleteBill)
+    if (askDelete) {
+        val received = b.paid + pays.filter { it.billId == b.id }.sumOf { it.amount }
+        AlertDialog(
+            onDismissRequest = { askDelete = false },
+            title = { Text("बिल ${b.billNo} डिलीट करें?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("सामान स्टॉक में वापस जुड़ जाएगा (वही प्रोडक्ट, कलर और साइज़, बारकोड के साथ)।", fontSize = 13.sp)
+                    if (received > 0.0) Text("ग्राहक से इस बिल पर मिले पैसे (${money(app, received)}) हिसाब से हट जाएँगे। अगर वो पैसे ग्राहक को लौटाने हैं तो आप खुद लौटाएँ।", fontSize = 13.sp)
+                    Text("यह सर्वर पर भी डिलीट होगा। यह वापस नहीं हो सकता।", fontSize = 13.sp, color = RedOut)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    askDelete = false
+                    deleting = true
+                    scope.launch {
+                        try {
+                            val notBack = app.repo.deleteBill(b.id)
+                            toast(ctx, if (notBack == 0) "बिल डिलीट हुआ, सामान स्टॉक में वापस जुड़ गया"
+                                else "बिल डिलीट हुआ। $notBack आइटम का स्टॉक वापस नहीं जुड़ सका (प्रोडक्ट अब मौजूद नहीं है)")
+                            nav.back()
+                        } catch (e: Exception) {
+                            deleting = false
+                            toast(ctx, e.message ?: "बिल डिलीट नहीं हो सका")
+                        }
+                    }
+                }) { Text("डिलीट", color = RedOut, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { askDelete = false }) { Text("रद्द") } }
+        )
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        OutlinedButton(
+            onClick = { askDelete = true }, enabled = !deleting,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
+            modifier = Modifier.fillMaxWidth().height(50.dp)
+        ) {
+            Icon(Icons.Filled.Delete, null); Spacer(Modifier.width(6.dp))
+            Text("डिलीट", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+        Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Image(r.bmp.asImageBitmap(), "Receipt", Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
         }
         Text(if (b.synced) "Saved and synced" else "Saved on this phone - will sync when online",

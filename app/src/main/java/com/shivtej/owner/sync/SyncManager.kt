@@ -52,9 +52,12 @@ class SyncManager(
     private var update2Missing = false
     /** Set while a sync run finds that the update-4 SQL (customer payments, photos, product videos) is not installed yet. */
     private var update4Missing = false
+    /** Set while a sync run finds that the update-6 SQL (bill deletion) is not installed yet. */
+    private var update6Missing = false
 
     private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
     private val UPDATE4_OPS = setOf("ADD_CUSTOMER_PAYMENT", "SET_CUSTOMER_PHOTO", "SET_SUPPLIER_PHOTO")
+    private val UPDATE6_OPS = setOf("DELETE_POS_BILL")
 
     init {
         scope.launch {
@@ -75,6 +78,7 @@ class SyncManager(
         state.update { it.copy(running = true, lastError = null) }
         update2Missing = false
         update4Missing = false
+        update6Missing = false
         try {
             withContext(Dispatchers.IO) {
                 push()
@@ -85,6 +89,7 @@ class SyncManager(
             val note = when {
                 update2Missing -> "Staff, customers, suppliers and purchases are saved on this phone. Run owner_update_2_migration.sql in Supabase to share them with the server."
                 update4Missing -> "Customer payments, photos and product videos are saved on this phone. Run owner_update_4_media_ledger_tasks.sql in Supabase to share them with the server."
+                update6Missing -> "Bill deletions are saved on this phone. Run owner_update_6_bill_delete.sql in Supabase to share them with the server."
                 else -> null
             }
             state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
@@ -142,6 +147,11 @@ class SyncManager(
                     update4Missing = true
                     continue
                 }
+                if (e.code == "PGRST202" && op.type in UPDATE6_OPS) {
+                    // the update-6 SQL (bill deletion) is not installed yet: same as above
+                    update6Missing = true
+                    continue
+                }
                 if (e.isAuth || e.status >= 500 || e.code == "PGRST202") throw e
                 // a clear refusal (400 / 409 / 422) keeps the record on this phone as REJECTED with the reason; timeouts and
                 // rate limits stay FAILED and are retried
@@ -177,6 +187,7 @@ class SyncManager(
             }
             "CREATE_POS_BILL" -> Api.rpc("owner_create_bill", a(code).put("p", JSONObject(op.payload)))
             "ADD_CUSTOMER_PAYMENT" -> Api.rpc("owner_add_customer_payment", a(code).put("p", JSONObject(op.payload)))
+            "DELETE_POS_BILL" -> Api.rpc("owner_delete_bill", a(code).put("p", JSONObject(op.payload)))
             "SET_CUSTOMER_PHOTO" -> {
                 val p = JSONObject(op.payload)
                 val url = photoUrlFor(p.optString("photo_local", ""), "customers/${p.getString("mobile")}") ?: return

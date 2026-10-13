@@ -408,6 +408,36 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun bill(id: String): BillE? = dao.bill(id)
 
+    /**
+     * Deletes a saved POS bill ("डिलीट") and reverses it everywhere:
+     *  - every item goes back into stock: same product, colour and size. The barcode lives on that size row and is
+     *    never removed by a sale, so it comes back with the item;
+     *  - the customer payments made against this bill are reversed (they stop counting in ledgers and reports);
+     *  - the bill is kept as deleted (not erased) and the server gets the same change (DELETE_POS_BILL).
+     * Returns how many items could not go back to stock (the product was removed from the catalogue after the sale).
+     */
+    suspend fun deleteBill(billId: String): Int {
+        var notRestored = 0
+        db.withTransaction {
+            val b = dao.bill(billId) ?: throw IllegalArgumentException("This bill was not found")
+            require(!b.deleted) { "This bill is already deleted" }
+            val now = System.currentTimeMillis()
+            parseBillItems(b.itemsJson).forEachIndexed { i, l ->
+                val before = dao.qtyOf(l.productId, l.colour, l.size)
+                if (before == null) { notRestored++; return@forEachIndexed }
+                dao.adjust(l.productId, l.colour, l.size, l.qty)
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE("$billId#del${i + 1}", l.productId, l.article, l.colour, l.size,
+                    after - before, after, "BILL_DELETE", now, false))
+            }
+            dao.markBillDeleted(billId, now)
+            dao.markPaymentsDeletedOfBill(billId)
+            enqueue("DELETE_POS_BILL", billId, JSONObject().put("id", billId).put("deleted_at", iso(now)))
+        }
+        onChanged()
+        return notRestored
+    }
+
     // ---------------------------------------------------------- staff (people who make sales)
     private fun iso(ms: Long): String = java.time.Instant.ofEpochMilli(ms).toString()
 
@@ -524,13 +554,15 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun applyServerCustomerPayments(arr: JSONArray) = db.withTransaction {
         val protectedIds = (dao.pendingCustomerPaymentIds() + dao.rejectedCustomerPaymentIds()).toSet()
+        val reversedHere = dao.deletedCustomerPaymentIds().toSet()   // reversed by a bill deletion: never counted again
         val list = ArrayList<CustomerPaymentE>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val id = o.str("id")
             if (id.isBlank() || id in protectedIds) continue
             list.add(CustomerPaymentE(id, BillMath.normMobile(o.str("mobile")), o.str("bill_id"), o.optDouble("amount", 0.0),
-                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false))
+                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false,
+                deleted = o.optBoolean("deleted", false) || id in reversedHere))
         }
         dao.putCustomerPayments(list)
     }
@@ -938,7 +970,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         db.withTransaction {
             // A bill made on this phone keeps its customer / sales person / design even when the server row has no such
             // details (for example the update SQL was not installed when it was uploaded): server values win only when present.
-            val local = dao.allBills().associateBy { it.id }
+            val local = dao.allBillsWithDeleted().associateBy { it.id }
             val list = ArrayList<BillE>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -948,6 +980,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 fun txt(k: String, cur: String?): String = if (o.str(k).isNotBlank()) o.str(k) else cur ?: ""
                 fun num(k: String, cur: Double?, def: Double): Double = if (!o.isNull(k) && o.has(k)) o.optDouble(k, def) else cur ?: def
                 val meta = if (!o.isNull("meta") && o.has("meta")) o.opt("meta").toString() else l?.metaJson ?: ""
+                // a deletion is never undone by a pull: once this phone (or any other phone) deleted the bill, it stays deleted
+                val deleted = o.optBoolean("deleted", false) || l?.deleted == true
                 list.add(BillE(
                     id, o.str("bill_no"), o.optDouble("total", 0.0), o.str("payment_method"),
                     o.jsonText("items", "[]"), parseTime(o.str("created_at")), true,
@@ -957,7 +991,9 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     totalMrp = num("total_mrp", l?.totalMrp, 0.0), totalDiscount = num("total_discount", l?.totalDiscount, 0.0),
                     subTotal = num("sub_total", l?.subTotal, 0.0), taxPercent = num("tax_percent", l?.taxPercent, 0.0),
                     taxAmount = num("tax_amount", l?.taxAmount, 0.0), amountPaid = num("amount_paid", l?.amountPaid, -1.0),
-                    balance = num("balance", l?.balance, 0.0), metaJson = meta
+                    balance = num("balance", l?.balance, 0.0), metaJson = meta,
+                    deleted = deleted,
+                    deletedAt = if (!deleted) 0L else (l?.deletedAt?.takeIf { it > 0L } ?: parseTime(o.str("deleted_at")))
                 ))
             }
             dao.putBills(list)
