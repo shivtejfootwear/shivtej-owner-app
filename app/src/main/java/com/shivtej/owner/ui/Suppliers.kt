@@ -37,12 +37,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
 // REJECTED rows (refused by the server) stay in the lists for history but do not count in any total or balance
-private fun payAmts(list: List<SupplierPaymentE>) = list.filter { it.status != "REJECTED" }.map { PaymentAmt(it.supplierId, it.billId, it.amount) }
-private fun buyAmts(list: List<PurchaseE>) = list.filter { it.status != "REJECTED" }.map { PurchaseAmt(it.id, it.supplierId, it.amount) }
+private fun payAmts(list: List<SupplierPaymentE>) = list.filter { it.status != "REJECTED" }.map { PaymentAmt(it.supplierId, it.billId, it.amount, it.id, it.paidAt) }
+private fun buyAmts(list: List<PurchaseE>) = list.filter { it.status != "REJECTED" }.map { PurchaseAmt(it.id, it.supplierId, it.amount, it.billDate) }
 
 /** Copies the supplier's bill (a photo or a PDF up to 10 MB) into app storage. Returns the absolute path, or null if it can not be read. */
 private fun importBill(ctx: android.content.Context, uri: android.net.Uri): String? {
@@ -181,7 +182,6 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     val s = suppliers.firstOrNull { it.id == supplierId }
     var tab by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf(false) }
-    var paying by remember { mutableStateOf<String?>(null) }   // "" = on account, else a bill id
     var payOpen by remember { mutableStateOf(false) }
     val dateFmt = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.ENGLISH) }
     val ctx = LocalContext.current
@@ -191,6 +191,9 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     val pa = buyAmts(myBills)
     val pay = payAmts(myPays)
     val t = SupplierMath.totals(supplierId, pa, pay)
+    // where every payment went: oldest bill first (see SupplierMath.allocate)
+    val alloc = SupplierMath.allocate(pa, pay)
+    val billNames = myBills.associate { it.id to it.billNo.ifBlank { "Purchase" } }
 
     if (s == null) { EmptyState("This supplier is not on this phone yet."); return }
 
@@ -217,7 +220,7 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { nav.go(Route.PurchaseForm(supplierId)) }, modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = BrandRed)) { Text("New purchase bill") }
-                        OutlinedButton(onClick = { paying = ""; payOpen = true }, modifier = Modifier.weight(1f)) { Text("Record payment") }
+                        OutlinedButton(onClick = { payOpen = true }, modifier = Modifier.weight(1f)) { Text("Record payment") }
                     }
                 }
             }
@@ -225,13 +228,14 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
         item {
             TabRow(selectedTabIndex = tab, modifier = Modifier.padding(top = 8.dp)) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Purchase bills (${myBills.size})") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Payments (${myPays.size})") })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("History (${myBills.size + myPays.size})") })
             }
         }
         if (tab == 0) {
             if (myBills.isEmpty()) item { EmptyState("No purchase bills yet.") }
             items(myBills, key = { it.id }) { b ->
-                val bal = SupplierMath.billBalance(PurchaseAmt(b.id, b.supplierId, b.amount), pay)
+                val bal = alloc.balance[b.id] ?: 0.0
+                val paidHere = alloc.billPaid[b.id] ?: 0.0
                 val lines = parsePurchaseLines(b.itemsJson)
                 var open by remember(b.id) { mutableStateOf(false) }
                 Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 10.dp)) {
@@ -248,11 +252,13 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                         Column(horizontalAlignment = Alignment.End) {
                             Text(moneyG(app, b.amount), fontWeight = FontWeight.Bold)
                             if (b.status == "REJECTED") Text("REJECTED by server: ${b.rejectReason}", fontSize = 12.sp, color = RedOut)
-                            else Text(if (bal > 0) "Balance ${moneyG(app, bal)}" else "Paid", fontSize = 12.sp,
-                                color = if (bal > 0) RedOut else GreenOk)
+                            else {
+                                if (paidHere > 0.0) Text("Paid ${moneyG(app, paidHere)}", fontSize = 12.sp, color = GreenOk)
+                                Text(if (bal > 0) "Balance ${moneyG(app, bal)}" else "Paid in full", fontSize = 12.sp,
+                                    color = if (bal > 0) RedOut else GreenOk)
+                            }
                         }
                     }
-                    if (bal > 0 && b.status != "REJECTED") TextButton(onClick = { paying = b.id; payOpen = true }) { Text("Pay this bill") }
                     if (open) {
                         if (lines.isEmpty()) Text("No items (amount only).", fontSize = 12.sp)
                         lines.forEach { l ->
@@ -269,16 +275,49 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                 HorizontalDivider()
             }
         } else {
-            if (myPays.isEmpty()) item { EmptyState("No payments yet.") }
-            items(myPays, key = { it.id }) { p ->
-                val billNo = myBills.firstOrNull { it.id == p.billId }?.billNo
-                Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(billNo?.let { "Against $it" } ?: "On account", fontWeight = FontWeight.SemiBold)
-                        Text(dateFmt.format(Date(p.paidAt)) + " · " + p.method + if (p.status == "REJECTED") " · REJECTED by server, not counted" else "",
-                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // date-wise history: every bill and every payment, with what is still owed after each line
+            val rejected = myPays.filter { it.status == "REJECTED" }
+            val ledger = SupplierMath.ledger(pa, pay).reversed()
+            val payById = myPays.associateBy { it.id }
+            if (ledger.isEmpty() && rejected.isEmpty()) item { EmptyState("No history yet.") }
+            items(rejected, key = { "rej-" + it.id }) { p ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                    Text("Payment ${moneyG(app, p.amount)} · ${p.method}", fontWeight = FontWeight.SemiBold, color = RedOut)
+                    Text(dateFmt.format(Date(p.paidAt)) + " · REJECTED by server, not counted: ${p.rejectReason}",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                HorizontalDivider()
+            }
+            items(ledger, key = { (if (it.isBill) "b" else "p") + it.refId }) { line ->
+                if (line.isBill) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Bill ${billNames[line.refId] ?: ""}", fontWeight = FontWeight.SemiBold)
+                            Text(dateFmt.format(Date(line.time)) + " · purchase", fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("+ ${moneyG(app, line.amount)}", fontWeight = FontWeight.Bold, color = RedOut)
+                            Text("Owed ${moneyG(app, line.balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
-                    Text(moneyG(app, p.amount), fontWeight = FontWeight.Bold, color = if (p.status == "REJECTED") RedOut else GreenOk)
+                } else {
+                    val p = payById[line.refId]
+                    val cheque = p?.chequeNo.orEmpty()
+                    val split = alloc.splits[line.refId].orEmpty()
+                        .joinToString(" · ") { (bid, amt) -> "${billNames[bid] ?: "Bill"} ${moneyG(app, amt)}" }
+                    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Payment · " + (p?.method ?: "") + (if (cheque.isNotBlank()) " · Cheque no. $cheque" else ""),
+                                fontWeight = FontWeight.SemiBold)
+                            Text(dateFmt.format(Date(line.time)) + " · " + (if (split.isNotBlank()) split else "on account"),
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("- ${moneyG(app, line.amount)}", fontWeight = FontWeight.Bold, color = GreenOk)
+                            Text("Owed ${moneyG(app, line.balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
                 HorizontalDivider()
             }
@@ -286,7 +325,7 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     }
 
     if (editing) SupplierDialog(app, s) { editing = false }
-    if (payOpen) PaymentDialog(app, supplierId, t.outstanding, myBills, pay, presetBill = paying ?: "") { payOpen = false }
+    if (payOpen) PaymentDialog(app, supplierId, t.outstanding) { payOpen = false }
 }
 
 @Composable
@@ -299,40 +338,37 @@ private fun MoneyTile(title: String, value: String, modifier: Modifier, color: C
     }
 }
 
-/** Records money paid to a supplier. Against a bill it lowers that bill's balance; on account it lowers what is owed overall. */
+/** Records money paid to a supplier. It is on account: the app spreads it over the oldest bills still owed. */
 @Composable
-private fun PaymentDialog(
-    app: App, supplierId: String, outstanding: Double, bills: List<PurchaseE>, pay: List<PaymentAmt>, presetBill: String, onDone: () -> Unit
-) {
+private fun PaymentDialog(app: App, supplierId: String, outstanding: Double, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var billId by remember { mutableStateOf(presetBill) }
+    val ctx = LocalContext.current
+    val dateFmt = remember { SimpleDateFormat("dd MMM yyyy", Locale.ENGLISH) }
+    var paidAt by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var amountText by remember { mutableStateOf("") }
     var method by remember { mutableStateOf("Cash") }
-    var menu by remember { mutableStateOf(false) }
+    var chequeNo by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
-    val chosen = bills.firstOrNull { it.id == billId }
-    val limit = if (chosen != null) SupplierMath.billBalance(PurchaseAmt(chosen.id, chosen.supplierId, chosen.amount), pay)
-        else outstanding.coerceAtLeast(0.0)
+    val limit = outstanding.coerceAtLeast(0.0)
     val amount = BillMath.parseAmount(amountText)
+
+    fun pickDate() {
+        val c = Calendar.getInstance().apply { timeInMillis = paidAt }
+        android.app.DatePickerDialog(ctx, { _, y, mo, d ->
+            paidAt = Calendar.getInstance().apply { timeInMillis = paidAt; set(y, mo, d) }.timeInMillis
+        }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
+    }
 
     AlertDialog(
         onDismissRequest = onDone,
         title = { Text("Record payment") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box {
-                    OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(chosen?.let { "Bill ${it.billNo.ifBlank { "purchase" }} · balance ${moneyG(app, limit)}" } ?: "On account (total owed ${moneyG(app, outstanding.coerceAtLeast(0.0))})")
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("On account") }, onClick = { billId = ""; menu = false })
-                        bills.forEach { b ->
-                            val bal = SupplierMath.billBalance(PurchaseAmt(b.id, b.supplierId, b.amount), pay)
-                            if (bal > 0 && b.status != "REJECTED") DropdownMenuItem(text = { Text("${b.billNo.ifBlank { "Purchase" }} · balance ${moneyG(app, bal)}") },
-                                onClick = { billId = b.id; menu = false })
-                        }
-                    }
+                Text("Total owed ${moneyG(app, limit)}. The money goes to the oldest bill first.", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = { pickDate() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Date: " + dateFmt.format(Date(paidAt)))
                 }
                 OutlinedTextField(
                     amountText, { amountText = it.filter { c -> c.isDigit() || c == '.' }.take(10) },
@@ -341,22 +377,32 @@ private fun PaymentDialog(
                     isError = amountText.isNotBlank() && (amount == null || amount <= 0.0 || amount > limit + 0.005)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                    listOf("Cash", "UPI", "Bank", "Cheque").forEach { m -> Chip(m, method == m) { method = m } }
+                    listOf("Cash", "Cheque", "Online").forEach { m -> Chip(m, method == m) { method = m } }
+                }
+                if (method == "Cheque") {
+                    OutlinedTextField(
+                        chequeNo, { chequeNo = it.take(30) }, label = { Text("Cheque number") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth(), isError = chequeNo.isBlank()
+                    )
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             }
         },
         confirmButton = {
-            TextButton(enabled = !saving && amount != null && amount > 0.0 && amount <= limit + 0.005, onClick = {
-                if (saving) return@TextButton // a second tap must not record a second payment
-                saving = true
-                scope.launch {
-                    try {
-                        app.repo.addSupplierPayment(supplierId, billId, amount!!, method, "")
-                        onDone()
-                    } catch (e: Exception) { error = e.message ?: "Could not save"; saving = false }
+            TextButton(
+                enabled = !saving && amount != null && amount > 0.0 && amount <= limit + 0.005 &&
+                    (method != "Cheque" || chequeNo.isNotBlank()),
+                onClick = {
+                    if (saving) return@TextButton // a second tap must not record a second payment
+                    saving = true
+                    scope.launch {
+                        try {
+                            app.repo.addSupplierPayment(supplierId, amount!!, method, if (method == "Cheque") chequeNo else "", "", paidAt)
+                            onDone()
+                        } catch (e: Exception) { error = e.message ?: "Could not save"; saving = false }
+                    }
                 }
-            }) { Text(if (saving) "Saving..." else "Save payment") }
+            ) { Text(if (saving) "Saving..." else "Save payment") }
         },
         dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } }
     )

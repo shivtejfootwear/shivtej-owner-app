@@ -16,6 +16,9 @@ import java.util.UUID
 import com.shivtej.owner.util.BillMath
 import com.shivtej.owner.util.Ledger
 import com.shivtej.owner.util.MathLine
+import com.shivtej.owner.util.PaymentAmt
+import com.shivtej.owner.util.PurchaseAmt
+import com.shivtej.owner.util.SupplierMath
 
 // ------------------------------------------------------------------ models
 data class SizeStock(val size: String, val qty: Int, val barcode: String)
@@ -710,16 +713,27 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return p
     }
 
-    /** Money paid to a supplier. [billId] empty = a payment on account. It reduces what is still owed. */
-    suspend fun addSupplierPayment(supplierId: String, billId: String, amount: Double, method: String, note: String): SupplierPaymentE {
-        require(amount > 0.0) { "Payment amount must be more than 0" }
+    /**
+     * Money paid to a supplier. It is ON ACCOUNT: the app spreads it over the OLDEST bills still owed (SupplierMath.allocate).
+     * Refused, with nothing saved, when the supplier owes nothing or the amount is more than what is owed.
+     */
+    suspend fun addSupplierPayment(supplierId: String, amount: Double, method: String, chequeNo: String, note: String, paidAt: Long): SupplierPaymentE {
+        val amt = BillMath.round2(amount)
+        require(amt > 0.0) { "Payment amount must be more than 0" }
         val id = UUID.randomUUID().toString()
-        val now = System.currentTimeMillis()
-        val pay = SupplierPaymentE(id, supplierId, billId, BillMath.round2(amount), method, note.trim(), now, true)
+        val pay = SupplierPaymentE(id, supplierId, "", amt, method, note.trim(), paidAt, true, chequeNo = chequeNo.trim())
         db.withTransaction {
+            val bills = dao.allPurchases().filter { it.supplierId == supplierId && it.status != "REJECTED" }
+                .map { PurchaseAmt(it.id, it.supplierId, it.amount, it.billDate) }
+            val pays = dao.allSupplierPayments().filter { it.supplierId == supplierId && it.status != "REJECTED" }
+                .map { PaymentAmt(it.supplierId, it.billId, it.amount, it.id, it.paidAt) }
+            val owed = SupplierMath.totals(supplierId, bills, pays).outstanding
+            require(owed > 0.0) { "This supplier has no balance due" }
+            require(amt <= owed + 0.005) { "Amount is more than the balance due (${BillMath.round2(owed)})" }
             dao.putSupplierPayment(pay)
-            enqueue("ADD_SUPPLIER_PAYMENT", id, JSONObject().put("id", id).put("supplier_id", supplierId).put("bill_id", billId)
-                .put("amount", pay.amount).put("method", method).put("note", pay.note).put("paid_at", iso(now)))
+            enqueue("ADD_SUPPLIER_PAYMENT", id, JSONObject().put("id", id).put("supplier_id", supplierId).put("bill_id", "")
+                .put("amount", amt).put("method", method).put("note", pay.note).put("cheque_no", pay.chequeNo)
+                .put("paid_at", iso(paidAt)))
         }
         onChanged()
         return pay
@@ -1102,7 +1116,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val id = o.str("id")
             if (id.isBlank() || id in protectedIds) continue
             list.add(SupplierPaymentE(id, o.str("supplier_id"), o.str("bill_id"), o.optDouble("amount", 0.0),
-                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false))
+                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false, chequeNo = o.str("cheque_no")))
         }
         dao.putSupplierPayments(list)
     }

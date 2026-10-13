@@ -220,18 +220,11 @@ fun DashboardScreen(app: App, nav: Nav) {
                         Icon(Icons.Filled.Receipt, null, tint = BrandRed, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("आज के बिल", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        Text("${todayBills.size} बिल · " + moneyG(app, todayBills.sumOf { it.total }), fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (todayBills.isEmpty()) Text("आज अभी तक कोई बिल नहीं बना।", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                     todayBills.forEach { b ->
                         Row(Modifier.fillMaxWidth().clickable { nav.go(Route.Receipt(b.id)) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(b.billNo, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(SimpleDateFormat("hh:mm a", Locale.ENGLISH).format(Date(b.createdAt)) + " · " +
-                                    b.customerName.ifBlank { "Walk-in Customer" }, fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                            }
+                            Text(b.billNo, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                             Text(moneyG(app, b.total), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

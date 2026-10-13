@@ -180,7 +180,8 @@ data class SupplierPaymentE(
     val paidAt: Long,
     val pendingSync: Boolean,
     @androidx.room.ColumnInfo(defaultValue = "'OK'") val status: String = "OK",     // OK / REJECTED (refused by the server, kept for history)
-    @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = ""
+    @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "''") val chequeNo: String = ""     // version 9: cheque number when paid by cheque
 )
 
 @Entity(tableName = "stock_log")
@@ -393,6 +394,8 @@ interface AppDao {
     @Query("UPDATE supplier_payments SET pendingSync = 0 WHERE id = :id") suspend fun paymentSynced(id: String)
     @Query("SELECT * FROM purchase_bills WHERE id = :id") suspend fun purchaseById(id: String): PurchaseE?
     @Query("SELECT * FROM supplier_payments WHERE billId = :billId") suspend fun paymentsOfBill(billId: String): List<SupplierPaymentE>
+    @Query("SELECT * FROM purchase_bills") suspend fun allPurchases(): List<PurchaseE>
+    @Query("SELECT * FROM supplier_payments") suspend fun allSupplierPayments(): List<SupplierPaymentE>
     @Query("UPDATE ops SET status = 'REJECTED', error = 'Its purchase bill was rejected by the server' WHERE status IN ('PENDING','FAILED') AND type = 'ADD_SUPPLIER_PAYMENT' AND refId = :ref")
     suspend fun failPaymentOp(ref: String)
 }
@@ -446,6 +449,15 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("ALTER TABLE `purchase_bills` ADD COLUMN `rejectReason` TEXT NOT NULL DEFAULT ''")
         db.execSQL("ALTER TABLE `supplier_payments` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'OK'")
         db.execSQL("ALTER TABLE `supplier_payments` ADD COLUMN `rejectReason` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/**
+ * Version 8 -> 9: a cheque number on supplier payments. ADD COLUMN only, empty default; old payments keep an empty number.
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `supplier_payments` ADD COLUMN `chequeNo` TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -507,7 +519,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -517,7 +529,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }
