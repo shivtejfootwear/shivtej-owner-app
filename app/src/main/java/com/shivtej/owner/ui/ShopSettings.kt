@@ -163,7 +163,10 @@ fun ShopSettingsScreen(app: App, nav: Nav) {
                     p.billFooter = footer.trim()
                     p.billNotes = notes
                     p.shopLogoPath = logo
-                    message = "Saved. New bills will use these details."
+                    p.shopEditedAt = System.currentTimeMillis()
+                    // also kept on the server: a new phone or a reinstall gets these details back
+                    scope.launch { app.repo.queueShopSettings(ShopSync.payload(p)) }
+                    message = "Saved. New bills will use these details, and they are sent to the server (when the phone is online)."
                 },
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = BrandRed)

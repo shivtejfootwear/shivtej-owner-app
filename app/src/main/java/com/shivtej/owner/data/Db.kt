@@ -181,7 +181,9 @@ data class SupplierPaymentE(
     val pendingSync: Boolean,
     @androidx.room.ColumnInfo(defaultValue = "'OK'") val status: String = "OK",     // OK / REJECTED (refused by the server, kept for history)
     @androidx.room.ColumnInfo(defaultValue = "''") val rejectReason: String = "",
-    @androidx.room.ColumnInfo(defaultValue = "''") val chequeNo: String = ""     // version 9: cheque number when paid by cheque
+    @androidx.room.ColumnInfo(defaultValue = "''") val chequeNo: String = "",    // version 9: cheque number when paid by cheque
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted: Boolean = false,  // version 10: a deleted payment is kept, but counts nowhere
+    @androidx.room.ColumnInfo(defaultValue = "'[]'") val itemsJson: String = "[]" // version 10: goods sent back with a Return / Claim (purchase line format)
 )
 
 @Entity(tableName = "stock_log")
@@ -389,13 +391,15 @@ interface AppDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSupplierPayment(p: SupplierPaymentE)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSupplierPayments(p: List<SupplierPaymentE>)
-    @Query("SELECT * FROM supplier_payments ORDER BY paidAt DESC") fun observeSupplierPayments(): Flow<List<SupplierPaymentE>>
+    @Query("SELECT * FROM supplier_payments WHERE deleted = 0 ORDER BY paidAt DESC") fun observeSupplierPayments(): Flow<List<SupplierPaymentE>>
     @Query("SELECT id FROM supplier_payments WHERE pendingSync = 1") suspend fun pendingPaymentIds(): List<String>
     @Query("UPDATE supplier_payments SET pendingSync = 0 WHERE id = :id") suspend fun paymentSynced(id: String)
     @Query("SELECT * FROM purchase_bills WHERE id = :id") suspend fun purchaseById(id: String): PurchaseE?
     @Query("SELECT * FROM supplier_payments WHERE billId = :billId") suspend fun paymentsOfBill(billId: String): List<SupplierPaymentE>
     @Query("SELECT * FROM purchase_bills") suspend fun allPurchases(): List<PurchaseE>
-    @Query("SELECT * FROM supplier_payments") suspend fun allSupplierPayments(): List<SupplierPaymentE>
+    @Query("SELECT * FROM supplier_payments WHERE deleted = 0") suspend fun allSupplierPayments(): List<SupplierPaymentE>
+    @Query("SELECT COUNT(*) FROM ops WHERE status = 'PENDING' AND refId = :ref AND type IN ('SAVE_SUPPLIER_PAYMENT','ADD_SUPPLIER_PAYMENT')")
+    suspend fun pendingPaymentOps(ref: String): Int
     @Query("UPDATE ops SET status = 'REJECTED', error = 'Its purchase bill was rejected by the server' WHERE status IN ('PENDING','FAILED') AND type = 'ADD_SUPPLIER_PAYMENT' AND refId = :ref")
     suspend fun failPaymentOp(ref: String)
 }
@@ -462,6 +466,17 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
 }
 
 /**
+ * Version 9 -> 10: supplier payments can be changed or deleted (deleted = 1 keeps the row but it counts nowhere),
+ * and a Return / Claim keeps the goods sent back (itemsJson). ADD COLUMN only, with the same defaults as the entity.
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `supplier_payments` ADD COLUMN `deleted` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `supplier_payments` ADD COLUMN `itemsJson` TEXT NOT NULL DEFAULT '[]'")
+    }
+}
+
+/**
  * Version 7 -> 8: bill deletion. A deleted bill and its reversed payments are kept with deleted = 1 (nothing is erased).
  * ADD COLUMN only, default 0 (not deleted), so every existing bill and payment stays exactly as it is.
  */
@@ -519,7 +534,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -529,7 +544,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }

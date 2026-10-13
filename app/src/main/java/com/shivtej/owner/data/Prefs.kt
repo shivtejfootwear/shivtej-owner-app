@@ -104,6 +104,17 @@ class Prefs(ctx: Context) {
     var legacyShopJson: String
         get() = sp.getString("legacy_shop", "") ?: ""
         set(v) = sp.edit().putString("legacy_shop", v).apply()
+    // update 8: the shop details are also kept on the server. shopEditedAt = when they were last changed (or taken from the server);
+    // the backup fields remember the last day and app version the details were sent to the server.
+    var shopEditedAt: Long
+        get() = sp.getLong("shop_edited_at", 0L)
+        set(v) = sp.edit().putLong("shop_edited_at", v).apply()
+    var shopBackupDay: String
+        get() = sp.getString("shop_backup_day", "") ?: ""
+        set(v) = sp.edit().putString("shop_backup_day", v).apply()
+    var shopBackupVersion: Int
+        get() = sp.getInt("shop_backup_version", 0)
+        set(v) = sp.edit().putInt("shop_backup_version", v).apply()
 
     // ---- billing screen memory
     var lastSalesPersonId: String

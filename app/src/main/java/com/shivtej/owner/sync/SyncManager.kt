@@ -1,9 +1,11 @@
 package com.shivtej.owner.sync
 
 import android.content.Context
+import com.shivtej.owner.BuildConfig
 import com.shivtej.owner.data.OpE
 import com.shivtej.owner.data.Prefs
 import com.shivtej.owner.data.Repo
+import com.shivtej.owner.data.ShopSync
 import com.shivtej.owner.net.Api
 import com.shivtej.owner.net.ApiError
 import kotlinx.coroutines.CancellationException
@@ -54,10 +56,13 @@ class SyncManager(
     private var update4Missing = false
     /** Set while a sync run finds that the update-6 SQL (bill deletion) is not installed yet. */
     private var update6Missing = false
+    /** Set while a sync run finds that the update-8 SQL (supplier payment changes, shop details) is not installed yet. */
+    private var update8Missing = false
 
     private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
     private val UPDATE4_OPS = setOf("ADD_CUSTOMER_PAYMENT", "SET_CUSTOMER_PHOTO", "SET_SUPPLIER_PHOTO")
     private val UPDATE6_OPS = setOf("DELETE_POS_BILL", "RESTORE_POS_BILL")
+    private val UPDATE8_OPS = setOf("SAVE_SUPPLIER_PAYMENT", "SAVE_SHOP")
 
     init {
         scope.launch {
@@ -79,8 +84,12 @@ class SyncManager(
         update2Missing = false
         update4Missing = false
         update6Missing = false
+        update8Missing = false
         try {
             withContext(Dispatchers.IO) {
+                // first: a new phone gets the saved shop details before anything is sent, so blank details never overwrite them
+                pullShopSettings()
+                queueShopBackupIfDue()
                 push()
                 pull()
             }
@@ -90,6 +99,7 @@ class SyncManager(
                 update2Missing -> "Staff, customers, suppliers and purchases are saved on this phone. Run owner_update_2_migration.sql in Supabase to share them with the server."
                 update4Missing -> "Customer payments, photos and product videos are saved on this phone. Run owner_update_4_media_ledger_tasks.sql in Supabase to share them with the server."
                 update6Missing -> "Bill deletions are saved on this phone. Run owner_update_6_bill_delete.sql and owner_update_6b_bill_restore.sql in Supabase to share them with the server."
+                update8Missing -> "Supplier payment changes, returns and shop details are saved on this phone. Run owner_update_8_shop_and_supplier_edit.sql in Supabase to share them with the server."
                 else -> null
             }
             state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
@@ -135,6 +145,7 @@ class SyncManager(
                     "CREATE_PURCHASE" -> repo.purchaseSynced(op.refId)
                     "ADD_SUPPLIER_PAYMENT" -> repo.paymentSynced(op.refId)
                     "ADD_CUSTOMER_PAYMENT" -> repo.customerPaymentSynced(op.refId)
+                    "SAVE_SUPPLIER_PAYMENT" -> repo.paymentSyncedIfIdle(op.refId)
                 }
             } catch (e: ApiError) {
                 if (e.code == "PGRST202" && op.type in UPDATE2_OPS) {
@@ -150,6 +161,11 @@ class SyncManager(
                 if (e.code == "PGRST202" && op.type in UPDATE6_OPS) {
                     // the update-6 SQL (bill deletion) is not installed yet: same as above
                     update6Missing = true
+                    continue
+                }
+                if (e.code == "PGRST202" && op.type in UPDATE8_OPS) {
+                    // the update-8 SQL (supplier payment changes, shop details) is not installed yet: same as above
+                    update8Missing = true
                     continue
                 }
                 if (e.isAuth || e.status >= 500 || e.code == "PGRST202") throw e
@@ -226,6 +242,8 @@ class SyncManager(
                 Api.rpc("owner_create_purchase", a(code).put("p", p))
             }
             "ADD_SUPPLIER_PAYMENT" -> Api.rpc("owner_add_supplier_payment", a(code).put("p", JSONObject(op.payload)))
+            "SAVE_SUPPLIER_PAYMENT" -> Api.rpc("owner_save_supplier_payment", a(code).put("p", JSONObject(op.payload)))
+            "SAVE_SHOP" -> Api.rpc("owner_save_shop_settings", a(code).put("p", JSONObject(op.payload)))
             "UPDATE_ORDER" -> {
                 val p = JSONObject(op.payload)
                 Api.rpc("owner_update_order", a(code)
@@ -309,6 +327,32 @@ class SyncManager(
         val name = Api.uploadProductPhoto(code, pid, f.readBytes(), "image/jpeg")
         prefs.setUploaded(path, name)
         return name
+    }
+
+    /**
+     * Once a day (the first sync of the day) and after every app update, the shop and bill details are sent to the server.
+     * Sync runs about every 15 minutes, so "once a day" means the first sync after the day starts.
+     */
+    private suspend fun queueShopBackupIfDue() {
+        if (prefs.ownerCode.isBlank()) return
+        val today = java.time.LocalDate.now().toString()
+        if (prefs.shopBackupDay == today && prefs.shopBackupVersion == BuildConfig.VERSION_CODE) return
+        repo.queueShopSettings(ShopSync.payload(prefs))
+        prefs.shopBackupDay = today
+        prefs.shopBackupVersion = BuildConfig.VERSION_CODE
+    }
+
+    /** Restores the shop and bill details from the server, but only when the server copy is newer than this phone's. */
+    private suspend fun pullShopSettings() {
+        try {
+            val r = Api.rpc("owner_get_shop_settings", a(prefs.ownerCode)) as? JSONObject ?: return
+            if (!r.optBoolean("exists", false)) return
+            val data = r.optJSONObject("data") ?: return
+            val at = r.optLong("updated_at_ms", 0L)
+            if (at > prefs.shopEditedAt) ShopSync.apply(prefs, data, at)
+        } catch (e: ApiError) {
+            if (e.code == "PGRST202") update8Missing = true else throw e
+        }
     }
 
     // ------------------------------------------------------------------ pull

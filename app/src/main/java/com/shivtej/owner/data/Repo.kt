@@ -739,6 +739,99 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return pay
     }
 
+    /**
+     * Adds, changes or deletes a supplier payment, and records a Return / Claim with the goods sent back.
+     *  - [existing] null = a new payment; otherwise that payment is changed (the same id is used on the server).
+     *  - [delete] true = the payment is removed from every total and history (kept on the server with deleted = true).
+     *  - [lines] = goods sent back. Stock goes DOWN by the quantity; when a return is changed or deleted the difference
+     *    comes back. Every stock change has its own id ("SRET:<payment>:<time>:<n>"), so it can never be counted twice.
+     * The money is on account, like every supplier payment: it is spread over the oldest bills still owed.
+     */
+    suspend fun saveSupplierPayment(
+        existing: SupplierPaymentE?, supplierId: String, amount: Double, method: String, chequeNo: String,
+        note: String, paidAt: Long, lines: List<PurchaseLine>, delete: Boolean = false
+    ): SupplierPaymentE {
+        require(existing == null || existing.status != "REJECTED") { "A payment refused by the server can not be changed" }
+        require(!delete || existing != null) { "Nothing to delete" }
+        val id = existing?.id ?: UUID.randomUUID().toString()
+        val amt = BillMath.round2(if (delete) existing!!.amount else amount)
+        require(delete || amt > 0.0) { "Payment amount must be more than 0" }
+        val clean: List<PurchaseLine> = if (delete) emptyList() else lines.filter { it.qty > 0 }
+        val now = System.currentTimeMillis()
+        val oldLines: List<PurchaseLine> = if (existing == null || existing.deleted) emptyList() else parsePurchaseLines(existing.itemsJson)
+
+        // the net change per product / colour / size: positive = stock comes back, negative = stock goes out
+        fun key(l: PurchaseLine) = l.productId + "|" + l.colour + "|" + l.size
+        val net = LinkedHashMap<String, Int>()
+        val names = HashMap<String, PurchaseLine>()
+        for (l in oldLines) { net[key(l)] = (net[key(l)] ?: 0) + l.qty; names.putIfAbsent(key(l), l) }
+        for (l in clean) { net[key(l)] = (net[key(l)] ?: 0) - l.qty; names.putIfAbsent(key(l), l) }
+
+        val arr = JSONArray()
+        for (l in clean) arr.put(JSONObject().put("productId", l.productId).put("article", l.article).put("name", l.name)
+            .put("colour", l.colour).put("size", l.size).put("qty", l.qty).put("cost", 0.0))
+
+        var saved: SupplierPaymentE? = null
+        db.withTransaction {
+            if (!delete) {
+                val bills = dao.allPurchases().filter { it.supplierId == supplierId && it.status != "REJECTED" }
+                    .map { PurchaseAmt(it.id, it.supplierId, it.amount, it.billDate) }
+                val pays = dao.allSupplierPayments().filter { it.supplierId == supplierId && it.status != "REJECTED" && it.id != id }
+                    .map { PaymentAmt(it.supplierId, it.billId, it.amount, it.id, it.paidAt) }
+                val owedWithout = SupplierMath.totals(supplierId, bills, pays).outstanding
+                require(owedWithout > 0.0) { "This supplier has no balance due" }
+                require(amt <= owedWithout + 0.005) { "Amount is more than the balance due (${BillMath.round2(owedWithout)})" }
+            }
+
+            // check every stock change first, so nothing is half saved
+            val changes = ArrayList<Triple<PurchaseLine, Int, String>>()
+            for ((k, d) in net) {
+                if (d == 0) continue
+                val l = names.getValue(k)
+                val have = dao.qtyOf(l.productId, l.colour, l.size)
+                if (have == null) {
+                    // the item is no longer in the stock list: nothing can be taken out, and nothing can be put back
+                    require(d > 0) { "${l.name} (${l.colour} / ${l.size}) is not in the stock list" }
+                    continue
+                }
+                require(have + d >= 0) { "Only $have pcs of ${l.article.ifBlank { l.name }} (${l.colour} / ${l.size}) in stock" }
+                changes.add(Triple(l, d, "SRET:$id:$now:${changes.size + 1}"))
+            }
+
+            val stockJson = JSONArray()
+            for ((l, d, opKey) in changes) {
+                val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+                dao.adjust(l.productId, l.colour, l.size, d)
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE(opKey, l.productId, l.article, l.colour, l.size, after - before, after, "SUPPLIER_RETURN", now, false))
+                stockJson.put(JSONObject().put("product_id", l.productId).put("colour", l.colour).put("size", l.size)
+                    .put("delta", d).put("op_key", opKey).put("reason", "SUPPLIER_RETURN"))
+            }
+
+            // a payment that was tied to one purchase bill keeps that tie; a new one is on account
+            val pay = SupplierPaymentE(id, supplierId, existing?.billId.orEmpty(), amt, method, note.trim(), paidAt, true,
+                chequeNo = if (delete) existing!!.chequeNo else chequeNo.trim(), deleted = delete,
+                itemsJson = if (delete) "[]" else arr.toString())
+            dao.putSupplierPayment(pay)
+            enqueue("SAVE_SUPPLIER_PAYMENT", id, JSONObject().put("id", id).put("supplier_id", supplierId)
+                .put("amount", amt).put("method", pay.method).put("note", pay.note).put("cheque_no", pay.chequeNo)
+                .put("paid_at", iso(paidAt)).put("deleted", delete).put("items", JSONArray(pay.itemsJson))
+                .put("stock", stockJson))
+            saved = pay
+        }
+        onChanged()
+        return saved!!
+    }
+
+    /** Shop and bill details to the server (SAVE_SHOP). Every save sends the whole set, so the last one always wins. */
+    suspend fun queueShopSettings(payload: JSONObject) {
+        enqueue("SAVE_SHOP", "shop", payload)
+        onChanged()
+    }
+
+    /** A supplier payment changed on the phone stays "pending" until no change for it is still waiting to be sent. */
+    suspend fun paymentSyncedIfIdle(id: String) { if (dao.pendingPaymentOps(id) == 0) dao.paymentSynced(id) }
+
     // ---------------------------------------------------------- orders
     suspend fun updateOrder(id: String, status: String, tracking: String, courier: String, shipping: Double) {
         val o = dao.order(id) ?: return
@@ -1116,7 +1209,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val id = o.str("id")
             if (id.isBlank() || id in protectedIds) continue
             list.add(SupplierPaymentE(id, o.str("supplier_id"), o.str("bill_id"), o.optDouble("amount", 0.0),
-                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false, chequeNo = o.str("cheque_no")))
+                o.str("method"), o.str("note"), parseTime(o.str("paid_at")), false, chequeNo = o.str("cheque_no"),
+                deleted = o.optBoolean("deleted", false), itemsJson = o.jsonText("items", "[]")))
         }
         dao.putSupplierPayments(list)
     }
