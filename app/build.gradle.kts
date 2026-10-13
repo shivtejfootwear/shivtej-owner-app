@@ -28,7 +28,9 @@ android {
         applicationId = "com.shivtej.owner"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        // On GitHub the build number always goes up, so every new APK is newer than the last one.
+        // On a laptop (no GITHUB_RUN_NUMBER) it stays 1.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "1.0"
 
         // Same Supabase project as the website. Publishable key is public by design.
