@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
@@ -75,9 +74,25 @@ private fun shipWithLogin(ctx: Context, body: JSONObject): JSONObject {
     }
 }
 
-private fun loginMsg(e: Exception): String {
-    val wrong = e is ApiError && (e.status == 400 || e.status == 401)
-    return if (wrong) "Email or password is wrong." else "Could not log in. Check internet and try again."
+/** Saves the OTP login token. Kept 6 days here (the server allows 7); after that the owner logs in again. */
+private fun saveOtpSession(ctx: Context, token: String) {
+    val expiresAt = System.currentTimeMillis() + 6L * 86_400_000L
+    SecretStore.setAdminSession(
+        ctx,
+        JSONObject().put("access_token", token).put("refresh_token", "").put("expires_at", expiresAt).toString()
+    )
+}
+
+private fun otpMsg(e: Exception): String {
+    val c = (e as? ApiError)?.code.orEmpty()
+    return when {
+        c.contains("NOT_ADMIN") -> "This mobile number is not an admin number."
+        c.contains("WRONG_CODE") -> "Wrong code. Check the WhatsApp message and try again."
+        c.contains("EXPIRED") -> "The code has expired. Tap Change mobile number and send again."
+        c.contains("TOO_MANY") -> "Too many tries. Wait a few minutes and try again."
+        c.contains("BAD_MOBILE") -> "Enter a valid 10-digit mobile number."
+        else -> "Could not connect. Check internet and try again."
+    }
 }
 
 private fun shipMsg(e: Exception): String {
@@ -97,7 +112,7 @@ private fun shipMsg(e: Exception): String {
 }
 
 /**
- * Shiprocket shipping on the order screen. Log in once with the website admin email and password,
+ * Shiprocket shipping on the order screen. Log in once with your admin mobile number and the WhatsApp code,
  * load the couriers with their price and delivery days, pick one, then "Create shipment".
  * The server saves the AWB and courier on the order. The manual Courier and Tracking fields stay as they are.
  */
@@ -112,8 +127,9 @@ fun ShipmentSection(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var loggedIn by remember { mutableStateOf(SecretStore.adminSession(ctx).isNotBlank()) }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var mobile by remember { mutableStateOf("") }
+    var otp by remember { mutableStateOf("") }
+    var otpSent by remember { mutableStateOf(false) }
     var couriers by remember(orderId) { mutableStateOf<List<CourierOption>>(emptyList()) }
     var picked by remember(orderId) { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -126,42 +142,67 @@ fun ShipmentSection(
 
         if (!loggedIn) {
             Text(
-                "To ship with Shiprocket, log in with the website admin email and password. It is saved on this phone only.",
+                "To ship with Shiprocket, log in with your admin mobile number. A 6-digit code comes on WhatsApp. It is saved on this phone only.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            OutlinedTextField(
-                value = email, onValueChange = { email = it }, label = { Text("Admin email") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-            )
-            OutlinedTextField(
-                value = password, onValueChange = { password = it }, label = { Text("Password") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-            )
-            Button(
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        note = ""
-                        try {
-                            withContext(Dispatchers.IO) { saveSession(ctx, Api.adminSignIn(email.trim(), password)) }
-                            loggedIn = SecretStore.adminSession(ctx).isNotBlank()
-                            if (loggedIn) {
-                                password = ""
-                            } else {
-                                note = "Could not save the login on this phone."
+            if (!otpSent) {
+                OutlinedTextField(
+                    value = mobile, onValueChange = { mobile = it.filter { c -> c.isDigit() }.take(10) },
+                    label = { Text("Admin mobile number") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+                Button(
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            note = ""
+                            try {
+                                withContext(Dispatchers.IO) { Api.adminOtpSend(mobile) }
+                                otpSent = true
+                                note = "Code sent on WhatsApp."
+                            } catch (e: Exception) {
+                                note = otpMsg(e)
                             }
-                        } catch (e: Exception) {
-                            note = loginMsg(e)
+                            busy = false
                         }
-                        busy = false
-                    }
-                },
-                enabled = !busy && email.isNotBlank() && password.isNotBlank(),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
-            ) { Text(if (busy) "Logging in..." else "Log in for shipping") }
+                    },
+                    enabled = !busy && mobile.length == 10,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                ) { Text(if (busy) "Sending..." else "Send OTP on WhatsApp") }
+            } else {
+                OutlinedTextField(
+                    value = otp, onValueChange = { otp = it.filter { c -> c.isDigit() }.take(6) },
+                    label = { Text("6-digit code") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+                Button(
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            note = ""
+                            try {
+                                val token = withContext(Dispatchers.IO) { Api.adminOtpVerify(mobile, otp) }
+                                saveOtpSession(ctx, token)
+                                loggedIn = SecretStore.adminSession(ctx).isNotBlank()
+                                if (loggedIn) {
+                                    otp = ""
+                                    otpSent = false
+                                } else {
+                                    note = "Could not save the login on this phone."
+                                }
+                            } catch (e: Exception) {
+                                note = otpMsg(e)
+                            }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy && otp.length == 6,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                ) { Text(if (busy) "Checking..." else "Log in for shipping") }
+                TextButton(onClick = { otpSent = false; otp = ""; note = "" }) { Text("Change mobile number") }
+            }
         } else {
             OutlinedButton(
                 onClick = {

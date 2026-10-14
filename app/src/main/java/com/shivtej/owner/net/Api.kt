@@ -137,6 +137,34 @@ object Api {
     fun adminRefresh(refreshToken: String): JSONObject =
         authToken("refresh_token", JSONObject().put("refresh_token", refreshToken))
 
+    /** WhatsApp OTP admin login: sends the 6-digit code to the admin's mobile number (admin-otp function). */
+    fun adminOtpSend(mobile: String) {
+        adminOtpCall(JSONObject().put("action", "send").put("mobile", mobile))
+    }
+
+    /** Checks the code and returns the admin login token (valid 7 days on the server). */
+    fun adminOtpVerify(mobile: String, code: String): String {
+        val r = adminOtpCall(JSONObject().put("action", "verify").put("mobile", mobile).put("code", code))
+        return r.getString("token")
+    }
+
+    private fun adminOtpCall(body: JSONObject): JSONObject {
+        val req = Request.Builder()
+            .url("$functionsBase/admin-otp")
+            .header("apikey", key)
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val serverCode = try { JSONObject(text).optString("error") } catch (_: Exception) { "" }
+                throw ApiError(resp.code, serverCode.ifBlank { null }, serverCode.ifBlank { "HTTP ${resp.code}" })
+            }
+            return JSONObject(text)
+        }
+    }
+
     private fun authToken(grant: String, body: JSONObject): JSONObject {
         val req = Request.Builder()
             .url("$base/auth/v1/token?grant_type=$grant")
