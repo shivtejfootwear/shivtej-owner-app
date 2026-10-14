@@ -312,7 +312,7 @@ fun PosScreen(app: App, nav: Nav) {
                     Text("Colour: ${h.colour}")
                     Text("Size: ${h.size.size}")
                     if (h.product.mrp > h.product.price) Text("MRP: ${money(app, h.product.mrp)}")
-                    Text("Selling price: ${money(app, h.product.price)}", fontWeight = FontWeight.Bold)
+                    Text("Selling price: ${money(app, maxOf(h.product.mrp, h.product.price))}", fontWeight = FontWeight.Bold)
                     Text("Stock: ${h.size.qty}", color = if (h.size.qty > 0) GreenOk else RedOut)
                     Text("Barcode: ${h.size.barcode}")
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
@@ -325,7 +325,7 @@ fun PosScreen(app: App, nav: Nav) {
             confirmButton = {
                 TextButton(enabled = h.size.qty > 0, onClick = {
                     val err = cart.add(CartLine(h.product.id, h.product.article, h.product.name, h.colour, h.size.size,
-                        h.size.barcode, qty, h.product.price, h.size.qty, h.product.mrp))
+                        h.size.barcode, qty, maxOf(h.product.mrp, h.product.price), h.size.qty, h.product.mrp))
                     if (err != null) toast(ctx, err) else { hit = null; query = "" }
                 }) { Text("Add to bill") }
             },
@@ -366,7 +366,7 @@ fun PosScreen(app: App, nav: Nav) {
                     } catch (e: Exception) { toast(ctx, e.message ?: "Failed") }
                 }
             } else {
-                val err = cart.add(CartLine(p.id, p.article, p.name, colour, size.size, size.barcode, qty, p.price, size.qty, p.mrp))
+                val err = cart.add(CartLine(p.id, p.article, p.name, colour, size.size, size.barcode, qty, maxOf(p.mrp, p.price), size.qty, p.mrp))
                 if (err != null) toast(ctx, err) else { picker = null; query = "" }
             }
         }
