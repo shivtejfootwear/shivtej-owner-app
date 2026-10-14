@@ -832,6 +832,97 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return saved!!
     }
 
+    /**
+     * Changes or deletes a purchase bill that is already saved (the same id is used on the server).
+     *  - The amount comes from the items, or the typed amount for a money-only bill. The bill number stays the same.
+     *  - A bill that added items to stock: stock goes up or down by the difference only. Each change has its own id
+     *    ("PURE:<bill>:<time>:<n>"), so it is never counted twice.
+     *  - Refused, with nothing saved: a bill with payments against it can not be deleted; the amount can not go below
+     *    what is already paid on it; the supplier can not become overpaid; stock can not go below zero.
+     */
+    suspend fun changePurchase(
+        existing: PurchaseE, billNo: String, billDate: Long, lines: List<PurchaseLine>,
+        amountIfNoItems: Double, note: String, delete: Boolean = false
+    ): PurchaseE {
+        require(existing.status != "REJECTED") { "A bill refused by the server can not be changed" }
+        require(!existing.deleted) { "This bill is already deleted" }
+        val id = existing.id
+        val clean: List<PurchaseLine> = if (delete) emptyList() else lines.filter { it.qty > 0 }
+        val newAmount = if (delete) existing.amount
+            else BillMath.round2(if (clean.isNotEmpty()) clean.sumOf { it.cost * it.qty } else amountIfNoItems)
+        require(delete || newAmount > 0.0) { "Purchase amount must be more than 0" }
+        val now = System.currentTimeMillis()
+        val reason = if (delete) "PURCHASE_DELETE" else "PURCHASE_EDIT"
+        val oldLines = parsePurchaseLines(existing.itemsJson)
+
+        // the net change per product / colour / size: positive = stock comes back, negative = stock goes out
+        fun key(l: PurchaseLine) = l.productId + "|" + l.colour + "|" + l.size
+        val net = LinkedHashMap<String, Int>()
+        val names = HashMap<String, PurchaseLine>()
+        if (existing.addStock) {
+            for (l in oldLines) { net[key(l)] = (net[key(l)] ?: 0) + l.qty; names.putIfAbsent(key(l), l) }
+            for (l in clean) { net[key(l)] = (net[key(l)] ?: 0) - l.qty; names.putIfAbsent(key(l), l) }
+        }
+
+        val arr = JSONArray()
+        for (l in clean) arr.put(JSONObject().put("productId", l.productId).put("article", l.article).put("name", l.name)
+            .put("colour", l.colour).put("size", l.size).put("qty", l.qty).put("cost", l.cost))
+
+        var saved: PurchaseE? = null
+        db.withTransaction {
+            val all = dao.allPurchases().filter { it.supplierId == existing.supplierId && it.status != "REJECTED" }
+            val pays = dao.allSupplierPayments().filter { it.supplierId == existing.supplierId && it.status != "REJECTED" }
+                .map { PaymentAmt(it.supplierId, it.billId, it.amount, it.id, it.paidAt) }
+            val oldBills = all.map { PurchaseAmt(it.id, it.supplierId, it.amount, it.billDate) }
+            val newBills = all.filter { !delete || it.id != id }
+                .map { PurchaseAmt(it.id, it.supplierId, if (it.id == id) newAmount else it.amount, it.billDate) }
+            val paidHere = SupplierMath.allocate(oldBills, pays).billPaid[id] ?: 0.0
+            if (delete) {
+                require(paidHere <= 0.005) { "This bill has payments against it. Delete those payments first." }
+            } else {
+                require(newAmount + 0.005 >= paidHere) { "Already paid on this bill: ${BillMath.round2(paidHere)}. The amount can not go below it." }
+            }
+            val owedAfter = SupplierMath.totals(existing.supplierId, newBills, pays).outstanding
+            require(owedAfter >= -0.005) { "This change would overpay the supplier (balance would be ${BillMath.round2(owedAfter)})" }
+
+            // check every stock change first, so nothing is half saved
+            val changes = ArrayList<Triple<PurchaseLine, Int, String>>()
+            for ((k, d) in net) {
+                if (d == 0) continue
+                val l = names.getValue(k)
+                val have = dao.qtyOf(l.productId, l.colour, l.size)
+                if (have == null) {
+                    // the item is no longer in the stock list: nothing can be taken out, and nothing can be put back
+                    require(d > 0) { "${l.name} (${l.colour} / ${l.size}) is not in the stock list" }
+                    continue
+                }
+                require(have + d >= 0) { "Only $have pcs of ${l.article.ifBlank { l.name }} (${l.colour} / ${l.size}) in stock" }
+                changes.add(Triple(l, d, "PURE:$id:$now:${changes.size + 1}"))
+            }
+
+            val stockJson = JSONArray()
+            for ((l, d, opKey) in changes) {
+                val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+                dao.adjust(l.productId, l.colour, l.size, d)
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE(opKey, l.productId, l.article, l.colour, l.size, after - before, after, reason, now, false))
+                stockJson.put(JSONObject().put("product_id", l.productId).put("colour", l.colour).put("size", l.size)
+                    .put("delta", d).put("op_key", opKey).put("reason", reason))
+            }
+
+            val updated = existing.copy(billNo = billNo.trim(), billDate = billDate, amount = newAmount,
+                itemsJson = if (delete) "[]" else arr.toString(), note = note.trim(), pendingSync = true, deleted = delete)
+            dao.putPurchase(updated)
+            enqueue("SAVE_PURCHASE", id, JSONObject().put("id", id).put("supplier_id", existing.supplierId)
+                .put("bill_no", updated.billNo).put("bill_date", iso(billDate)).put("amount", newAmount)
+                .put("note", updated.note).put("add_stock", existing.addStock).put("deleted", delete)
+                .put("items", JSONArray(updated.itemsJson)).put("stock", stockJson))
+            saved = updated
+        }
+        onChanged()
+        return saved!!
+    }
+
     /** Shop and bill details to the server (SAVE_SHOP). Every save sends the whole set, so the last one always wins. */
     suspend fun queueShopSettings(payload: JSONObject) {
         enqueue("SAVE_SHOP", "shop", payload)
@@ -965,6 +1056,10 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun posCustomerSyncedIfIdle(mobile: String) { if (dao.pendingCountFor(mobile, "UPSERT_CUSTOMER") == 0) dao.posCustomerSynced(mobile) }
     suspend fun supplierSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPSERT_SUPPLIER") == 0) dao.supplierSynced(id) }
     suspend fun purchaseSynced(id: String) = dao.purchaseSynced(id)
+    /** A purchase bill changed on the phone stays "pending" until no change for it is still waiting to be sent. */
+    suspend fun purchaseSyncedIfIdle(id: String) {
+        if (dao.pendingCountFor(id, "CREATE_PURCHASE") == 0 && dao.pendingCountFor(id, "SAVE_PURCHASE") == 0) dao.purchaseSynced(id)
+    }
     suspend fun paymentSynced(id: String) = dao.paymentSynced(id)
 
     /**
@@ -976,9 +1071,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             dao.markOp(opId, "REJECTED", why)
             if (dao.purchaseById(id) == null) return@withTransaction
             reverseStockLogs("PUR:$id:", "PURCHASE_REJECTED")
+            reverseStockLogs("PURE:$id:", "PURCHASE_REJECTED")
             dao.markPurchaseRejected(id, why)
             dao.markPaymentsRejectedOfBill(id, why)
             for (pay in dao.paymentsOfBill(id)) dao.failPaymentOp(pay.id)
+            dao.failPurchaseEditOps(id)
         }
     }
 
@@ -1207,7 +1304,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             list.add(PurchaseE(id, o.str("supplier_id"), o.str("bill_no"), parseTime(o.str("bill_date")),
                 o.optDouble("amount", 0.0), o.jsonText("items", "[]"),
                 if (o.isNull("add_stock")) false else o.optBoolean("add_stock", false), o.str("note"), false,
-                billFile = localFile, billFileUrl = o.str("bill_file_url")))
+                billFile = localFile, billFileUrl = o.str("bill_file_url"), deleted = o.optBoolean("deleted", false)))
         }
         dao.putPurchases(list)
     }

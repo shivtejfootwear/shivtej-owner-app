@@ -186,6 +186,8 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     var editPay by remember { mutableStateOf<SupplierPaymentE?>(null) }
     val dateFmt = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.ENGLISH) }
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var askDeleteBill by remember { mutableStateOf<PurchaseE?>(null) }
 
     val myBills = purchases.filter { it.supplierId == supplierId }.sortedByDescending { it.billDate }
     val myPays = payments.filter { it.supplierId == supplierId }.sortedByDescending { it.paidAt }
@@ -271,6 +273,10 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                             Text("Bill photo / PDF attached", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             TextButton(onClick = { openBill(ctx, b.billFile, b.billFileUrl) }) { Text("View bill photo / PDF") }
                         }
+                        if (b.status != "REJECTED") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { nav.go(Route.PurchaseForm(supplierId, b.id)) }) { Text("Edit bill") }
+                            TextButton(onClick = { askDeleteBill = b }) { Text("Delete bill", color = RedOut) }
+                        }
                     }
                 }
                 HorizontalDivider()
@@ -336,6 +342,27 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
 
     if (editing) SupplierDialog(app, s) { editing = false }
     if (payOpen) PaymentDialog(app, supplierId, t.outstanding, null) { payOpen = false }
+    askDeleteBill?.let { b ->
+        AlertDialog(
+            onDismissRequest = { askDeleteBill = null },
+            title = { Text("Delete this purchase bill?") },
+            text = { Text("The bill is removed from every total and history (kept on the server, not counted or shown)." +
+                (if (b.addStock) " Its items go back out of stock." else "")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    askDeleteBill = null
+                    scope.launch {
+                        try {
+                            app.repo.changePurchase(b, b.billNo, b.billDate, emptyList(), b.amount, b.note, delete = true)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(ctx, e.message ?: "Could not delete the bill", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }) { Text("Delete", color = RedOut) }
+            },
+            dismissButton = { TextButton(onClick = { askDeleteBill = null }) { Text("Keep") } }
+        )
+    }
     // when changing a payment, the money it already took counts as still owed for this change
     editPay?.let { p -> PaymentDialog(app, supplierId, t.outstanding + p.amount, p) { editPay = null } }
 }
@@ -496,20 +523,28 @@ private fun PaymentDialog(app: App, supplierId: String, outstanding: Double, exi
 
 // ================================================================== NEW PURCHASE BILL
 @Composable
-fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
+fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? = null) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val suppliers by app.repo.suppliers.collectAsStateWithLifecycle(emptyList())
     val products by app.repo.products.collectAsStateWithLifecycle(emptyList())
+    val purchases by app.repo.purchases.collectAsStateWithLifecycle(emptyList())
     val s = suppliers.firstOrNull { it.id == supplierId }
-    var billNo by remember { mutableStateOf("") }
-    var dateText by remember { mutableStateOf(SimpleDateFormat("dd-MM-yyyy", Locale.US).format(Date())) }
-    var addStock by remember { mutableStateOf(true) }
-    var note by remember { mutableStateOf("") }
-    var amountOnly by remember { mutableStateOf("") }
+    // changing a saved bill: the form starts with its values, and the bill number stays the same
+    val editing = billId != null
+    val existing = if (billId == null) null else purchases.firstOrNull { it.id == billId }
+    var billNo by remember(existing?.id) { mutableStateOf(existing?.billNo.orEmpty()) }
+    var dateText by remember(existing?.id) {
+        mutableStateOf(SimpleDateFormat("dd-MM-yyyy", Locale.US).format(Date(existing?.billDate ?: System.currentTimeMillis())))
+    }
+    var addStock by remember(existing?.id) { mutableStateOf(existing?.addStock ?: true) }
+    var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
+    var amountOnly by remember(existing?.id) { mutableStateOf(existing?.let { BillMath.plain(it.amount) }.orEmpty()) }
     var paidText by remember { mutableStateOf("") }
     var method by remember { mutableStateOf("Cash") }
-    val lines = remember { mutableStateListOf<PurchaseLine>() }
+    val lines = remember(existing?.id) {
+        mutableStateListOf<PurchaseLine>().also { it.addAll(parsePurchaseLines(existing?.itemsJson.orEmpty())) }
+    }
     var pickProduct by remember { mutableStateOf(false) }
     var pickedProduct by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -536,9 +571,10 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
     val paid = BillMath.parseAmount(paidText) ?: 0.0
 
     if (s == null) { EmptyState("Supplier not found."); return }
+    if (editing && existing == null) { EmptyState("Loading the bill..."); return }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Purchase from ${s.name}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(if (editing) "Change purchase bill from ${s.name}" else "Purchase from ${s.name}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(billNo, { billNo = it.take(30) }, label = { Text("Supplier bill no.") }, singleLine = true, modifier = Modifier.weight(1f))
             OutlinedTextField(dateText, { dateText = it.take(10) }, label = { Text("Bill date dd-mm-yyyy") }, singleLine = true,
@@ -550,7 +586,7 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
                 Text(if (addStock) "Quantities below go into your inventory now." else "Money entry only - stock is not changed.",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Switch(checked = addStock, onCheckedChange = { addStock = it })
+            Switch(checked = addStock, onCheckedChange = { addStock = it }, enabled = !editing)
         }
 
         Text("Items", fontWeight = FontWeight.SemiBold)
@@ -577,7 +613,7 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
 
         OutlinedTextField(note, { note = it.take(200) }, label = { Text("Note (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
 
-        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
+        if (!editing) Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Supplier's bill photo or PDF", fontWeight = FontWeight.SemiBold)
                 Text(if (billPath.isBlank()) "Optional. Attach the bill so it stays with this supplier."
@@ -597,36 +633,43 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String) {
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
             Column(Modifier.padding(12.dp)) {
                 Row { Text("Bill total", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Text(moneyG(app, total), fontWeight = FontWeight.Bold, color = BrandRed) }
-                OutlinedTextField(paidText, { paidText = it.filter { c -> c.isDigit() || c == '.' }.take(10) },
-                    label = { Text("Paid now (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("Cash", "UPI", "Bank", "Cheque").forEach { m -> Chip(m, method == m) { method = m } }
+                if (!editing) {
+                    OutlinedTextField(paidText, { paidText = it.filter { c -> c.isDigit() || c == '.' }.take(10) },
+                        label = { Text("Paid now (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("Cash", "UPI", "Bank", "Cheque").forEach { m -> Chip(m, method == m) { method = m } }
+                    }
+                    Row { Text("Balance after this bill", modifier = Modifier.weight(1f)); Text(moneyG(app, BillMath.balance(total, paid)), fontWeight = FontWeight.Bold) }
                 }
-                Row { Text("Balance after this bill", modifier = Modifier.weight(1f)); Text(moneyG(app, BillMath.balance(total, paid)), fontWeight = FontWeight.Bold) }
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
         Button(
-            enabled = !busy && total > 0.0 && date != null && (paidText.isBlank() || paid <= total + 0.005),
+            enabled = !busy && total > 0.0 && date != null && (!editing || existing != null) &&
+                (editing || paidText.isBlank() || paid <= total + 0.005),
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = BrandRed),
             onClick = {
                 busy = true; error = null
                 scope.launch {
                     try {
-                        app.repo.createPurchase(
-                            supplierId = supplierId, billNo = billNo, billDate = date!!, lines = lines.toList(),
-                            amountIfNoItems = typedAmount ?: 0.0, addStock = addStock, note = note,
-                            paidNow = paid, method = method, billFile = billPath
-                        )
+                        if (existing != null) {
+                            app.repo.changePurchase(existing, billNo, date!!, lines.toList(), typedAmount ?: 0.0, note)
+                        } else {
+                            app.repo.createPurchase(
+                                supplierId = supplierId, billNo = billNo, billDate = date!!, lines = lines.toList(),
+                                amountIfNoItems = typedAmount ?: 0.0, addStock = addStock, note = note,
+                                paidNow = paid, method = method, billFile = billPath
+                            )
+                        }
                         nav.back()
                     } catch (e: Exception) {
                         error = e.message ?: "Could not save the purchase bill"
                     } finally { busy = false }
                 }
             }
-        ) { Text(if (busy) "Saving..." else "Save purchase bill", fontWeight = FontWeight.Bold) }
+        ) { Text(if (busy) "Saving..." else if (editing) "Save changes" else "Save purchase bill", fontWeight = FontWeight.Bold) }
     }
 
     if (pickProduct) ProductSearchDialog(app, products, "Choose product", { pickProduct = false }) { p ->

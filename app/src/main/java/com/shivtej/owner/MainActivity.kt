@@ -278,7 +278,7 @@ fun Shell(app: App) {
         is Route.StaffDetail -> "Staff history"
         Route.Suppliers -> "Suppliers & Purchases"
         is Route.SupplierDetail -> "Supplier"
-        is Route.PurchaseForm -> "New purchase bill"
+        is Route.PurchaseForm -> if (route.billId == null) "New purchase bill" else "Edit purchase bill"
         Route.Printer -> "Bluetooth Printer"
         Route.ShopSettings -> "Shop & Bill Settings"
         Route.BillDesign -> "Bill Design"
@@ -360,7 +360,7 @@ fun Shell(app: App) {
                     is Route.StaffDetail -> StaffDetailScreen(app, nav, route.id)
                     Route.Suppliers -> SuppliersScreen(app, nav)
                     is Route.SupplierDetail -> SupplierDetailScreen(app, nav, route.id)
-                    is Route.PurchaseForm -> PurchaseFormScreen(app, nav, route.supplierId)
+                    is Route.PurchaseForm -> PurchaseFormScreen(app, nav, route.supplierId, route.billId)
                     Route.Printer -> PrinterScreen(app)
                     Route.ShopSettings -> ShopSettingsScreen(app, nav)
                     Route.BillDesign -> BillDesignScreen(app, nav)

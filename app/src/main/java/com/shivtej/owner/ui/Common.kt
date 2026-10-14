@@ -55,7 +55,7 @@ sealed interface Route {
     data class CustomerDetail(val mobile: String) : Route
     object Suppliers : Route
     data class SupplierDetail(val id: String) : Route
-    data class PurchaseForm(val supplierId: String) : Route
+    data class PurchaseForm(val supplierId: String, val billId: String? = null) : Route
     object Printer : Route
     object ShopSettings : Route
     object BillDesign : Route

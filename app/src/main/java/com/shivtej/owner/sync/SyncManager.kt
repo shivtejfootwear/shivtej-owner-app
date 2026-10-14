@@ -58,11 +58,14 @@ class SyncManager(
     private var update6Missing = false
     /** Set while a sync run finds that the update-8 SQL (supplier payment changes, shop details) is not installed yet. */
     private var update8Missing = false
+    /** Set while a sync run finds that the update-10 SQL (purchase bill change and delete) is not installed yet. */
+    private var update10Missing = false
 
     private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
     private val UPDATE4_OPS = setOf("ADD_CUSTOMER_PAYMENT", "SET_CUSTOMER_PHOTO", "SET_SUPPLIER_PHOTO")
     private val UPDATE6_OPS = setOf("DELETE_POS_BILL", "RESTORE_POS_BILL")
     private val UPDATE8_OPS = setOf("SAVE_SUPPLIER_PAYMENT", "SAVE_SHOP")
+    private val UPDATE10_OPS = setOf("SAVE_PURCHASE")
 
     init {
         scope.launch {
@@ -85,6 +88,7 @@ class SyncManager(
         update4Missing = false
         update6Missing = false
         update8Missing = false
+        update10Missing = false
         try {
             withContext(Dispatchers.IO) {
                 // first: a new phone gets the saved shop details before anything is sent, so blank details never overwrite them
@@ -100,6 +104,7 @@ class SyncManager(
                 update4Missing -> "Customer payments, photos and product videos are saved on this phone. Run owner_update_4_media_ledger_tasks.sql in Supabase to share them with the server."
                 update6Missing -> "Bill deletions are saved on this phone. Run owner_update_6_bill_delete.sql and owner_update_6b_bill_restore.sql in Supabase to share them with the server."
                 update8Missing -> "Supplier payment changes, returns and shop details are saved on this phone. Run owner_update_8_shop_and_supplier_edit.sql in Supabase to share them with the server."
+                update10Missing -> "Purchase bill changes and deletions are saved on this phone. Run owner_update_10_purchase_edit.sql in Supabase to share them with the server."
                 else -> null
             }
             state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
@@ -142,7 +147,8 @@ class SyncManager(
                     "UPSERT_STAFF" -> repo.staffSyncedIfIdle(op.refId)
                     "UPSERT_CUSTOMER" -> repo.posCustomerSyncedIfIdle(op.refId)
                     "UPSERT_SUPPLIER" -> repo.supplierSyncedIfIdle(op.refId)
-                    "CREATE_PURCHASE" -> repo.purchaseSynced(op.refId)
+                    "CREATE_PURCHASE" -> repo.purchaseSyncedIfIdle(op.refId)
+                    "SAVE_PURCHASE" -> repo.purchaseSyncedIfIdle(op.refId)
                     "ADD_SUPPLIER_PAYMENT" -> repo.paymentSynced(op.refId)
                     "ADD_CUSTOMER_PAYMENT" -> repo.customerPaymentSynced(op.refId)
                     "SAVE_SUPPLIER_PAYMENT" -> repo.paymentSyncedIfIdle(op.refId)
@@ -166,6 +172,11 @@ class SyncManager(
                 if (e.code == "PGRST202" && op.type in UPDATE8_OPS) {
                     // the update-8 SQL (supplier payment changes, shop details) is not installed yet: same as above
                     update8Missing = true
+                    continue
+                }
+                if (e.code == "PGRST202" && op.type in UPDATE10_OPS) {
+                    // the update-10 SQL (purchase bill change and delete) is not installed yet: same as above
+                    update10Missing = true
                     continue
                 }
                 if (e.isAuth || e.status >= 500 || e.code == "PGRST202") throw e
@@ -244,6 +255,7 @@ class SyncManager(
             "ADD_SUPPLIER_PAYMENT" -> Api.rpc("owner_add_supplier_payment", a(code).put("p", JSONObject(op.payload)))
             "SAVE_SUPPLIER_PAYMENT" -> Api.rpc("owner_save_supplier_payment", a(code).put("p", JSONObject(op.payload)))
             "SAVE_SHOP" -> Api.rpc("owner_save_shop_settings", a(code).put("p", JSONObject(op.payload)))
+            "SAVE_PURCHASE" -> Api.rpc("owner_save_purchase", a(code).put("p", JSONObject(op.payload)))
             "UPDATE_ORDER" -> {
                 val p = JSONObject(op.payload)
                 Api.rpc("owner_update_order", a(code)
