@@ -44,7 +44,10 @@ begin
 
   for it in select value from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) loop
     select * into pr from products where id = it->>'product_id';
-    if found and (c.category is null or lower(coalesce(pr.category, '')) = lower(c.category)) then
+    -- a product counts when the coupon category is one of its categories ("Men, Senior Men" has "Men" and "Senior Men")
+    if found and (c.category is null or exists (
+         select 1 from unnest(string_to_array(coalesce(pr.category, ''), ',')) as x
+          where lower(trim(x)) = lower(trim(c.category)))) then
       v_elig := v_elig + coalesce(pr.price, 0)
                        * greatest(1, least(10, coalesce((it->>'qty')::int, 1)));
     end if;
