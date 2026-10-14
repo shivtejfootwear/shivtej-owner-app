@@ -501,7 +501,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     // ---------------------------------------------------------- shop customers (one row per mobile number)
     /** Adds or edits a customer from the Customers screen. The values typed here replace the saved ones. */
     suspend fun saveCustomer(
-        mobile: String, name: String, address: String, photoPath: String? = null, openingBalance: Double? = null
+        mobile: String, name: String, address: String, photoPath: String? = null, openingBalance: Double? = null,
+        onlineContact: String? = null   // null = keep the saved online contact (used by the bill screen); "" = remove it
     ): PosCustomerE {
         val m = BillMath.normMobile(mobile)
         require(m.length == 10) { "Mobile number must be 10 digits" }
@@ -513,11 +514,19 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         db.withTransaction {
             val old = dao.posCustomer(m)
             val photo = photoPath ?: old?.photoPath ?: ""
+            val online = when {
+                onlineContact == null -> old?.onlineContact.orEmpty()
+                onlineContact.isBlank() -> ""
+                else -> BillMath.normMobile(onlineContact)
+            }
+            require(online.isEmpty() || online.length == 10) { "Online contact must be 10 digits" }
             val c = PosCustomerE(m, name.trim(), address.trim(), old?.createdAt ?: System.currentTimeMillis(), true,
                 photoPath = photo, photoUrl = if (photo.isBlank()) "" else old?.photoUrl ?: "",
-                openingBalance = openingBalance?.let { BillMath.round2(it) } ?: old?.openingBalance ?: 0.0)
+                openingBalance = openingBalance?.let { BillMath.round2(it) } ?: old?.openingBalance ?: 0.0,
+                onlineContact = online)
             dao.putPosCustomer(c)
             enqueue("UPSERT_CUSTOMER", m, JSONObject().put("mobile", m).put("name", c.name).put("address", c.address)
+                .put("online_contact", online)
                 .put("force", true).put("created_at", iso(c.createdAt)))
             // a removal must also reach the server when only the server copy still has a photo
             val removing = photoPath != null && photoPath.isBlank() && !old?.photoUrl.isNullOrBlank()
@@ -1162,9 +1171,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val m = o.str("mobile")
             if (m.isBlank() || m in protectedIds) continue
             val old = dao.posCustomer(m)
+            // the server sends a value only once update 9 is installed and the number was saved there; null = keep the phone's value
+            val online = if (o.has("online_contact") && !o.isNull("online_contact")) o.str("online_contact") else old?.onlineContact.orEmpty()
             list.add(PosCustomerE(m, o.str("name"), o.str("address"), parseTime(o.str("created_at")), false,
                 photoPath = old?.photoPath ?: "", photoUrl = o.str("photo_url").ifBlank { old?.photoUrl ?: "" },
-                openingBalance = old?.openingBalance ?: 0.0))
+                openingBalance = old?.openingBalance ?: 0.0, onlineContact = online))
         }
         dao.putPosCustomers(list)
     }

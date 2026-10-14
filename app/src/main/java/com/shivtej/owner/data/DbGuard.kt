@@ -6,12 +6,12 @@ import android.database.sqlite.SQLiteDatabase
 /**
  * Checks the schema version of the existing database file BEFORE Room opens it, read-only, without changing anything.
  *
- * Supported: no file yet (fresh install), version 0 (empty), and versions 2 to 10 (migrated by the additive steps, data kept).
+ * Supported: no file yet (fresh install), version 0 (empty), and versions 2 to 11 (migrated by the additive steps, data kept).
  * Refused: version 1 (no migration path; Room would have to rebuild it, which would delete data) and any version
  * newer than this app knows (a downgrade). Refused databases are never opened, changed or deleted by this app.
  */
 object DbGuard {
-    private const val CURRENT_VERSION = 10
+    private const val CURRENT_VERSION = 11
 
     /** Returns null when the database may be opened safely, otherwise a message for the owner. */
     fun check(ctx: Context): String? {

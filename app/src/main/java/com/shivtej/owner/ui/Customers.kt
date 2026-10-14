@@ -60,7 +60,9 @@ data class CustRow(
     val oldestDueAt: Long = 0L,         // when the oldest unpaid amount was made (Ledger.OPENING_AT = before the app)
     val openingBalance: Double = 0.0,   // dues from before the app, entered by the owner
     val shop: Boolean = false,          // a shop (offline) customer: saved in the shop list or has shop bills
-    val online: Boolean = false         // an online (website) customer: has a website account or website orders
+    val online: Boolean = false,        // an online (website) customer: has a website account or website orders
+    val offlineContact: String = "",    // the shop number ("" = not a shop customer)
+    val onlineContact: String = ""      // the website number ("" = none); can be the same as the shop number
 )
 
 /** Every customer the phone knows about, merged by mobile number so the same customer never appears twice. */
@@ -77,12 +79,13 @@ fun buildCustRows(
     // has a shop bill, and "online" if it has a website account or a website order. Only the list is split; no data moves.
     val shopMobiles = HashSet<String>()
     val onlineMobiles = HashSet<String>()
+    val posOnline = HashMap<String, String>()   // shop number -> the online contact typed for that customer
     fun acc(raw: String): Acc? {
         val m = BillMath.normMobile(raw)
         if (m.length != 10) return null
         return map.getOrPut(m) { Acc(m) }
     }
-    for (c in posC) acc(c.mobile)?.let { shopMobiles.add(it.mobile); it.name = c.name; it.address = c.address; it.photoPath = c.photoPath; it.photoUrl = c.photoUrl }
+    for (c in posC) acc(c.mobile)?.let { shopMobiles.add(it.mobile); posOnline[it.mobile] = BillMath.normMobile(c.onlineContact).takeIf { x -> x.length == 10 }.orEmpty(); it.name = c.name; it.address = c.address; it.photoPath = c.photoPath; it.photoUrl = c.photoUrl }
     for (c in webC) acc(c.mobile)?.let { onlineMobiles.add(it.mobile); if (it.name.isBlank()) it.name = c.name; if (it.email.isBlank()) it.email = c.email }
     for (b in bills) acc(b.customerMobile)?.let {
         shopMobiles.add(it.mobile)
@@ -101,10 +104,15 @@ fun buildCustRows(
     val openings = openingsOf(posC)
     val sums = Ledger.summaries(bills, pays, ledgerOrders(orders), ledgerReturns(returns), openings)
     return map.values.map {
+        val shopRow = it.mobile in shopMobiles
+        val onlineNo = posOnline[it.mobile].orEmpty()
+        // the online contact: the one typed on the customer, otherwise the number itself when it is a website customer
+        val onlineShown = onlineNo.ifBlank { if (it.mobile in onlineMobiles) it.mobile else "" }
         CustRow(it.mobile, it.name, it.address, it.email, it.count, BillMath.round2(it.spent), it.last,
             outstanding = sums[it.mobile]?.outstanding ?: 0.0, photoPath = it.photoPath, photoUrl = it.photoUrl,
             oldestDueAt = sums[it.mobile]?.oldestDueAt ?: 0L, openingBalance = openings[it.mobile] ?: 0.0,
-            shop = it.mobile in shopMobiles, online = it.mobile in onlineMobiles)
+            shop = shopRow, online = it.mobile in onlineMobiles || onlineNo.isNotBlank(),
+            offlineContact = if (shopRow) it.mobile else "", onlineContact = onlineShown)
     }
         .sortedWith(compareByDescending<CustRow> { it.spent }.thenBy { it.name.lowercase() })
 }
@@ -149,7 +157,8 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
     }
     val shown = byStatus.filter { r ->
         q.isEmpty() ||
-            (digits.isNotEmpty() && q.all { it.isDigit() || it == ' ' || it == '+' } && r.mobile.contains(digits)) ||
+            (digits.isNotEmpty() && q.all { it.isDigit() || it == ' ' || it == '+' } &&
+                (r.mobile.contains(digits) || r.onlineContact.contains(digits))) ||
             r.name.contains(q, true) || r.address.contains(q, true) || r.email.contains(q, true)
     }.let { list ->
         when (sort) {
@@ -231,7 +240,9 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
                                 c.online -> "Online (website) customer"
                                 else -> "Shop (offline) customer"
                             }, fontSize = 11.sp, color = if (c.online) BrandRed else MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(c.mobile + if (c.address.isNotBlank()) " · " + c.address else "", fontSize = 12.sp,
+                            Text("Offline: " + c.offlineContact.ifBlank { "-" } +
+                                (if (c.onlineContact.isNotBlank()) "  ·  Online: " + c.onlineContact else "") +
+                                (if (c.address.isNotBlank()) "  ·  " + c.address else ""), fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                         }
                         Column(horizontalAlignment = Alignment.End) {
@@ -266,8 +277,11 @@ fun CustomerDialog(
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     var name by remember { mutableStateOf(existing?.name ?: "") }
-    var mobile by remember { mutableStateOf(existing?.mobile ?: "") }
+    var mobile by remember { mutableStateOf(if (existing == null || existing.shop) existing?.mobile.orEmpty() else "") }
     var address by remember { mutableStateOf(existing?.address ?: "") }
+    // a website-only customer has no shop number yet: the owner can add one (their website number stays as the online contact)
+    val shopRecord = existing == null || existing.shop
+    var onlineText by remember { mutableStateOf(existing?.onlineContact.orEmpty()) }
     var opening by remember { mutableStateOf(existing?.openingBalance?.takeIf { it != 0.0 }?.let { plainAmount(it) } ?: "") }
 
     // Pick a name and number from the phone's Contacts (asked once, only when the owner taps the button).
@@ -288,7 +302,9 @@ fun CustomerDialog(
     var photoChange by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val m = BillMath.normMobile(mobile)
-    val clash = existing == null && m.length == 10 && m in takenMobiles
+    val onlineNo = BillMath.normMobile(onlineText)
+    val onlineBad = onlineText.isNotBlank() && onlineNo.length != 10
+    val clash = (existing == null || !shopRecord) && m.length == 10 && m in takenMobiles && m != existing?.mobile
     AlertDialog(
         onDismissRequest = onDone,
         title = { Text(if (existing == null) "Add customer" else "Edit customer") },
@@ -297,11 +313,16 @@ fun CustomerDialog(
                 PhotoField("Customer photo (optional)",
                     localPath = (photoChange ?: existing?.photoPath).orEmpty(),
                     remoteUrl = if (photoChange == "") "" else existing?.photoUrl.orEmpty()) { photoChange = it }
-                OutlinedTextField(mobile, { if (existing == null) mobile = it.filter(Char::isDigit).take(10) }, label = { Text("Mobile number") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth(), readOnly = existing != null,
+                OutlinedTextField(mobile, { if (!(shopRecord && existing != null)) mobile = it.filter(Char::isDigit).take(10) },
+                    label = { Text("Offline contact (shop number)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(), readOnly = existing != null && shopRecord,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     isError = mobile.isNotEmpty() && m.length != 10,
                     supportingText = { if (mobile.isNotEmpty() && m.length != 10) Text("Must be 10 digits") })
+                OutlinedTextField(onlineText, { onlineText = it.filter(Char::isDigit).take(12) },
+                    label = { Text("Online contact (website number, optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), isError = onlineBad,
+                    supportingText = { Text(if (onlineBad) "Must be 10 digits" else "Can be the same as the shop number, or empty.", fontSize = 11.sp) })
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(address, { address = it }, label = { Text("City / Address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 if (existing == null) OutlinedButton(onClick = {
@@ -322,14 +343,14 @@ fun CustomerDialog(
         },
         confirmButton = {
             if (clash) TextButton(onClick = { onDone(); onOpen(m) }) { Text("Open customer") }
-            else TextButton(enabled = m.length == 10 && name.isNotBlank(), onClick = {
+            else TextButton(enabled = m.length == 10 && name.isNotBlank() && !onlineBad, onClick = {
                 val openingValue = if (opening.isBlank()) 0.0 else BillMath.parseAmount(opening)
                 if (openingValue == null) {
                     error = "Opening balance must be a number"
                 } else {
                     scope.launch {
                         try {
-                            app.repo.saveCustomer(m, name, address, photoChange, openingValue)
+                            app.repo.saveCustomer(m, name, address, photoChange, openingValue, onlineText)
                             onDone()
                         } catch (e: Exception) { error = e.message ?: "Could not save" }
                     }
@@ -389,7 +410,8 @@ fun CustomerDetailScreen(app: App, nav: Nav, mobile: String) {
                         PersonAvatar(row?.name.orEmpty(), row?.photoPath.orEmpty(), row?.photoUrl.orEmpty(), 56.dp)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(row?.name?.takeIf { it.isNotBlank() } ?: "Customer", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                            Text(mobile, fontSize = 14.sp)
+                            Text("Offline contact: " + (row?.offlineContact?.takeIf { it.isNotBlank() } ?: "not saved (use Edit to add the shop number)"), fontSize = 13.sp)
+                            Text("Online contact: " + (row?.onlineContact?.takeIf { it.isNotBlank() } ?: "none"), fontSize = 13.sp)
                             Text(row?.address?.takeIf { it.isNotBlank() } ?: "No address saved", fontSize = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             row?.email?.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }

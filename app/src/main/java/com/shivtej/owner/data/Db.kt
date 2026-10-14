@@ -102,7 +102,9 @@ data class PosCustomerE(
     @androidx.room.ColumnInfo(defaultValue = "''") val photoPath: String = "",   // added in version 6: profile photo on this phone
     @androidx.room.ColumnInfo(defaultValue = "''") val photoUrl: String = "",    // the same photo on the server once synced
     // added in version 7: dues this customer had BEFORE the app was introduced (kept on this phone, not synced)
-    val openingBalance: Double = 0.0
+    val openingBalance: Double = 0.0,
+    // version 11: the customer's ONLINE (website) contact number, kept apart from the offline (shop) number above; "" = none
+    @androidx.room.ColumnInfo(defaultValue = "''") val onlineContact: String = ""
 )
 
 /** A supplier / distributor the shop buys stock from. */
@@ -466,6 +468,15 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
 }
 
 /**
+ * Version 10 -> 11: a separate online (website) contact number per shop customer. ADD COLUMN only, empty default.
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `pos_customers` ADD COLUMN `onlineContact` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/**
  * Version 9 -> 10: supplier payments can be changed or deleted (deleted = 1 keeps the row but it counts nowhere),
  * and a Return / Claim keeps the goods sent back (itemsJson). ADD COLUMN only, with the same defaults as the entity.
  */
@@ -534,7 +545,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -544,7 +555,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }
