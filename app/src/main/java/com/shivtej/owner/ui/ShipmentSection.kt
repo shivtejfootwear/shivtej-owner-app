@@ -107,7 +107,8 @@ private fun shipMsg(e: Exception): String {
         c.contains("NOT_INDIA_SHIPPING") -> "Shiprocket is only for India addresses."
         c.contains("ORDER_NOT_FOUND") -> "Order not found on the server. Sync and try again."
         c.contains("SHIPROCKET_FAILED") -> "Shiprocket did not accept it now. Try again in a minute."
-        else -> "Could not connect. Check internet and try again."
+        // The code in brackets says what went wrong (a server code such as SERVER, or the phone-side error such as SocketTimeoutException).
+        else -> "Could not connect. Check internet and try again. [${c.ifBlank { (e as? ApiError)?.status?.toString() ?: e.javaClass.simpleName }}]"
     }
 }
 
