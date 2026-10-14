@@ -340,10 +340,15 @@ private fun BrandField(value: String, known: List<String>, onChange: (String) ->
     }
 }
 
-/** Category field: a dropdown of the fixed categories. "Change order" moves them up or down (saved permanently). */
+/**
+ * Category field: tick one or more categories (a product can be in both "Men" and "Senior Men").
+ * The menu stays open while you tick. "Change order" moves the categories up or down (saved permanently).
+ * The value is saved as one text, for example "Men, Senior Men"; the website shows the product under each of them.
+ */
 @Composable
 private fun CategoryField(value: String, categories: List<String>, onChange: (String) -> Unit, onChangeOrder: () -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val selected = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         OutlinedTextField(
             value = value, onValueChange = {}, readOnly = true, singleLine = true,
@@ -354,7 +359,12 @@ private fun CategoryField(value: String, categories: List<String>, onChange: (St
         Box(Modifier.matchParentSize().clickable { open = true })
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             categories.forEach { c ->
-                DropdownMenuItem(text = { Text(c) }, onClick = { onChange(c); open = false })
+                val on = c in selected
+                DropdownMenuItem(text = { Text((if (on) "✓  " else "      ") + c) }, onClick = {
+                    val next = if (on) selected - c else selected + c
+                    // the order of the category list is kept; a name that is not in the list goes at the end
+                    onChange((categories.filter { it in next } + next.filter { it !in categories }).joinToString(", "))
+                })
             }
             DropdownMenuItem(text = { Text("Change order (up / down)") }, onClick = { open = false; onChangeOrder() })
         }
