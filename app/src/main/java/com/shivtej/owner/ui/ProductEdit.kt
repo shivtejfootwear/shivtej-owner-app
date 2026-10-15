@@ -184,7 +184,6 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         VideoList(draft.videos, onAdd = { pickVideos(-1) }, onReplace = { i -> pickVideos(i) })
 
         SectionTitle("Product details")
-        Field("Product name *", draft.name) { draft.name = it }
         Field("Article *", draft.article) { draft.article = it }
         BrandField(draft.brand, brandList) { draft.brand = it }
         CategoryField(draft.category, categories,

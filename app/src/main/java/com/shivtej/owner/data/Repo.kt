@@ -23,6 +23,10 @@ import com.shivtej.owner.util.SupplierMath
 // ------------------------------------------------------------------ models
 data class SizeStock(val size: String, val qty: Int, val barcode: String)
 data class Variant(val colour: String, val images: List<String>, val sizes: List<SizeStock>)
+/** The name shown for a product is brand + article (the separate product name is no longer used). */
+fun titleOf(brand: String, article: String, fallback: String): String =
+    listOf(brand.trim(), article.trim()).filter { it.isNotEmpty() }.joinToString(" ").ifBlank { fallback.trim() }
+
 data class Product(
     val id: String,
     val article: String,
@@ -159,7 +163,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                             .map { SizeStock(it.size, it.qty, it.barcode) }
                     )
                 }.sortedBy { it.colour.lowercase() }
-                Product(p.id, p.article, p.name, p.brand, p.category, p.description, p.mrp, p.price,
+                Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
                     p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList())
             }
         }
@@ -194,7 +198,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 sizes.filter { it.colour == v.colour }.sortedBy { sizeKey(it.size) }
                     .map { SizeStock(it.size, it.qty, it.barcode) })
         }.sortedBy { it.colour.lowercase() }
-        return Product(p.id, p.article, p.name, p.brand, p.category, p.description, p.mrp, p.price,
+        return Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
             p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList())
     }
 
@@ -213,8 +217,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             .put("videos", JSONArray(p.videos))
     }
 
-    suspend fun saveProduct(p: Product, isNew: Boolean) {
-        require(p.name.isNotBlank()) { "Product name is required" }
+    suspend fun saveProduct(p0: Product, isNew: Boolean) {
+        val p = p0.copy(name = titleOf(p0.brand, p0.article, p0.name))
         require(p.article.isNotBlank()) { "Article is required" }
         require(p.price > 0) { "Selling price must be more than 0" }
         require(p.variants.isNotEmpty()) { "Add at least one colour" }
