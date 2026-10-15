@@ -21,7 +21,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -75,10 +78,19 @@ fun PosScreen(app: App, nav: Nav) {
     var error by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
 
+    // The Bluetooth scanner (Netum NT-1228BL, keyboard mode) types the code into whichever box has focus.
+    // The search box keeps focus while no dialog is open, so a scan always lands there.
+    val searchFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val idle = hit == null && unknownCode == null && assignCode == null && picker == null && !scanning
+    LaunchedEffect(idle) { if (idle) { searchFocus.requestFocus(); keyboard?.hide() } }
+
     fun handleCode(code: String) {
+        val c = code.trim()
+        query = ""   // the box is empty for the next scan
         scope.launch {
-            val h = app.repo.lookup(code)
-            if (h != null) hit = h else unknownCode = code.trim()
+            val h = app.repo.lookup(c)
+            if (h != null) hit = h else unknownCode = c
         }
     }
 
@@ -112,7 +124,7 @@ fun PosScreen(app: App, nav: Nav) {
                         trailingIcon = {
                             IconButton(onClick = { if (query.isNotBlank()) handleCode(query) }) { Icon(Icons.Filled.Search, "Find barcode") }
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f).focusRequester(searchFocus)
                     )
                     Spacer(Modifier.width(8.dp))
                     FilledIconButton(

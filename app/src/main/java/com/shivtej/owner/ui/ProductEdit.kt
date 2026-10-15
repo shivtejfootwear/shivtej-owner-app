@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
+import com.shivtej.owner.data.PRODUCT_TYPE_START
 import com.shivtej.owner.data.Product
 import com.shivtej.owner.data.SizeStock
 import com.shivtej.owner.data.Variant
@@ -64,6 +65,7 @@ class ProductDraft(val id: String) {
     var name by mutableStateOf("")
     var brand by mutableStateOf("")
     var category by mutableStateOf("")
+    var productType by mutableStateOf("")
     var description by mutableStateOf("")
     var mrp by mutableStateOf("")
     var price by mutableStateOf("")
@@ -75,6 +77,7 @@ class ProductDraft(val id: String) {
 
     fun fill(p: Product) {
         article = p.article; name = p.name; brand = p.brand; category = p.category; description = p.description
+        productType = p.productType
         mrp = p.mrp.toBigDecimal().stripTrailingZeros().toPlainString()
         price = p.price.toBigDecimal().stripTrailingZeros().toPlainString()
         active = p.active; newItem = p.newItem
@@ -99,7 +102,8 @@ class ProductDraft(val id: String) {
             Variant(v.colour.trim(), v.images.toList(),
                 v.sizes.map { SizeStock(it.size.trim(), it.qty.toIntOrNull() ?: 0, it.codes.firstOrNull() ?: "", it.codes.toList()) })
         },
-        videos.toList()
+        videos.toList(),
+        productType.trim()
     )
 }
 
@@ -122,13 +126,17 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     var scanTarget by remember { mutableStateOf<SizeDraft?>(null) }
     val withCamera = rememberWithCamera()
     var brandList by remember { mutableStateOf<List<String>>(emptyList()) }
+    var typeList by remember { mutableStateOf<List<String>>(PRODUCT_TYPE_START) }
     var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
     var reorderingCategories by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) {
         if (id != null) { app.repo.load(id)?.let { draft.fill(it) }; loaded = true }
     }
-    LaunchedEffect(Unit) { brandList = app.repo.knownBrands() }
+    LaunchedEffect(Unit) {
+        brandList = app.repo.knownBrands()
+        typeList = app.repo.knownProductTypes()
+    }
 
     // ---- image pickers
     var target by remember { mutableStateOf<SnapshotStateList<String>?>(null) }
@@ -203,6 +211,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         SectionTitle("Product details")
         Field("Article *", draft.article) { draft.article = it }
         BrandField(draft.brand, brandList) { draft.brand = it }
+        TypeField(draft.productType, typeList) { draft.productType = it }
         CategoryField(draft.category, categories,
             onChange = { draft.category = it },
             onChangeOrder = { reorderingCategories = true })
@@ -357,6 +366,28 @@ private fun BrandField(value: String, known: List<String>, onChange: (String) ->
             .filter { it.lowercase() != q }.take(8)
     Column {
         Field("Brand", value, onChange = onChange)
+        if (matches.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                Column {
+                    matches.forEach { m ->
+                        Text(m, fontSize = 15.sp,
+                            modifier = Modifier.fillMaxWidth().clickable { onChange(m) }.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Product type field (चप्पल, सैंडल, शूज़ ...): same suggestions as Brand; starter types are always suggested. */
+@Composable
+private fun TypeField(value: String, known: List<String>, onChange: (String) -> Unit) {
+    val q = value.trim().lowercase()
+    val matches = if (q.isEmpty()) emptyList() else
+        (known.filter { it.lowercase().startsWith(q) } + known.filter { it.lowercase().contains(q) && !it.lowercase().startsWith(q) })
+            .filter { it.lowercase() != q }.take(8)
+    Column {
+        Field("Product type (चप्पल / सैंडल / शूज़ ...)", value, onChange = onChange)
         if (matches.isNotEmpty()) {
             Card(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
                 Column {

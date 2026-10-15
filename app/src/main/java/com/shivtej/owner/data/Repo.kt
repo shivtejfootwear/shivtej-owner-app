@@ -28,6 +28,9 @@ data class Variant(val colour: String, val images: List<String>, val sizes: List
 fun titleOf(brand: String, article: String, fallback: String): String =
     listOf(brand.trim(), article.trim()).filter { it.isNotEmpty() }.joinToString(" ").ifBlank { fallback.trim() }
 
+/** Starter suggestions for the Product type field (the owner can type any other type too; it is then suggested next time). */
+val PRODUCT_TYPE_START = listOf("चप्पल", "सैंडल", "शूज़", "लोफर", "फ्लिप फ्लॉप", "क्रॉप्स")
+
 data class Product(
     val id: String,
     val article: String,
@@ -41,7 +44,8 @@ data class Product(
     val newItem: Boolean,
     val images: List<String>,
     val variants: List<Variant>,
-    val videos: List<String> = emptyList()     // product videos (local file or https URL), added in update 4
+    val videos: List<String> = emptyList(),    // product videos (local file or https URL), added in update 4
+    val productType: String = ""               // चप्पल, सैंडल, शूज़ ... (database version 14)
 ) {
     val totalStock: Int get() = variants.sumOf { v -> v.sizes.sumOf { it.qty } }
     val allImages: List<String> get() = images + variants.flatMap { it.images }
@@ -173,7 +177,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     )
                 }.sortedBy { it.colour.lowercase() }
                 Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
-                    p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList())
+                    p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList(), productType = p.productType)
             }
         }
 
@@ -209,7 +213,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pieces, it.colour, it.size, it.barcode)) })
         }.sortedBy { it.colour.lowercase() }
         return Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
-            p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList())
+            p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList(), productType = p.productType)
     }
 
     fun productJson(p: Product): JSONObject {
@@ -222,7 +226,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         }
         return JSONObject()
             .put("id", p.id).put("article", p.article).put("name", p.name)
-            .put("description", p.description).put("brand", p.brand).put("category", p.category)
+            .put("description", p.description).put("brand", p.brand).put("category", p.category).put("product_type", p.productType)
             .put("price", p.price).put("mrp", p.mrp).put("active", p.active).put("new_item", p.newItem)
             .put("images", JSONArray(p.images)).put("colours", cols)
             .put("videos", JSONArray(p.videos))
@@ -258,7 +262,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             }
             val now = System.currentTimeMillis()
             dao.putProduct(ProductE(p.id, p.article.trim(), p.name.trim(), p.brand.trim(), p.category.trim(),
-                p.description.trim(), p.mrp, p.price, p.active, p.newItem, p.images.toJsonText(), now, p.videos.toJsonText()))
+                p.description.trim(), p.mrp, p.price, p.active, p.newItem, p.images.toJsonText(), now, p.videos.toJsonText(),
+                p.productType.trim()))
             dao.delVariants(p.id)
             dao.delSizes(p.id)
             dao.putVariants(p.variants.map { VariantE(p.id, it.colour, it.images.toJsonText()) })
@@ -602,6 +607,13 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun knownBrands(): List<String> =
         dao.allProducts().map { it.brand.trim() }.filter { it.isNotEmpty() }
             .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+
+    /** Product types for the suggestions: the starter list first, then every type already saved on products (A to Z). */
+    suspend fun knownProductTypes(): List<String> {
+        val saved = dao.allProducts().map { it.productType.trim() }.filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+        return (PRODUCT_TYPE_START + saved).distinctBy { it.lowercase() }
+    }
 
     /** True when this mobile number is not a saved shop customer yet (the receipt then offers to save it). */
     suspend fun isNewShopCustomer(mobile: String): Boolean {
@@ -1168,7 +1180,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             if (o.isNull("new_item")) false else o.optBoolean("new_item", false),
             (o.optJSONArray("images") ?: JSONArray()).strings().toJsonText(),
             parseTime(o.str("updated_at")),
-            (o.optJSONArray("videos") ?: JSONArray()).strings().toJsonText()
+            (o.optJSONArray("videos") ?: JSONArray()).strings().toJsonText(),
+            if (o.has("product_type")) o.str("product_type").trim() else ""   // not sent yet by the server: kept locally
         )
         val topSizes = (o.optJSONArray("sizes") ?: JSONArray()).strings()
         val vs = ArrayList<VariantE>()
@@ -1254,7 +1267,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 if (id.isBlank() || id in protectedIds) continue
                 val (pe, vs, ss) = parseProduct(o)
                 // upserts only: a size or colour missing from the server is kept here, never deleted (its stock is not lost)
-                dao.putProduct(pe)
+                // a server copy without product_type keeps the type already saved on this phone
+                dao.putProduct(if (o.has("product_type")) pe else pe.copy(productType = dao.product(id)?.productType ?: ""))
                 dao.putVariants(vs); dao.putSizes(ss)
                 // upsert only: pieces this phone already has stay; the server's list adds the rest
                 val pieces = parsePieces(o)

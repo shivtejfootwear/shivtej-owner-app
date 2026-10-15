@@ -21,7 +21,9 @@ data class ProductE(
     val images: String,      // JSON array of strings (local absolute path or https url)
     val updatedAt: Long,
     // ---- added in database version 6 (product videos; empty = no videos)
-    @androidx.room.ColumnInfo(defaultValue = "''") val videos: String = ""   // JSON array of strings (local path or https url)
+    @androidx.room.ColumnInfo(defaultValue = "''") val videos: String = "",   // JSON array of strings (local path or https url)
+    // ---- added in database version 14 (product type: चप्पल, सैंडल, शूज़ ... ; empty = not set)
+    @androidx.room.ColumnInfo(defaultValue = "''") val productType: String = ""
 )
 
 @Entity(tableName = "variants", primaryKeys = ["productId", "colour"])
@@ -572,6 +574,13 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/** Version 13 -> 14: product type (चप्पल, सैंडल, शूज़ ...) on each product. Only one column is added; no data is changed. */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `products` ADD COLUMN `productType` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
 /** Version 12 -> 13: the piece_barcodes table (one barcode per piece). Only a new table is added; no data is changed. */
 val MIGRATION_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -585,7 +594,7 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class, PieceBarcodeE::class],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -595,7 +604,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }
