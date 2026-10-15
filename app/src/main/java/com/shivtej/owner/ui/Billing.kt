@@ -86,7 +86,8 @@ fun PosScreen(app: App, nav: Nav) {
         val q = query.trim().lowercase()
         products.filter { p ->
             p.active && (listOf(p.name, p.article, p.brand, p.category).any { it.lowercase().contains(q) } ||
-                p.variants.any { v -> v.colour.lowercase().contains(q) || v.sizes.any { it.barcode.lowercase() == q } })
+                p.variants.any { v -> v.colour.lowercase().contains(q) || v.sizes.any { s ->
+                    (listOf(s.barcode) + s.barcodes).any { it.lowercase() == q } } })
         }.take(20)
     }
 
@@ -307,14 +308,14 @@ fun PosScreen(app: App, nav: Nav) {
             title = { Text("Item found") },
             text = {
                 Column {
+                    Text("Brand: ${h.product.brand.ifBlank { "-" }}")
                     Text("Article: ${h.product.article}")
-                    Text("Product: ${h.product.name}")
                     Text("Colour: ${h.colour}")
                     Text("Size: ${h.size.size}")
                     if (h.product.mrp > h.product.price) Text("MRP: ${money(app, h.product.mrp)}")
                     Text("Selling price: ${money(app, maxOf(h.product.mrp, h.product.price))}", fontWeight = FontWeight.Bold)
                     Text("Stock: ${h.size.qty}", color = if (h.size.qty > 0) GreenOk else RedOut)
-                    Text("Barcode: ${h.size.barcode}")
+                    Text("Barcode: ${h.scanned.ifBlank { h.size.barcode }}")
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
                         IconButton(onClick = { if (qty > 1) qty-- }) { Icon(Icons.Filled.Remove, "Less") }
                         Text("$qty", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -325,7 +326,7 @@ fun PosScreen(app: App, nav: Nav) {
             confirmButton = {
                 TextButton(enabled = h.size.qty > 0, onClick = {
                     val err = cart.add(CartLine(h.product.id, h.product.article, h.product.name, h.colour, h.size.size,
-                        h.size.barcode, qty, maxOf(h.product.mrp, h.product.price), h.size.qty, h.product.mrp))
+                        h.scanned.ifBlank { h.size.barcode }, qty, maxOf(h.product.mrp, h.product.price), h.size.qty, h.product.mrp))
                     if (err != null) toast(ctx, err) else { hit = null; query = "" }
                 }) { Text("Add to bill") }
             },

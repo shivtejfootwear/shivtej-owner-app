@@ -36,6 +36,15 @@ data class SizeE(
     val barcode: String
 )
 
+/** One row per physical piece barcode (added in database version 13). A size with qty 3 can have 3 barcodes. */
+@Entity(tableName = "piece_barcodes", indices = [Index(value = ["productId", "colour", "size"])])
+data class PieceBarcodeE(
+    @PrimaryKey val barcode: String,
+    val productId: String,
+    val colour: String,
+    val size: String
+)
+
 @Entity(tableName = "ops")
 data class OpE(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -246,11 +255,21 @@ interface AppDao {
     @Query("SELECT * FROM products ORDER BY name COLLATE NOCASE") fun observeProducts(): Flow<List<ProductE>>
     @Query("SELECT * FROM variants") fun observeVariants(): Flow<List<VariantE>>
     @Query("SELECT * FROM size_stock") fun observeSizes(): Flow<List<SizeE>>
+    @Query("SELECT * FROM piece_barcodes") fun observePieces(): Flow<List<PieceBarcodeE>>
     @Query("SELECT * FROM products WHERE id = :id") suspend fun product(id: String): ProductE?
     @Query("SELECT * FROM products") suspend fun allProducts(): List<ProductE>
     @Query("SELECT * FROM variants WHERE productId = :id") suspend fun variantsOf(id: String): List<VariantE>
     @Query("SELECT * FROM size_stock WHERE productId = :id") suspend fun sizesOf(id: String): List<SizeE>
     @Query("SELECT * FROM size_stock WHERE barcode = :code") suspend fun sizesByBarcode(code: String): List<SizeE>
+    @Query("SELECT * FROM piece_barcodes WHERE productId = :id") suspend fun piecesOf(id: String): List<PieceBarcodeE>
+    @Query("SELECT * FROM piece_barcodes WHERE barcode = :code") suspend fun pieceByBarcode(code: String): PieceBarcodeE?
+    @Query("SELECT * FROM piece_barcodes WHERE productId = :pid AND colour = :colour AND size = :size")
+    suspend fun piecesOfSize(pid: String, colour: String, size: String): List<PieceBarcodeE>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putPieces(p: List<PieceBarcodeE>)
+    @Query("DELETE FROM piece_barcodes WHERE productId = :id") suspend fun delPieces(id: String)
+    @Query("DELETE FROM piece_barcodes WHERE barcode = :code") suspend fun delPiece(code: String)
+    @Query("UPDATE size_stock SET barcode = :code WHERE productId = :pid AND colour = :colour AND size = :size")
+    suspend fun setSizeBarcode(pid: String, colour: String, size: String, code: String)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putProduct(p: ProductE)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putVariants(v: List<VariantE>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSizes(s: List<SizeE>)
@@ -553,12 +572,20 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/** Version 12 -> 13: the piece_barcodes table (one barcode per piece). Only a new table is added; no data is changed. */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `piece_barcodes` (`barcode` TEXT NOT NULL, `productId` TEXT NOT NULL, `colour` TEXT NOT NULL, `size` TEXT NOT NULL, PRIMARY KEY(`barcode`))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_piece_barcodes_productId_colour_size` ON `piece_barcodes` (`productId`, `colour`, `size`)")
+    }
+}
+
 @Database(
     entities = [ProductE::class, VariantE::class, SizeE::class, OpE::class, BillE::class,
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
-        CustomerPaymentE::class, TaskE::class],
-    version = 12,
+        CustomerPaymentE::class, TaskE::class, PieceBarcodeE::class],
+    version = 13,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -568,7 +595,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }

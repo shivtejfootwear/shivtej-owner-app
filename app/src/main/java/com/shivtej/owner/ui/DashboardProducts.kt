@@ -53,7 +53,7 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
     val shown = products.filter { p ->
         val q = query.trim().lowercase()
         val matches = q.isEmpty() || listOf(p.name, p.article, p.brand, p.category).any { it.lowercase().contains(q) } ||
-            p.variants.any { v -> v.colour.lowercase().contains(q) || v.sizes.any { it.barcode.lowercase().contains(q) } }
+            p.variants.any { v -> v.colour.lowercase().contains(q) || v.sizes.any { s -> (s.barcodes + s.barcode).any { it.lowercase().contains(q) } } }
         val ok = when (filter) {
             "active" -> p.active
             "inactive" -> !p.active

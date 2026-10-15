@@ -36,10 +36,21 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-class SizeDraft(size: String = "", qty: String = "0", barcode: String = "") {
+/** One size of one colour. Every piece has its own barcode: qty 3 means 3 barcodes in [codes]. */
+class SizeDraft(size: String = "", qty: String = "0", initial: List<String> = emptyList()) {
     var size by mutableStateOf(size)
     var qty by mutableStateOf(qty)
-    var barcode by mutableStateOf(barcode)
+    val codes = mutableStateListOf<String>().apply { addAll(initial.map { it.trim() }.filter { it.isNotEmpty() }) }
+}
+
+/** Makes the missing piece barcodes of one size, so the size has one barcode per piece (qty). */
+private suspend fun topUpCodes(app: App, s: SizeDraft, taken: MutableSet<String>) {
+    val want = s.qty.toIntOrNull() ?: 0
+    while (s.codes.size < want) {
+        val b = app.repo.newBarcode(taken)
+        taken.add(b)
+        s.codes.add(b)
+    }
 }
 
 class VariantDraft(colour: String = "", images: List<String> = emptyList(), sizes: List<SizeDraft> = emptyList()) {
@@ -71,16 +82,22 @@ class ProductDraft(val id: String) {
         videos.clear(); videos.addAll(p.videos)
         variants.clear()
         p.variants.forEach { v ->
-            variants.add(VariantDraft(v.colour, v.images, v.sizes.map { SizeDraft(it.size, it.qty.toString(), it.barcode) }))
+            variants.add(VariantDraft(v.colour, v.images, v.sizes.map {
+                SizeDraft(it.size, it.qty.toString(), it.barcodes.ifEmpty { listOfNotNull(it.barcode.takeIf { b -> b.isNotBlank() }) })
+            }))
         }
     }
+
+    /** Every barcode already on this product (so new ones never repeat them). */
+    fun takenCodes(): MutableSet<String> =
+        variants.flatMap { it.sizes }.flatMap { it.codes }.map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
 
     fun build() = Product(
         id, article.trim(), name.trim(), brand.trim(), category.trim(), description.trim(),
         mrp.toDoubleOrNull() ?: 0.0, price.toDoubleOrNull() ?: 0.0, active, newItem, images.toList(),
         variants.map { v ->
             Variant(v.colour.trim(), v.images.toList(),
-                v.sizes.map { SizeStock(it.size.trim(), it.qty.toIntOrNull() ?: 0, it.barcode.trim()) })
+                v.sizes.map { SizeStock(it.size.trim(), it.qty.toIntOrNull() ?: 0, it.codes.firstOrNull() ?: "", it.codes.toList()) })
         },
         videos.toList()
     )
@@ -220,22 +237,32 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                     Spacer(Modifier.height(8.dp))
                     Text("Sizes", fontWeight = FontWeight.SemiBold)
                     v.sizes.forEach { s ->
-                        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(s.size, { s.size = it }, label = { Text("Size") }, singleLine = true,
-                                modifier = Modifier.width(78.dp))
-                            Spacer(Modifier.width(6.dp))
-                            OutlinedTextField(s.qty, { s.qty = it.filter(Char::isDigit) }, label = { Text("Qty") }, singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.width(78.dp))
-                            Spacer(Modifier.width(6.dp))
-                            OutlinedTextField(s.barcode, { s.barcode = it }, label = { Text("Barcode") }, singleLine = true,
-                                modifier = Modifier.weight(1f))
-                            IconButton(onClick = { withCamera { scanTarget = s } }) { Icon(Icons.Filled.QrCodeScanner, "Scan barcode") }
-                            IconButton(onClick = {
-                                if ((s.qty.toIntOrNull() ?: 0) > 0)
-                                    pendingRemove = "Remove size ${s.size} (${s.qty} in stock) from ${v.colour}?" to { v.sizes.remove(s); Unit }
-                                else v.sizes.remove(s)
-                            }) { Icon(Icons.Filled.Close, "Remove size") }
+                        Column(Modifier.padding(top = 6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(s.size, { s.size = it }, label = { Text("Size") }, singleLine = true,
+                                    modifier = Modifier.width(78.dp))
+                                Spacer(Modifier.width(6.dp))
+                                OutlinedTextField(s.qty, { s.qty = it.filter(Char::isDigit) }, label = { Text("Qty") }, singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.width(78.dp))
+                                Spacer(Modifier.weight(1f))
+                                IconButton(onClick = { withCamera { scanTarget = s } }) { Icon(Icons.Filled.QrCodeScanner, "Scan barcode") }
+                                IconButton(onClick = {
+                                    if ((s.qty.toIntOrNull() ?: 0) > 0)
+                                        pendingRemove = "Remove size ${s.size} (${s.qty} in stock) from ${v.colour}?" to { v.sizes.remove(s); Unit }
+                                    else v.sizes.remove(s)
+                                }) { Icon(Icons.Filled.Close, "Remove size") }
+                            }
+                            // one barcode per piece: qty 3 = 3 barcodes, each scanned or made separately
+                            val want = s.qty.toIntOrNull() ?: 0
+                            Text("Barcodes: ${s.codes.size} of $want pieces", fontSize = 12.sp,
+                                color = if (s.codes.size == want) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+                            s.codes.forEach { code ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(code, fontSize = 14.sp, modifier = Modifier.weight(1f).padding(start = 4.dp))
+                                    IconButton(onClick = { s.codes.remove(code) }) { Icon(Icons.Filled.Close, "Remove barcode") }
+                                }
+                            }
                         }
                     }
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -247,12 +274,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                         }
                     }
                     TextButton(onClick = {
-                        // generate a barcode for every size of this colour that has none
+                        // make the missing piece barcodes of every size of this colour (up to its qty)
                         scope.launch {
-                            val taken = draft.variants.flatMap { it.sizes }.map { it.barcode.trim() }.filter { it.isNotEmpty() }.toMutableSet()
-                            v.sizes.forEach { s ->
-                                if (s.barcode.isBlank()) { val b = app.repo.newBarcode(taken); taken.add(b); s.barcode = b }
-                            }
+                            val taken = draft.takenCodes()
+                            v.sizes.forEach { s -> topUpCodes(app, s, taken) }
                         }
                     }) { Text("Generate missing barcodes") }
                 }
@@ -269,10 +294,8 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
             onClick = {
                 scope.launch {
                     try {
-                        val taken = draft.variants.flatMap { it.sizes }.map { it.barcode.trim() }.filter { it.isNotEmpty() }.toMutableSet()
-                        draft.variants.forEach { v -> v.sizes.forEach { s ->
-                            if (s.barcode.isBlank()) { val b = app.repo.newBarcode(taken); taken.add(b); s.barcode = b }
-                        } }
+                        val taken = draft.takenCodes()
+                        draft.variants.forEach { v -> v.sizes.forEach { s -> topUpCodes(app, s, taken) } }
                         app.repo.saveProduct(draft.build(), isNew = id == null)
                         toast(ctx, "Saved")
                         nav.back()
@@ -301,7 +324,15 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         ConfirmDialog("Remove?", msg, "Remove", { action() }, { pendingRemove = null })
     }
     scanTarget?.let { s ->
-        ScannerDialog(onResult = { s.barcode = it; scanTarget = null }, onDismiss = { scanTarget = null })
+        ScannerDialog(onResult = { code ->
+            val c = code.trim()
+            when {
+                c.isEmpty() -> Unit
+                s.codes.contains(c) -> toast(ctx, "This barcode is already on this size")
+                else -> s.codes.add(c)
+            }
+            scanTarget = null
+        }, onDismiss = { scanTarget = null })
     }
 }
 

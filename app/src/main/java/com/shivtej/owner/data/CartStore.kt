@@ -87,8 +87,12 @@ class CartStore(private val prefs: Prefs) {
             val cur = lines[i]
             val q = cur.qty + line.qty
             if (q > line.maxQty) return "Only ${line.maxQty} in stock"
-            // the selling rate the owner already typed for this item is kept
-            lines[i] = cur.copy(qty = q, maxQty = line.maxQty, mrp = if (line.mrp > 0.0) line.mrp else cur.mrp)
+            // the selling rate the owner already typed for this item is kept.
+            // Every scanned piece keeps its own barcode on the line (comma-separated), so each one leaves the stock on sale.
+            val codes = (cur.barcode.split(',') + line.barcode.split(','))
+                .map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(",")
+            lines[i] = cur.copy(qty = q, maxQty = line.maxQty, barcode = codes,
+                mrp = if (line.mrp > 0.0) line.mrp else cur.mrp)
         } else {
             if (line.qty > line.maxQty) return "Only ${line.maxQty} in stock"
             lines.add(line)

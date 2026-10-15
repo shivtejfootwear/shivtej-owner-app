@@ -65,7 +65,7 @@ private fun InventoryTab(app: App, initialFilter: String) {
 
     val rows = products.flatMap { p -> p.variants.flatMap { v -> v.sizes.map { StockRow(p, v, it) } } }.filter { r ->
         val q = query.trim().lowercase()
-        val m = q.isEmpty() || listOf(r.p.name, r.p.article, r.p.brand, r.v.colour, r.s.size, r.s.barcode).any { it.lowercase().contains(q) }
+        val m = q.isEmpty() || listOf(r.p.name, r.p.article, r.p.brand, r.v.colour, r.s.size, (r.s.barcodes + r.s.barcode).joinToString(" ")).any { it.lowercase().contains(q) }
         val f = when (filter) { "low" -> r.s.qty in 1..low; "out" -> r.s.qty <= 0; else -> true }
         val sz = sizeFilter == "all" || r.s.size == sizeFilter
         m && f && sz
@@ -85,7 +85,7 @@ private fun InventoryTab(app: App, initialFilter: String) {
                     Column(Modifier.weight(1f)) {
                         Text("${r.p.article} · ${r.p.name}", fontWeight = FontWeight.SemiBold, maxLines = 1)
                         Text("${r.v.colour} / Size ${r.s.size}", fontSize = 13.sp)
-                        Text("Barcode: ${r.s.barcode.ifBlank { "-" }}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Barcodes: ${r.s.barcodes.size} of ${r.s.qty} pieces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("${r.s.qty}", fontSize = 22.sp, fontWeight = FontWeight.Bold)

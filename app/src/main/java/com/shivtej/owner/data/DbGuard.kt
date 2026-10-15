@@ -11,7 +11,7 @@ import android.database.sqlite.SQLiteDatabase
  * newer than this app knows (a downgrade). Refused databases are never opened, changed or deleted by this app.
  */
 object DbGuard {
-    private const val CURRENT_VERSION = 12
+    private const val CURRENT_VERSION = 13
 
     /** Returns null when the database may be opened safely, otherwise a message for the owner. */
     fun check(ctx: Context): String? {

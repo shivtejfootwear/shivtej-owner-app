@@ -21,7 +21,8 @@ import com.shivtej.owner.util.PurchaseAmt
 import com.shivtej.owner.util.SupplierMath
 
 // ------------------------------------------------------------------ models
-data class SizeStock(val size: String, val qty: Int, val barcode: String)
+/** barcode = the size's first barcode (kept for older code); barcodes = every piece barcode of this size. */
+data class SizeStock(val size: String, val qty: Int, val barcode: String, val barcodes: List<String> = emptyList())
 data class Variant(val colour: String, val images: List<String>, val sizes: List<SizeStock>)
 /** The name shown for a product is brand + article (the separate product name is no longer used). */
 fun titleOf(brand: String, article: String, fallback: String): String =
@@ -46,7 +47,14 @@ data class Product(
     val allImages: List<String> get() = images + variants.flatMap { it.images }
 }
 
-data class Hit(val product: Product, val colour: String, val size: SizeStock)
+/** scanned = the barcode that was scanned (one piece), "" when found by search. */
+data class Hit(val product: Product, val colour: String, val size: SizeStock, val scanned: String = "")
+
+/** All piece barcodes of one size. When none exist yet, the old single barcode of the size is used. */
+fun codesOf(pieces: List<PieceBarcodeE>, colour: String, size: String, fallback: String): List<String> {
+    val list = pieces.filter { it.colour == colour && it.size == size }.map { it.barcode }.sorted()
+    return if (list.isNotEmpty()) list else listOfNotNull(fallback.takeIf { it.isNotBlank() })
+}
 
 data class CartLine(
     val productId: String,
@@ -151,16 +159,17 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     var onChanged: () -> Unit = {}
 
     val products: Flow<List<Product>> =
-        combine(dao.observeProducts(), dao.observeVariants(), dao.observeSizes()) { ps, vs, ss ->
+        combine(dao.observeProducts(), dao.observeVariants(), dao.observeSizes(), dao.observePieces()) { ps, vs, ss, pcs ->
             val vmap = vs.groupBy { it.productId }
             val smap = ss.groupBy { it.productId }
+            val pmap = pcs.groupBy { it.productId }
             ps.map { p ->
                 val sizes = smap[p.id] ?: emptyList()
                 val variants = (vmap[p.id] ?: emptyList()).map { v ->
                     Variant(
                         v.colour, v.images.toStrList(),
                         sizes.filter { it.colour == v.colour }.sortedBy { sizeKey(it.size) }
-                            .map { SizeStock(it.size, it.qty, it.barcode) }
+                            .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pmap[p.id] ?: emptyList(), it.colour, it.size, it.barcode)) }
                     )
                 }.sortedBy { it.colour.lowercase() }
                 Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
@@ -193,10 +202,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun load(id: String): Product? {
         val p = dao.product(id) ?: return null
         val sizes = dao.sizesOf(id)
+        val pieces = dao.piecesOf(id)
         val vars = dao.variantsOf(id).map { v ->
             Variant(v.colour, v.images.toStrList(),
                 sizes.filter { it.colour == v.colour }.sortedBy { sizeKey(it.size) }
-                    .map { SizeStock(it.size, it.qty, it.barcode) })
+                    .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pieces, it.colour, it.size, it.barcode)) })
         }.sortedBy { it.colour.lowercase() }
         return Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
             p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList())
@@ -206,7 +216,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         val cols = JSONArray()
         for (v in p.variants) {
             val sizes = JSONArray()
-            for (s in v.sizes) sizes.put(JSONObject().put("size", s.size).put("qty", s.qty).put("barcode", s.barcode))
+            for (s in v.sizes) sizes.put(JSONObject().put("size", s.size).put("qty", s.qty).put("barcode", s.barcode)
+                .put("barcodes", JSONArray(s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) })))
             cols.put(JSONObject().put("name", v.colour).put("images", JSONArray(v.images)).put("sizes", sizes))
         }
         return JSONObject()
@@ -229,10 +240,13 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             require(v.sizes.map { it.size.trim() }.toSet().size == v.sizes.size) { "Duplicate size in ${v.colour}" }
             for (s in v.sizes) {
                 require(s.size.isNotBlank()) { "Size is required in ${v.colour}" }
-                if (s.barcode.isBlank()) continue
-                require(seen.add(s.barcode)) { "Barcode ${s.barcode} is used twice in this product" }
-                val others = dao.sizesByBarcode(s.barcode).filter { it.productId != p.id }
-                require(others.isEmpty()) { "Barcode ${s.barcode} already belongs to another product" }
+                for (code in s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }) {
+                    require(seen.add(code)) { "Barcode $code is used twice in this product" }
+                    val taken = dao.pieceByBarcode(code)
+                    require(taken == null || taken.productId == p.id) { "Barcode $code already belongs to another product" }
+                    val others = dao.sizesByBarcode(code).filter { it.productId != p.id }
+                    require(others.isEmpty()) { "Barcode $code already belongs to another product" }
+                }
             }
         }
         db.withTransaction {
@@ -248,8 +262,13 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             dao.delVariants(p.id)
             dao.delSizes(p.id)
             dao.putVariants(p.variants.map { VariantE(p.id, it.colour, it.images.toJsonText()) })
+            // every piece barcode of every size is stored, one row per piece
+            val codesBySize = p.variants.flatMap { v -> v.sizes.map { s ->
+                Triple(v.colour, s.size, s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }) } }
+            dao.delPieces(p.id)
+            dao.putPieces(codesBySize.flatMap { (colour, size, codes) -> codes.map { PieceBarcodeE(it, p.id, colour, size) } })
             dao.putSizes(p.variants.flatMap { v ->
-                v.sizes.map { SizeE(p.id, v.colour, it.size, it.qty.coerceAtLeast(0), it.barcode) }
+                v.sizes.map { SizeE(p.id, v.colour, it.size, it.qty.coerceAtLeast(0), it.barcodes.firstOrNull() ?: it.barcode) }
             })
             enqueue(if (isNew) "ADD_PRODUCT" else "UPDATE_PRODUCT", p.id, productJson(p))
             for (v in p.variants) for (s in v.sizes) {
@@ -279,7 +298,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val art = dao.product(id)?.article ?: ""
             for (s in dao.sizesOf(id)) if (s.qty != 0) dao.putLog(StockLogE(UUID.randomUUID().toString(), id, art,
                 s.colour, s.size, -s.qty, 0, "PRODUCT_DELETED", now, true))
-            dao.delProduct(id); dao.delVariants(id); dao.delSizes(id)
+            dao.delProduct(id); dao.delVariants(id); dao.delSizes(id); dao.delPieces(id)
             enqueue("DELETE_PRODUCT", id, JSONObject().put("id", id))
         }
         onChanged()
@@ -288,27 +307,33 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun newBarcode(taken: Set<String> = emptySet()): String {
         repeat(60) {
             val c = prefs.barcodePrefix + (10000000..99999999).random()
-            if (c !in taken && dao.sizesByBarcode(c).isEmpty()) return c
+            if (c !in taken && dao.sizesByBarcode(c).isEmpty() && dao.pieceByBarcode(c) == null) return c
         }
         return prefs.barcodePrefix + System.currentTimeMillis()
     }
 
     suspend fun lookup(code: String): Hit? {
-        val s = dao.sizesByBarcode(code.trim()).firstOrNull() ?: return null
+        val c = code.trim()
+        val piece = dao.pieceByBarcode(c)
+        val s = if (piece != null) dao.sizesOf(piece.productId).firstOrNull { it.colour == piece.colour && it.size == piece.size }
+                else dao.sizesByBarcode(c).firstOrNull()
+        if (s == null) return null
         val p = load(s.productId) ?: return null
         val size = p.variants.firstOrNull { it.colour == s.colour }?.sizes?.firstOrNull { it.size == s.size } ?: return null
-        return Hit(p, s.colour, size)
+        return Hit(p, s.colour, size, c)
     }
 
     suspend fun assignBarcode(pid: String, colour: String, size: String, code: String) {
         val c = code.trim()
         require(c.isNotEmpty()) { "Barcode is empty" }
         val clash = dao.sizesByBarcode(c).filter { !(it.productId == pid && it.colour == colour && it.size == size) }
-        require(clash.isEmpty()) { "This barcode is already assigned to another item" }
+        val pieceClash = dao.pieceByBarcode(c)?.let { !(it.productId == pid && it.colour == colour && it.size == size) } ?: false
+        require(clash.isEmpty() && !pieceClash) { "This barcode is already assigned to another item" }
         val cur = dao.sizesOf(pid).firstOrNull { it.colour == colour && it.size == size }
         requireNotNull(cur) { "Item not found" }
         db.withTransaction {
-            dao.putSizes(listOf(cur.copy(barcode = c)))
+            dao.putPieces(listOf(PieceBarcodeE(c, pid, colour, size)))
+            dao.putSizes(listOf(cur.copy(barcode = if (cur.barcode.isBlank()) c else cur.barcode)))
             val p = load(pid)!!
             enqueue("BARCODE_ASSIGNMENT", pid, productJson(p))
         }
@@ -353,6 +378,33 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
      * same id on the server). New in update 2: customer, sales person, MRP / discount / tax / payment details and
      * the shop + design snapshot are saved with the bill. Discount = MRP - selling rate (never an item column).
      */
+    /** One piece sold or taken out: its barcode leaves the stock (a sold barcode can not be sold again).
+     *  The scanned barcodes (comma-separated on the bill line) go first; if there are none, any barcodes of that size go. */
+    private suspend fun consumePieces(pid: String, colour: String, size: String, qty: Int, scanned: String) {
+        val left = dao.piecesOfSize(pid, colour, size).sortedBy { it.barcode }.toMutableList()
+        var need = qty
+        for (code in scanned.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+            left.firstOrNull { it.barcode == code }?.let { left.remove(it); dao.delPiece(it.barcode); need-- }
+        }
+        while (need > 0 && left.isNotEmpty()) {
+            val piece = left.removeAt(0)
+            dao.delPiece(piece.barcode)
+            need--
+        }
+        // the size's main barcode follows the pieces still in stock
+        dao.setSizeBarcode(pid, colour, size, left.firstOrNull()?.barcode ?: "")
+    }
+
+    /** A piece comes back into stock (a bill was deleted): its barcode is put back, unless it is already in use. */
+    private suspend fun returnPiece(pid: String, colour: String, size: String, code: String) {
+        if (code.isBlank()) return
+        if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) return
+        dao.putPieces(listOf(PieceBarcodeE(code, pid, colour, size)))
+        if (dao.sizesOf(pid).firstOrNull { it.colour == colour && it.size == size }?.barcode.isNullOrBlank()) {
+            dao.setSizeBarcode(pid, colour, size, code)
+        }
+    }
+
     suspend fun createBill(lines: List<CartLine>, method: String, extra: BillExtra = BillExtra()): BillE {
         require(lines.isNotEmpty()) { "Bill is empty" }
         val id = UUID.randomUUID().toString()
@@ -380,6 +432,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             lines.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode)
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.putLog(StockLogE("$id#${i + 1}", l.productId, l.article, l.colour, l.size,
                     after - before, after, "POS_SALE", now, false))
@@ -434,6 +487,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 val before = dao.qtyOf(l.productId, l.colour, l.size)
                 if (before == null) { notRestored++; return@forEachIndexed }
                 dao.adjust(l.productId, l.colour, l.size, l.qty)
+                l.barcode.split(',').forEach { returnPiece(l.productId, l.colour, l.size, it.trim()) }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$billId#del${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_DELETE", now, false))
@@ -466,6 +520,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             items.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode)
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$billId#res${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_RESTORE", now, false))
@@ -1002,6 +1057,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             outLines.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
+                consumePieces(l.productId, l.colour, l.size, l.qty, "") // the pieces given out leave the barcode stock
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.putLog(StockLogE("RET:$id:out:${i + 1}", l.productId, l.article, l.colour, l.size,
                     after - before, after, "EXCHANGE_OUT", now, false))
@@ -1142,6 +1198,30 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return Triple(pe, vs.distinctBy { it.colour }, ss.distinctBy { it.colour + "|" + it.size })
     }
 
+    /** Every piece barcode the server sends for this product ("barcodes" list of each size). */
+    private fun parsePieces(o: JSONObject): List<PieceBarcodeE> {
+        val id = o.str("id")
+        val out = ArrayList<PieceBarcodeE>()
+        val cols = o.optJSONArray("colours") ?: return out
+        for (i in 0 until cols.length()) {
+            val c = cols.opt(i) as? JSONObject ?: continue
+            val name = c.str("name").ifBlank { c.str("colour") }
+            if (name.isBlank()) continue
+            val sa = c.optJSONArray("sizes") ?: continue
+            for (j in 0 until sa.length()) {
+                val s = sa.opt(j) as? JSONObject ?: continue
+                val sz = s.str("size")
+                if (sz.isBlank()) continue
+                val codes = s.optJSONArray("barcodes") ?: continue
+                for (k in 0 until codes.length()) {
+                    val code = codes.optString(k, "").trim()
+                    if (code.isNotEmpty() && code != "null") out.add(PieceBarcodeE(code, id, name, sz))
+                }
+            }
+        }
+        return out
+    }
+
     /** Products whose stock a still-waiting bill / return has already changed on this phone. */
     private fun productsTouchedBy(op: OpE): List<String> {
         return try {
@@ -1176,6 +1256,9 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 // upserts only: a size or colour missing from the server is kept here, never deleted (its stock is not lost)
                 dao.putProduct(pe)
                 dao.putVariants(vs); dao.putSizes(ss)
+                // upsert only: pieces this phone already has stay; the server's list adds the rest
+                val pieces = parsePieces(o)
+                if (pieces.isNotEmpty()) dao.putPieces(pieces)
             }
         }
     }
