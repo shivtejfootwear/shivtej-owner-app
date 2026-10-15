@@ -1,18 +1,24 @@
-// Shivtej Footwear - starts an online payment for one order (Supabase Edge Function).
+// Shivtej Footwear - starts the online payment for a NEW website order (Supabase Edge Function).
 //
 // POST /functions/v1/create-payment
-//   { "order_id": "SW...", "mobile": "9876543210" }
-//   -> 200 { key_id, razorpay_order_id, amount, currency, name, mobile, order_id }
-//   -> 400 BAD_INPUT | 400 NOT_ONLINE | 404 NOT_FOUND | 409 ALREADY_PAID | 502 GATEWAY
+//   { "token": "<customer login token>", "name": "...", "country": "India", "state": "...", "city": "...",
+//     "pincode": "413101", "address": "...", "payment": "ONLINE",
+//     "items": [{ "product_id": "...", "colour": "...", "size": "9", "qty": 1 }], "coupon": "" }
+//   -> 200 { key_id, razorpay_order_id, amount, currency, name, mobile, checkout_id, customer_name,
+//            subtotal, discount, coupon, shipping, total }
+//   -> 401 NOT_LOGGED_IN | 400 INVALID_DETAILS | INVALID_ITEMS | NOT_ONLINE | STOCK | RATE_LIMIT |
+//      COUPON_INVALID | COUPON_NOT_FOR_CART | 502 GATEWAY
 //
-// The amount is read from the order in the database, never from the browser.
-// The order is saved with its Razorpay order id; the payment-webhook then marks it Paid.
-// Secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET. Provided automatically: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
+// No order is saved here and no stock is cut. The mobile number is the logged-in customer's number.
+// The order is created only when the payment is received (payment-webhook -> site_finalize_checkout).
+// Secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, OTP_PEPPER (same as customer-otp).
+// Provided automatically: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const KEY_ID = Deno.env.get("RAZORPAY_KEY_ID") ?? "";
 const KEY_SECRET = Deno.env.get("RAZORPAY_KEY_SECRET") ?? "";
+const OTP_PEPPER = Deno.env.get("OTP_PEPPER") ?? "";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -20,53 +26,93 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
 };
 
+// Error words the database can raise (checkout rules); anything else is a server problem.
+const KNOWN_ERRORS = [
+  "INVALID_DETAILS", "INVALID_ITEMS", "NOT_ONLINE", "RATE_LIMIT", "STOCK",
+  "COUPON_NOT_FOR_CART", "COUPON_INVALID",
+];
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 }
 
-// Online only: the order must be waiting for payment and must not be cash on delivery.
-function isPendingOnline(s: unknown): boolean {
-  const v = String(s ?? "").toLowerCase();
-  return v.includes("pending") && !v.includes("cod") && !v.includes("paid");
+async function sha256Hex(text: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const DB = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+
+async function dbSelect(query: string): Promise<any[]> {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, { headers: DB });
+  if (!r.ok) throw new Error(`select failed (${r.status})`);
+  return r.json();
+}
+
+// The login token from customer-otp -> the customer's mobile number. Null = not logged in.
+async function loggedInMobile(token: string): Promise<{ mobile: string; name: string } | null> {
+  if (!/^[a-f0-9]{64}$/.test(token)) return null;
+  const sessions = await dbSelect(
+    `customer_sessions?token_hash=eq.${await sha256Hex(`session:${token}:${OTP_PEPPER}`)}&select=customer_id,expires_at`,
+  );
+  const s = sessions[0];
+  if (!s || new Date(s.expires_at).getTime() < Date.now()) return null;
+  const me = (await dbSelect(`customers?id=eq.${s.customer_id}&select=mobile,name`))[0];
+  if (!me || !/^[6-9]\d{9}$/.test(String(me.mobile))) return null;
+  return { mobile: String(me.mobile), name: String(me.name ?? "") };
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return json(405, { error: "METHOD" });
-  if (!SUPABASE_URL || !SERVICE_KEY || !KEY_ID || !KEY_SECRET) return json(500, { error: "NOT_CONFIGURED" });
+  if (!SUPABASE_URL || !SERVICE_KEY || !KEY_ID || !KEY_SECRET || !OTP_PEPPER) return json(500, { error: "NOT_CONFIGURED" });
 
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return json(400, { error: "BAD_INPUT" });
+    return json(400, { error: "INVALID_DETAILS" });
   }
-  const orderId = String(body?.order_id ?? "").trim().toUpperCase();
-  const mobile = String(body?.mobile ?? "").replace(/\D/g, "");
-  if (!/^SW[0-9A-Z]{6,40}$/.test(orderId) || !/^[6-9]\d{9}$/.test(mobile)) return json(400, { error: "BAD_INPUT" });
 
-  const db = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}&select=*`, { headers: db });
-  const rows: any[] = r.ok ? await r.json() : [];
-  const o = rows[0];
-  // Same answer for "no such order" and "wrong mobile".
-  if (!o || String(o.customer?.mobile ?? "") !== mobile) return json(404, { error: "NOT_FOUND" });
-  if (String(o.payment_status ?? "").toLowerCase().includes("paid") && !String(o.payment_status).toLowerCase().includes("unpaid")) {
-    return json(409, { error: "ALREADY_PAID" });
+  let me: { mobile: string; name: string } | null;
+  try {
+    me = await loggedInMobile(String(body?.token ?? "").trim());
+  } catch (e) {
+    console.error("create-payment: login check failed", e);
+    return json(500, { error: "SERVER" });
   }
-  if (!isPendingOnline(o.payment_status)) return json(400, { error: "NOT_ONLINE" });
+  if (!me) return json(401, { error: "NOT_LOGGED_IN" });
 
-  const amount = Math.round(Number(o.total ?? 0) * 100); // paise
-  if (!Number.isFinite(amount) || amount < 100) return json(400, { error: "BAD_AMOUNT" });
+  // 1) Check the details and stock, and keep the checkout (no order yet).
+  const prep = await fetch(`${SUPABASE_URL}/rest/v1/rpc/site_prepare_checkout`, {
+    method: "POST",
+    headers: { ...DB, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      p: {
+        name: body?.name, mobile: me.mobile, country: body?.country, state: body?.state, city: body?.city,
+        pincode: body?.pincode, address: body?.address, payment: body?.payment, items: body?.items,
+        coupon: body?.coupon,
+      },
+    }),
+  });
+  const prepText = await prep.text();
+  if (!prep.ok) {
+    const known = KNOWN_ERRORS.find((k) => prepText.includes(k));
+    console.error("create-payment: checkout refused", prep.status, prepText.slice(0, 300));
+    return known ? json(400, { error: known }) : json(500, { error: "SERVER" });
+  }
+  const pr: any = JSON.parse(prepText);
+  const amount = Math.round(Number(pr.total ?? 0) * 100); // paise
+  if (!Number.isFinite(amount) || amount < 100) return json(400, { error: "INVALID_DETAILS" });
 
-  // 1) Create the Razorpay order (amount in paise).
+  // 2) Create the Razorpay payment for that amount (amount in paise).
   const rz = await fetch("https://api.razorpay.com/v1/orders", {
     method: "POST",
     headers: {
       Authorization: "Basic " + btoa(`${KEY_ID}:${KEY_SECRET}`),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ amount, currency: "INR", receipt: o.id, notes: { order_id: o.id } }),
+    body: JSON.stringify({ amount, currency: "INR", receipt: String(pr.checkout_id), notes: { checkout_id: String(pr.checkout_id) } }),
   });
   const rzJson: any = await rz.json().catch(() => ({}));
   if (!rz.ok || !rzJson.id) {
@@ -74,13 +120,13 @@ Deno.serve(async (req: Request) => {
     return json(502, { error: "GATEWAY" });
   }
 
-  // 2) Save it on the order, so the webhook can find the order later.
-  const p = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(o.id)}`, {
+  // 3) Keep the Razorpay order id on the checkout, so the webhook can find it.
+  const save = await fetch(`${SUPABASE_URL}/rest/v1/site_checkouts?id=eq.${encodeURIComponent(String(pr.checkout_id))}`, {
     method: "PATCH",
-    headers: { ...db, "Content-Type": "application/json", Prefer: "return=minimal" },
-    body: JSON.stringify({ razorpay_order_id: rzJson.id, updated_at: new Date().toISOString() }),
+    headers: { ...DB, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ razorpay_order_id: rzJson.id }),
   });
-  if (!p.ok) return json(500, { error: "SAVE_FAILED" });
+  if (!save.ok) return json(500, { error: "SAVE_FAILED" });
 
   return json(200, {
     key_id: KEY_ID,
@@ -88,8 +134,13 @@ Deno.serve(async (req: Request) => {
     amount,
     currency: "INR",
     name: "Shivtej Footwear",
-    order_id: o.id,
-    mobile,
-    customer_name: String(o.customer?.name ?? ""),
+    mobile: me.mobile,
+    checkout_id: pr.checkout_id,
+    customer_name: me.name,
+    subtotal: pr.subtotal,
+    discount: pr.discount,
+    coupon: pr.coupon ?? "",
+    shipping: pr.shipping,
+    total: pr.total,
   });
 });
