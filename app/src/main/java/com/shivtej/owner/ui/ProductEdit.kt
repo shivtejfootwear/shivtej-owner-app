@@ -258,6 +258,8 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                         val rest = v.sizes.dropWhile { it !== after }.drop(1) + v.sizes.takeWhile { it !== after }
                         return rest.firstOrNull { (it.qty.toIntOrNull() ?: 0) > it.codes.size }
                     }
+                    // puts the cursor back on this size's scan box, so the next piece goes to the same size
+                    fun keepHere(size: SizeDraft) { runCatching { size.scanFocus.requestFocus() } }
                     fun acceptScan(size: SizeDraft, code: String) {
                         size.scanText = ""
                         if (code.isEmpty()) return
@@ -269,12 +271,16 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                             else acceptScan(next, code)
                             return
                         }
-                        if (size.codes.contains(code)) { toast(ctx, "This barcode is already on this size"); return }
-                        if (draft.takenCodes().contains(code)) { toast(ctx, "This barcode is already used on this product"); return }
+                        if (size.codes.contains(code)) { toast(ctx, "This barcode is already on this size"); keepHere(size); return }
+                        if (draft.takenCodes().contains(code)) { toast(ctx, "This barcode is already used on this product"); keepHere(size); return }
                         size.codes.add(code)
-                        // all pieces of this size are in: the scanner moves on to the next size by itself
-                        if (want > 0 && size.codes.size >= want)
+                        if (want > 0 && size.codes.size >= want) {
+                            // all pieces of this size are in: the scanner moves on to the next size (in list order) by itself
                             nextOpenSize(size)?.let { next -> runCatching { next.scanFocus.requestFocus() } }
+                        } else {
+                            // not full yet: stay on this size until all its pieces are scanned
+                            keepHere(size)
+                        }
                     }
                     v.sizes.forEach { s ->
                         Column(Modifier.padding(top = 6.dp)) {
