@@ -93,6 +93,7 @@ fun PosScreen(app: App, nav: Nav) {
     fun handleCode(code: String) {
         val c = code.trim()
         query = ""   // the box is empty for the next scan
+        searchFocus.requestFocus()   // every scan lands in the search box, even after a tap somewhere else
         if (c.isEmpty()) return
         scope.launch {
             val h = app.repo.lookup(c)
@@ -132,35 +133,33 @@ fun PosScreen(app: App, nav: Nav) {
     val shop = BillMeta.currentShop(app.prefs)
 
     Column(Modifier.fillMaxSize()) {
+        // ---------------- search / scan: pinned at the top, never scrolled away, so a scan always lands here
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { v ->
+                    query = v
+                    scanJob.value?.cancel()
+                    val t = v.trim()
+                    if (t.length >= 8 && t.all { it.isDigit() })
+                        scanJob.value = scope.launch { delay(500); handleCode(t) }
+                },
+                singleLine = true,
+                placeholder = { Text("Search product / type barcode") },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
+                trailingIcon = {
+                    IconButton(onClick = { submitSearch() }) { Icon(Icons.Filled.Search, "Find barcode") }
+                },
+                modifier = Modifier.weight(1f).focusRequester(searchFocus)
+            )
+            Spacer(Modifier.width(8.dp))
+            FilledIconButton(
+                onClick = { withCamera { scanning = true } }, modifier = Modifier.size(56.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = BrandRed)
+            ) { Icon(Icons.Filled.QrCodeScanner, "Scan") }
+        }
         LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // ---------------- search / scan
-            item {
-                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { v ->
-                            query = v
-                            scanJob.value?.cancel()
-                            val t = v.trim()
-                            if (t.length >= 8 && t.all { it.isDigit() })
-                                scanJob.value = scope.launch { delay(500); handleCode(t) }
-                        },
-                        singleLine = true,
-                        placeholder = { Text("Search product / type barcode") },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
-                        trailingIcon = {
-                            IconButton(onClick = { submitSearch() }) { Icon(Icons.Filled.Search, "Find barcode") }
-                        },
-                        modifier = Modifier.weight(1f).focusRequester(searchFocus)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    FilledIconButton(
-                        onClick = { withCamera { scanning = true } }, modifier = Modifier.size(56.dp),
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = BrandRed)
-                    ) { Icon(Icons.Filled.QrCodeScanner, "Scan") }
-                }
-            }
             if (results.isNotEmpty()) item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
@@ -180,20 +179,12 @@ fun PosScreen(app: App, nav: Nav) {
                 }
             }
 
-            // ---------------- customer + bill info
-            item {
-                CustomerCard(app, nav, posCustomers, webCustomers, bills)
-            }
-            item {
-                BillInfoCard(app, staff)
-            }
-
-            // ---------------- items
+            // ---------------- items: right under the scan box, so each scanned piece is seen at once
             item { SectionTitle("Items (${cart.lines.size})") }
             if (cart.lines.isEmpty()) item { EmptyState("Scan a barcode or search a product to start a bill.") }
             items(cart.lines.size, key = { i -> cart.lines.getOrNull(i)?.let { it.productId + "|" + it.colour + "|" + it.size } ?: "x$i" }) { i ->
                 val l = cart.lines.getOrNull(i)
-                if (l != null) CartLineCard(app, i, l)
+                if (l != null) CartLineCard(app, i, l, onRateDone = { keyboard?.hide(); searchFocus.requestFocus() })
             }
 
             // ---------------- totals
@@ -265,6 +256,13 @@ fun PosScreen(app: App, nav: Nav) {
                         }
                     }
                 }
+            }
+            // ---------------- customer + bill info: below the bill, so the items and rates stay at the top
+            item {
+                CustomerCard(app, nav, posCustomers, webCustomers, bills)
+            }
+            item {
+                BillInfoCard(app, staff)
             }
             item { Spacer(Modifier.height(8.dp)) }
         }
@@ -394,7 +392,7 @@ private fun TotalRow(label: String, value: String, color: Color = Color.Unspecif
 
 /** One item of the bill: quantity, MRP, the selling rate (editable) and the automatic discount. */
 @Composable
-private fun CartLineCard(app: App, i: Int, l: CartLine) {
+private fun CartLineCard(app: App, i: Int, l: CartLine, onRateDone: () -> Unit) {
     val ctx = LocalContext.current
     val cart = app.cart
     var rateText by remember(l.productId, l.colour, l.size) { mutableStateOf(BillMath.plain(l.price)) }
@@ -429,7 +427,8 @@ private fun CartLineCard(app: App, i: Int, l: CartLine) {
                     },
                     label = { Text("Rate") }, singleLine = true, modifier = Modifier.width(112.dp),
                     isError = rateText.toDoubleOrNull() == null || (rateText.toDoubleOrNull() ?: 0.0) <= 0.0,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onRateDone() })
                 )
             }
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {

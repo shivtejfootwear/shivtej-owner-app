@@ -50,15 +50,6 @@ class SizeDraft(size: String = "", qty: String = "0", initial: List<String> = em
     var scanJob: Job? = null                    // waits a moment so the whole code is in before it is added
 }
 
-/** Makes the missing piece barcodes of one size, so the size has one barcode per piece (qty). */
-private suspend fun topUpCodes(app: App, s: SizeDraft, taken: MutableSet<String>) {
-    val want = s.qty.toIntOrNull() ?: 0
-    while (s.codes.size < want) {
-        val b = app.repo.newBarcode(taken)
-        taken.add(b)
-        s.codes.add(b)
-    }
-}
 
 class VariantDraft(colour: String = "", images: List<String> = emptyList(), sizes: List<SizeDraft> = emptyList()) {
     var colour by mutableStateOf(colour)
@@ -315,13 +306,6 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                             }, label = { Text("+ $label") })
                         }
                     }
-                    TextButton(onClick = {
-                        // make the missing piece barcodes of every size of this colour (up to its qty)
-                        scope.launch {
-                            val taken = draft.takenCodes()
-                            v.sizes.forEach { s -> topUpCodes(app, s, taken) }
-                        }
-                    }) { Text("Generate missing barcodes") }
                 }
             }
         }
