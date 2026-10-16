@@ -13,10 +13,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
 import com.shivtej.owner.net.Api
+import com.shivtej.owner.sync.UploadNotices
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+
+/** How long the "file went to ..." line stays on the card. */
+private const val NOTICE_MS = 60_000L
 
 /** Plan sizes for the bars. Change them here when the plan changes. */
 object StorageLimits {
@@ -86,11 +91,20 @@ fun StorageCard(app: App, modifier: Modifier = Modifier) {
             val b2 = withContext(Dispatchers.IO) { runCatching { Api.b2Usage(code) } }
             sb.fold({ dbBytes = it.first; filesBytes = it.second; supaError = null },
                 { dbBytes = null; filesBytes = null; supaError = friendly(it) })
-            b2.fold({ b2Bytes = it; b2Error = null }, { b2Bytes = null; b2Error = friendly(it) })
+            b2.fold({ b2Bytes = it; b2Error = null; app.prefs.b2UsedBytes = it }, { b2Bytes = null; b2Error = friendly(it) })
             busy = false
         }
     }
     LaunchedEffect(Unit) { refresh() }
+
+    // The last file that was sent (B2 or Supabase). It is shown for one minute, then the line goes away by itself.
+    val notice by UploadNotices.last.collectAsState()
+    LaunchedEffect(notice) {
+        val n = notice ?: return@LaunchedEffect
+        delay(NOTICE_MS)
+        UploadNotices.clear(n)
+    }
+    val shownNotice = notice?.takeIf { System.currentTimeMillis() - it.at < NOTICE_MS }
 
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -104,6 +118,10 @@ fun StorageCard(app: App, modifier: Modifier = Modifier) {
             StorageRow("Photos & videos (Backblaze B2)", b2Bytes, StorageLimits.B2_BYTES, b2Error)
             StorageRow("Database (Supabase)", dbBytes, StorageLimits.DB_BYTES, supaError)
             StorageRow("Files (Supabase)", filesBytes, StorageLimits.FILES_BYTES, supaError)
+            shownNotice?.let { n ->
+                Text("अभी ${n.fileKind} ${n.where} में चली गई", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }

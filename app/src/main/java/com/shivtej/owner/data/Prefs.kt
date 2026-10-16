@@ -178,6 +178,11 @@ class Prefs(ctx: Context) {
         get() = sp.getString("ai_model", "claude-haiku-5-5") ?: "claude-haiku-5-5"
         set(v) = sp.edit().putString("ai_model", v).apply()
 
+    // last known size of the private B2 bucket (set by the storage card). New files go to B2 only while it is below the switch limit.
+    var b2UsedBytes: Long
+        get() = sp.getLong("b2_used_bytes", 0L)
+        set(v) = sp.edit().putLong("b2_used_bytes", v).apply()
+
     // local image path -> uploaded public URL
     fun uploadedUrl(path: String): String? =
         try { JSONObject(sp.getString("uploaded", "{}") ?: "{}").optString(path).ifBlank { null } }

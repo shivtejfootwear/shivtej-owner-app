@@ -535,6 +535,7 @@ private fun moveCategory(list: List<String>, i: Int, j: Int): List<String> {
 @Composable
 private fun VideoList(list: SnapshotStateList<String>, onAdd: () -> Unit, onReplace: (Int) -> Unit) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         list.toList().forEachIndexed { i, src ->
             Card(Modifier.fillMaxWidth()) {
@@ -543,12 +544,13 @@ private fun VideoList(list: SnapshotStateList<String>, onAdd: () -> Unit, onRepl
                         Icon(Icons.Filled.PlayCircle, null, tint = BrandRed, modifier = Modifier.size(36.dp))
                         Column(Modifier.weight(1f).padding(start = 10.dp)) {
                             Text("Video ${i + 1}", fontWeight = FontWeight.SemiBold)
-                            Text(if (src.startsWith("http")) "Saved online" else "On this phone - uploads when online",
+                            val online = src.startsWith("http") || src.startsWith("products/")
+                            Text(if (online) "Saved online" else "On this phone - uploads when online",
                                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { previewVideo(ctx, src) }) { Text("Preview") }
+                        TextButton(onClick = { scope.launch { previewVideo(ctx, src) } }) { Text("Preview") }
                         TextButton(onClick = { onReplace(i) }) { Text("Replace") }
                         TextButton(onClick = { list.remove(src) }) { Text("Remove", color = RedOut) }
                     }
@@ -562,12 +564,21 @@ private fun VideoList(list: SnapshotStateList<String>, onAdd: () -> Unit, onRepl
 }
 
 /** Opens a video in the phone's own video player (there is no in-app player yet). */
-private fun previewVideo(ctx: android.content.Context, src: String) {
+private suspend fun previewVideo(ctx: android.content.Context, src: String) {
     try {
-        val uri = if (src.startsWith("http")) android.net.Uri.parse(src) else {
-            val f = File(src)
-            if (!f.exists()) { toast(ctx, "This video file is missing on this phone. Replace it."); return }
-            androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+        val uri = when {
+            src.startsWith("http") -> android.net.Uri.parse(src)
+            // stored in the private B2 bucket: open a short signed link
+            src.startsWith("products/") -> {
+                val url = privatePhotoUrl(src)
+                if (url == null) { toast(ctx, "This video can not be opened now. Check the internet and try again."); return }
+                android.net.Uri.parse(url)
+            }
+            else -> {
+                val f = File(src)
+                if (!f.exists()) { toast(ctx, "This video file is missing on this phone. Replace it."); return }
+                androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+            }
         }
         val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
             .setDataAndType(uri, "video/*")

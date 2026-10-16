@@ -93,15 +93,15 @@ object Api {
     }
 
     /**
-     * Sends one product photo to the PRIVATE B2 bucket through the owner-only b2-upload function.
-     * Returns the object name (for example "products/<id>/<uuid>.jpg") that is saved in products.images.
+     * Sends one product photo (kind "image") or product video (kind "video") to the PRIVATE B2 bucket
+     * through the owner-only b2-upload function. Returns the object name (for example "products/<id>/<uuid>.jpg").
      */
-    fun uploadProductPhoto(code: String, productId: String, bytes: ByteArray, mime: String): String {
+    fun uploadProductPhoto(code: String, productId: String, bytes: ByteArray, mime: String, kind: String = "image"): String {
         val req = Request.Builder()
             .url("$functionsBase/b2-upload")
             .header("apikey", key)
             .header("x-owner-code", code)
-            .header("x-kind", "image")
+            .header("x-kind", kind)
             .header("x-product-id", productId)
             .header("Content-Type", mime)
             .post(bytes.toRequestBody(mime.toMediaType()))

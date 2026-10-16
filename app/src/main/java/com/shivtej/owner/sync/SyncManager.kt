@@ -288,8 +288,7 @@ class SyncManager(
                 s.startsWith("/") -> {
                     val f = File(s)
                     if (!f.exists()) continue
-                    val url = prefs.uploadedUrl(s) ?: Api.uploadFile("product-videos", "$pid/${UUID.randomUUID()}.mp4",
-                        f.readBytes(), videoMime(f)).also { prefs.setUploaded(s, it) }
+                    val url = prefs.uploadedUrl(s) ?: uploadVideo(code, pid, f).also { prefs.setUploaded(s, it) }
                     out.put(url)
                 }
                 s.isNotBlank() -> out.put(s)
@@ -336,9 +335,32 @@ class SyncManager(
         prefs.uploadedUrl(path)?.let { return it }
         val f = File(path)
         if (!f.exists()) return null
-        val name = Api.uploadProductPhoto(code, pid, f.readBytes(), "image/jpeg")
-        prefs.setUploaded(path, name)
-        return name
+        val bytes = f.readBytes()
+        // B2 first (while there is room). If that is not possible, the photo goes to Supabase Storage and gets a public URL.
+        val saved = if (MediaStorage.b2Available(prefs)) {
+            try {
+                Api.uploadProductPhoto(code, pid, bytes, "image/jpeg").also { UploadNotices.set("Backblaze B2", "फ़ोटो") }
+            } catch (e: Exception) { null }
+        } else null
+        val result = saved ?: Api.uploadImage("products/$pid/${UUID.randomUUID()}.jpg", bytes, "image/jpeg")
+            .also { UploadNotices.set("Supabase Storage", "फ़ोटो") }
+        prefs.setUploaded(path, result)
+        return result
+    }
+
+    /** One product video: B2 first (while there is room), otherwise the Supabase video bucket. Returns the saved name or URL. */
+    private fun uploadVideo(code: String, pid: String, f: File): String {
+        val mime = videoMime(f)
+        if (MediaStorage.b2Available(prefs)) {
+            try {
+                val name = Api.uploadProductPhoto(code, pid, f.readBytes(), mime, kind = "video")
+                UploadNotices.set("Backblaze B2", "वीडियो")
+                return name
+            } catch (e: Exception) { }
+        }
+        val url = Api.uploadFile("product-videos", "$pid/${UUID.randomUUID()}.mp4", f.readBytes(), mime)
+        UploadNotices.set("Supabase Storage", "वीडियो")
+        return url
     }
 
     /**
