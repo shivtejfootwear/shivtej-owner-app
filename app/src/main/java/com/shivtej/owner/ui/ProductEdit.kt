@@ -20,6 +20,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -36,6 +38,7 @@ import com.shivtej.owner.util.Videos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -48,6 +51,7 @@ class SizeDraft(size: String = "", qty: String = "0", initial: List<String> = em
     val codes = mutableStateListOf<String>().apply { addAll(initial.map { it.trim() }.filter { it.isNotEmpty() }) }
     var scanText by mutableStateOf("")          // what the scanner typed into this size's scan box
     var scanJob: Job? = null                    // waits a moment so the whole code is in before it is added
+    val scanFocus = FocusRequester()            // the scan box of this size
 }
 
 
@@ -125,6 +129,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     var brandList by remember { mutableStateOf<List<String>>(emptyList()) }
     var typeList by remember { mutableStateOf<List<String>>(PRODUCT_TYPE_START) }
     var articleList by remember { mutableStateOf<List<String>>(emptyList()) }
+    var colourList by remember { mutableStateOf<List<String>>(COLOUR_START) }
     var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
     var reorderingCategories by remember { mutableStateOf(false) }
 
@@ -135,6 +140,8 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         brandList = app.repo.knownBrands()
         typeList = app.repo.knownProductTypes()
         articleList = app.repo.knownArticles()
+        colourList = (COLOUR_START + app.repo.products.first().flatMap { p -> p.variants.map { it.colour.trim() } })
+            .filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
     }
 
     // ---- image pickers
@@ -233,8 +240,9 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
             Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(v.colour, { v.colour = it }, label = { Text("Colour *") }, singleLine = true,
-                            modifier = Modifier.weight(1f))
+                        Column(Modifier.weight(1f)) {
+                            SuggestField("Colour *", v.colour, suggestionsFor(v.colour, colourList)) { v.colour = it }
+                        }
                         IconButton(onClick = {
                             pendingRemove = "Remove colour \"${v.colour}\" with all its sizes and stock?" to { draft.variants.remove(v); Unit }
                         }) { Icon(Icons.Filled.Delete, "Remove colour") }
@@ -245,12 +253,28 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                     Spacer(Modifier.height(8.dp))
                     Text("Sizes", fontWeight = FontWeight.SemiBold)
                     // a scanned piece is added to the size whose scan box has the focus; no button press needed
+                    /** The size after this one (wrapping around) that still needs pieces, or null when every size is full. */
+                    fun nextOpenSize(after: SizeDraft): SizeDraft? {
+                        val rest = v.sizes.dropWhile { it !== after }.drop(1) + v.sizes.takeWhile { it !== after }
+                        return rest.firstOrNull { (it.qty.toIntOrNull() ?: 0) > it.codes.size }
+                    }
                     fun acceptScan(size: SizeDraft, code: String) {
                         size.scanText = ""
                         if (code.isEmpty()) return
+                        val want = size.qty.toIntOrNull() ?: 0
+                        if (want > 0 && size.codes.size >= want) {
+                            // this size already has all its pieces: the code goes to the next size that still needs one
+                            val next = nextOpenSize(size)
+                            if (next == null) toast(ctx, "All pieces are already scanned")
+                            else acceptScan(next, code)
+                            return
+                        }
                         if (size.codes.contains(code)) { toast(ctx, "This barcode is already on this size"); return }
                         if (draft.takenCodes().contains(code)) { toast(ctx, "This barcode is already used on this product"); return }
                         size.codes.add(code)
+                        // all pieces of this size are in: the scanner moves on to the next size by itself
+                        if (want > 0 && size.codes.size >= want)
+                            nextOpenSize(size)?.let { next -> runCatching { next.scanFocus.requestFocus() } }
                     }
                     v.sizes.forEach { s ->
                         Column(Modifier.padding(top = 6.dp)) {
@@ -286,7 +310,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                                     s.scanJob?.cancel()
                                     acceptScan(s, s.scanText.trim())
                                 }),
-                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).focusRequester(s.scanFocus)
                             )
                             // one barcode per piece: qty 3 = 3 barcodes, each scanned or made separately
                             val want = s.qty.toIntOrNull() ?: 0
@@ -377,6 +401,9 @@ internal fun Field(
 /** A scanner's code: no spaces, 8 or more characters, with a digit. A typed name is never looked up as a code. */
 internal fun isScannedCode(t: String): Boolean = t.length >= 8 && t.none { it.isWhitespace() } && t.any { it.isDigit() }
 
+/** Colours offered while typing; the colours already saved on products are added to these. */
+private val COLOUR_START = listOf("Black", "Brown", "Tan", "Olive", "White", "Navy", "Blue", "Red", "Maroon", "Grey", "Beige", "Green", "Cream", "Mustard", "Pink", "Orange", "Yellow", "Purple")
+
 /** Suggestions while typing: saved values that start with what is typed (then those that contain it). Tap one to fill the field. */
 internal fun suggestionsFor(typed: String, known: List<String>): List<String> {
     val q = typed.trim().lowercase()
@@ -435,46 +462,32 @@ private fun TypeField(value: String, known: List<String>, onChange: (String) -> 
 }
 
 /**
- * Category field: type a category (suggestions appear as you type), or tick several with the arrow.
- * A product can be in both "Men" and "Senior Men". Saved as one text, for example "Men, Senior Men".
- * "Change order" moves the categories up or down (saved permanently).
+ * Category field: tick one or more categories (a product can be in both "Men" and "Senior Men").
+ * The menu stays open while you tick. "Change order" moves the categories up or down (saved permanently).
+ * The value is saved as one text, for example "Men, Senior Men"; the website shows the product under each of them.
  */
 @Composable
 private fun CategoryField(value: String, categories: List<String>, onChange: (String) -> Unit, onChangeOrder: () -> Unit) {
     var open by remember { mutableStateOf(false) }
-    val parts = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-    val done = parts.dropLast(1)                           // categories completed before the one being typed
-    val typed = value.substringAfterLast(",").trim()
-    val matches = suggestionsFor(typed, categories).filter { it !in done }
-    // the order of the category list is kept; a name that is not in the list goes at the end
-    fun save(next: List<String>) = onChange((categories.filter { it in next } + next.filter { it !in categories }).joinToString(", "))
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Box(Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = value, onValueChange = onChange, singleLine = true,
-                label = { Text("Category (Men / Ladies / Boy / Girl ...)") },
-                trailingIcon = { IconButton(onClick = { open = true }) { Icon(Icons.Filled.ArrowDropDown, "Pick categories") } },
-                modifier = Modifier.fillMaxWidth()
-            )
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                categories.forEach { c ->
-                    val on = c in parts
-                    DropdownMenuItem(text = { Text((if (on) "✓  " else "      ") + c) }, onClick = {
-                        save(if (on) parts - c else parts + c)
-                    })
-                }
-                DropdownMenuItem(text = { Text("Change order (up / down)") }, onClick = { open = false; onChangeOrder() })
+    val selected = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        OutlinedTextField(
+            value = value, onValueChange = {}, readOnly = true, singleLine = true,
+            label = { Text("Category (Men / Ladies / Boy / Girl ...)") },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Box(Modifier.matchParentSize().clickable { open = true })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            categories.forEach { c ->
+                val on = c in selected
+                DropdownMenuItem(text = { Text((if (on) "✓  " else "      ") + c) }, onClick = {
+                    val next = if (on) selected - c else selected + c
+                    // the order of the category list is kept; a name that is not in the list goes at the end
+                    onChange((categories.filter { it in next } + next.filter { it !in categories }).joinToString(", "))
+                })
             }
-        }
-        if (matches.isNotEmpty()) {
-            Card(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                Column {
-                    matches.forEach { m ->
-                        Text(m, fontSize = 15.sp,
-                            modifier = Modifier.fillMaxWidth().clickable { save(done + m) }.padding(horizontal = 12.dp, vertical = 10.dp))
-                    }
-                }
-            }
+            DropdownMenuItem(text = { Text("Change order (up / down)") }, onClick = { open = false; onChangeOrder() })
         }
     }
 }
