@@ -124,6 +124,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     val withCamera = rememberWithCamera()
     var brandList by remember { mutableStateOf<List<String>>(emptyList()) }
     var typeList by remember { mutableStateOf<List<String>>(PRODUCT_TYPE_START) }
+    var articleList by remember { mutableStateOf<List<String>>(emptyList()) }
     var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
     var reorderingCategories by remember { mutableStateOf(false) }
 
@@ -133,6 +134,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     LaunchedEffect(Unit) {
         brandList = app.repo.knownBrands()
         typeList = app.repo.knownProductTypes()
+        articleList = app.repo.knownArticles()
     }
 
     // ---- image pickers
@@ -206,7 +208,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         VideoList(draft.videos, onAdd = { pickVideos(-1) }, onReplace = { i -> pickVideos(i) })
 
         SectionTitle("Product details")
-        Field("Article *", draft.article) { draft.article = it }
+        ArticleField(draft.article, articleList) { draft.article = it }
         BrandField(draft.brand, brandList) { draft.brand = it }
         TypeField(draft.productType, typeList) { draft.productType = it }
         CategoryField(draft.category, categories,
@@ -274,7 +276,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                                     s.scanText = typed
                                     s.scanJob?.cancel()
                                     val code = typed.trim()
-                                    if (code.length >= 8 && code.all { it.isDigit() })
+                                    if (isScannedCode(code))
                                         s.scanJob = scope.launch { delay(500); acceptScan(s, code) }
                                 },
                                 label = { Text("Scan barcode for this size") },
@@ -372,15 +374,22 @@ internal fun Field(
     )
 }
 
-/** Brand field: while typing, the brands already saved on products that match are shown; tap one to fill it. */
+/** A scanner's code: no spaces, 8 or more characters, with a digit. A typed name is never looked up as a code. */
+internal fun isScannedCode(t: String): Boolean = t.length >= 8 && t.none { it.isWhitespace() } && t.any { it.isDigit() }
+
+/** Suggestions while typing: saved values that start with what is typed (then those that contain it). Tap one to fill the field. */
+internal fun suggestionsFor(typed: String, known: List<String>): List<String> {
+    val q = typed.trim().lowercase()
+    if (q.isEmpty()) return emptyList()
+    return (known.filter { it.lowercase().startsWith(q) } + known.filter { it.lowercase().contains(q) && !it.lowercase().startsWith(q) })
+        .filter { it.lowercase() != q }.distinct().take(8)
+}
+
+/** A text field with its suggestion list under it. Nothing is forced: after a tap the text can still be changed (2001 to 2002). */
 @Composable
-private fun BrandField(value: String, known: List<String>, onChange: (String) -> Unit) {
-    val q = value.trim().lowercase()
-    val matches = if (q.isEmpty()) emptyList() else
-        (known.filter { it.lowercase().startsWith(q) } + known.filter { it.lowercase().contains(q) && !it.lowercase().startsWith(q) })
-            .filter { it.lowercase() != q }.take(8)
+private fun SuggestField(label: String, value: String, matches: List<String>, onChange: (String) -> Unit) {
     Column {
-        Field("Brand", value, onChange = onChange)
+        Field(label, value, onChange = onChange)
         if (matches.isNotEmpty()) {
             Card(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
                 Column {
@@ -394,55 +403,78 @@ private fun BrandField(value: String, known: List<String>, onChange: (String) ->
     }
 }
 
-/** Product type field (चप्पल, सैंडल, शूज़ ...): same suggestions as Brand; starter types are always suggested. */
+/** Brand field: brands already saved on products. */
+@Composable
+private fun BrandField(value: String, known: List<String>, onChange: (String) -> Unit) =
+    SuggestField("Brand", value, suggestionsFor(value, known), onChange)
+
+/** Article field: article numbers already saved on products. */
+@Composable
+private fun ArticleField(value: String, known: List<String>, onChange: (String) -> Unit) =
+    SuggestField("Article *", value, suggestionsFor(value, known), onChange)
+
+/** Latin spellings that also find the Hindi starter types (typing "chappal" suggests चप्पल). The Hindi name is what gets saved. */
+private val TYPE_ALIASES = mapOf(
+    "चप्पल" to "chappal chapal slipper",
+    "सैंडल" to "sandal sandle",
+    "शूज़" to "shoe shoes",
+    "लोफर" to "loafer loafers",
+    "फ्लिप फ्लॉप" to "flip flop flipflop",
+    "क्रॉप्स" to "crocs croc"
+)
+
+/** Product type (चप्पल, सैंडल, शूज़ ...): saved types and the starter types, also found by their Latin spelling. */
 @Composable
 private fun TypeField(value: String, known: List<String>, onChange: (String) -> Unit) {
     val q = value.trim().lowercase()
-    val matches = if (q.isEmpty()) emptyList() else
-        (known.filter { it.lowercase().startsWith(q) } + known.filter { it.lowercase().contains(q) && !it.lowercase().startsWith(q) })
-            .filter { it.lowercase() != q }.take(8)
-    Column {
-        Field("Product type (चप्पल / सैंडल / शूज़ ...)", value, onChange = onChange)
-        if (matches.isNotEmpty()) {
-            Card(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                Column {
-                    matches.forEach { m ->
-                        Text(m, fontSize = 15.sp,
-                            modifier = Modifier.fillMaxWidth().clickable { onChange(m) }.padding(horizontal = 12.dp, vertical = 10.dp))
-                    }
-                }
-            }
-        }
+    val viaAlias = if (q.isEmpty()) emptyList() else known.filter { t ->
+        TYPE_ALIASES[t]?.let { alias -> alias.startsWith(q) || alias.split(" ").any { it.startsWith(q) } } == true
     }
+    val matches = (suggestionsFor(value, known) + viaAlias).distinct().filter { it.lowercase() != q }.take(8)
+    SuggestField("Product type (चप्पल / सैंडल / शूज़ ...)", value, matches, onChange)
 }
 
 /**
- * Category field: tick one or more categories (a product can be in both "Men" and "Senior Men").
- * The menu stays open while you tick. "Change order" moves the categories up or down (saved permanently).
- * The value is saved as one text, for example "Men, Senior Men"; the website shows the product under each of them.
+ * Category field: type a category (suggestions appear as you type), or tick several with the arrow.
+ * A product can be in both "Men" and "Senior Men". Saved as one text, for example "Men, Senior Men".
+ * "Change order" moves the categories up or down (saved permanently).
  */
 @Composable
 private fun CategoryField(value: String, categories: List<String>, onChange: (String) -> Unit, onChangeOrder: () -> Unit) {
     var open by remember { mutableStateOf(false) }
-    val selected = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        OutlinedTextField(
-            value = value, onValueChange = {}, readOnly = true, singleLine = true,
-            label = { Text("Category (Men / Ladies / Boy / Girl ...)") },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Box(Modifier.matchParentSize().clickable { open = true })
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            categories.forEach { c ->
-                val on = c in selected
-                DropdownMenuItem(text = { Text((if (on) "✓  " else "      ") + c) }, onClick = {
-                    val next = if (on) selected - c else selected + c
-                    // the order of the category list is kept; a name that is not in the list goes at the end
-                    onChange((categories.filter { it in next } + next.filter { it !in categories }).joinToString(", "))
-                })
+    val parts = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    val done = parts.dropLast(1)                           // categories completed before the one being typed
+    val typed = value.substringAfterLast(",").trim()
+    val matches = suggestionsFor(typed, categories).filter { it !in done }
+    // the order of the category list is kept; a name that is not in the list goes at the end
+    fun save(next: List<String>) = onChange((categories.filter { it in next } + next.filter { it !in categories }).joinToString(", "))
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Box(Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = value, onValueChange = onChange, singleLine = true,
+                label = { Text("Category (Men / Ladies / Boy / Girl ...)") },
+                trailingIcon = { IconButton(onClick = { open = true }) { Icon(Icons.Filled.ArrowDropDown, "Pick categories") } },
+                modifier = Modifier.fillMaxWidth()
+            )
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                categories.forEach { c ->
+                    val on = c in parts
+                    DropdownMenuItem(text = { Text((if (on) "✓  " else "      ") + c) }, onClick = {
+                        save(if (on) parts - c else parts + c)
+                    })
+                }
+                DropdownMenuItem(text = { Text("Change order (up / down)") }, onClick = { open = false; onChangeOrder() })
             }
-            DropdownMenuItem(text = { Text("Change order (up / down)") }, onClick = { open = false; onChangeOrder() })
+        }
+        if (matches.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                Column {
+                    matches.forEach { m ->
+                        Text(m, fontSize = 15.sp,
+                            modifier = Modifier.fillMaxWidth().clickable { save(done + m) }.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                }
+            }
         }
     }
 }

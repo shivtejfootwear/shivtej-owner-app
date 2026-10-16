@@ -127,6 +127,24 @@ object Api {
         }
     }
 
+    /** Total size of the private B2 photo and video bucket, counted on the server by the owner-only b2-usage function. */
+    fun b2Usage(code: String): Long {
+        val req = Request.Builder()
+            .url("$functionsBase/b2-usage")
+            .header("apikey", key)
+            .header("x-owner-code", code)
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val msg = runCatching { JSONObject(text).optString("error") }.getOrDefault("").ifBlank { "HTTP ${resp.code}" }
+                throw ApiError(resp.code, null, msg)
+            }
+            return JSONObject(text).getLong("bytes")
+        }
+    }
+
     // ---- Supabase admin login, needed only for Shiprocket shipping (the server checks the admin list) ----
 
     /** Logs in with the website admin email and password. Returns the session (access_token, refresh_token, expires_in). */

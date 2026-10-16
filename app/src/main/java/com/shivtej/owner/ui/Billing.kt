@@ -112,7 +112,7 @@ fun PosScreen(app: App, nav: Nav) {
     /** Enter or the search icon: only a barcode (digits) is looked up and added. Typed words just filter the list below. */
     fun submitSearch() {
         val t = query.trim()
-        if (t.length >= 6 && t.all { it.isDigit() }) { scanJob.value?.cancel(); handleCode(t) }
+        if (t.length >= 6 && t.none { it.isWhitespace() } && t.any { it.isDigit() }) { scanJob.value?.cancel(); handleCode(t) }
     }
 
     val results = if (query.isBlank()) emptyList() else {
@@ -141,7 +141,7 @@ fun PosScreen(app: App, nav: Nav) {
                     query = v
                     scanJob.value?.cancel()
                     val t = v.trim()
-                    if (t.length >= 8 && t.all { it.isDigit() })
+                    if (isScannedCode(t))
                         scanJob.value = scope.launch { delay(500); handleCode(t) }
                 },
                 singleLine = true,

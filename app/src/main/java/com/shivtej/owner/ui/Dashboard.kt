@@ -107,6 +107,9 @@ fun DashboardScreen(app: App, nav: Nav) {
             }
         }
         item {
+            StorageCard(app)
+        }
+        item {
             if (!online) Banner("You are offline. Everything keeps working and will sync when internet returns.", Color(0xFFFFE0B2))
             st.lastError?.let { if (online) Banner(it, Color(0xFFFFCDD2)) }
             if (st.notice != null) Banner(st.notice!!, Color(0xFFFFF3E0))

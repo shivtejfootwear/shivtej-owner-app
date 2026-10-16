@@ -614,6 +614,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         dao.allProducts().map { it.brand.trim() }.filter { it.isNotEmpty() }
             .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
 
+    /** Article numbers already saved on products (for the suggestions while typing). */
+    suspend fun knownArticles(): List<String> =
+        dao.allProducts().map { it.article.trim() }.filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+
     /** Product types for the suggestions: the starter list first, then every type already saved on products (A to Z). */
     suspend fun knownProductTypes(): List<String> {
         val saved = dao.allProducts().map { it.productType.trim() }.filter { it.isNotEmpty() }
