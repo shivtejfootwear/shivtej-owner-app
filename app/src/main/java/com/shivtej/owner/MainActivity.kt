@@ -303,6 +303,7 @@ fun Shell(app: App) {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text("Shivtej Footwear", fontSize = 22.sp, fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(20.dp))
+                    StorageCard(app, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
                     items.forEach { item ->
                         NavigationDrawerItem(
                             label = { Text(item.label) },
