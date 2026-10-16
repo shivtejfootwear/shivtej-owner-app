@@ -49,6 +49,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,6 +86,9 @@ fun PosScreen(app: App, nav: Nav) {
     val idle = unknownCode == null && assignCode == null && picker == null && !scanning
     LaunchedEffect(idle) { if (idle) { searchFocus.requestFocus(); keyboard?.hide() } }
 
+    /** The scanner types the code and then stops: after a short pause the whole code is looked up (no Enter, no button). */
+    val scanJob = remember { mutableStateOf<Job?>(null) }
+
     /** A scanned piece goes into the bill at once: one piece, no popup, no size or quantity to choose. */
     fun handleCode(code: String) {
         val c = code.trim()
@@ -106,7 +111,7 @@ fun PosScreen(app: App, nav: Nav) {
     /** Enter or the search icon: only a barcode (digits) is looked up and added. Typed words just filter the list below. */
     fun submitSearch() {
         val t = query.trim()
-        if (t.length >= 6 && t.all { it.isDigit() }) handleCode(t)
+        if (t.length >= 6 && t.all { it.isDigit() }) { scanJob.value?.cancel(); handleCode(t) }
     }
 
     val results = if (query.isBlank()) emptyList() else {
@@ -135,9 +140,10 @@ fun PosScreen(app: App, nav: Nav) {
                         value = query,
                         onValueChange = { v ->
                             query = v
+                            scanJob.value?.cancel()
                             val t = v.trim()
-                            if (t.length >= 6 && t.none { it.isWhitespace() })
-                                scope.launch { if (app.repo.isKnownBarcode(t)) handleCode(t) }
+                            if (t.length >= 8 && t.all { it.isDigit() })
+                                scanJob.value = scope.launch { delay(500); handleCode(t) }
                         },
                         singleLine = true,
                         placeholder = { Text("Search product / type barcode") },

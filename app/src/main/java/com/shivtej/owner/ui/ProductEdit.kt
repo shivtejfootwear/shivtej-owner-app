@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,6 +34,8 @@ import com.shivtej.owner.data.Variant
 import com.shivtej.owner.util.Images
 import com.shivtej.owner.util.Videos
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -42,6 +46,8 @@ class SizeDraft(size: String = "", qty: String = "0", initial: List<String> = em
     var size by mutableStateOf(size)
     var qty by mutableStateOf(qty)
     val codes = mutableStateListOf<String>().apply { addAll(initial.map { it.trim() }.filter { it.isNotEmpty() }) }
+    var scanText by mutableStateOf("")          // what the scanner typed into this size's scan box
+    var scanJob: Job? = null                    // waits a moment so the whole code is in before it is added
 }
 
 /** Makes the missing piece barcodes of one size, so the size has one barcode per piece (qty). */
@@ -245,6 +251,14 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                     ImageRow(v.images, { pickGallery(v.images) }, { takePhoto(v.images) })
                     Spacer(Modifier.height(8.dp))
                     Text("Sizes", fontWeight = FontWeight.SemiBold)
+                    // a scanned piece is added to the size whose scan box has the focus; no button press needed
+                    fun acceptScan(size: SizeDraft, code: String) {
+                        size.scanText = ""
+                        if (code.isEmpty()) return
+                        if (size.codes.contains(code)) { toast(ctx, "This barcode is already on this size"); return }
+                        if (draft.takenCodes().contains(code)) { toast(ctx, "This barcode is already used on this product"); return }
+                        size.codes.add(code)
+                    }
                     v.sizes.forEach { s ->
                         Column(Modifier.padding(top = 6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -262,6 +276,25 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                                     else v.sizes.remove(s)
                                 }) { Icon(Icons.Filled.Close, "Remove size") }
                             }
+                            // the scanner types here; a full code is added to this size after a short pause (or Enter)
+                            OutlinedTextField(
+                                s.scanText,
+                                { typed ->
+                                    s.scanText = typed
+                                    s.scanJob?.cancel()
+                                    val code = typed.trim()
+                                    if (code.length >= 8 && code.all { it.isDigit() })
+                                        s.scanJob = scope.launch { delay(500); acceptScan(s, code) }
+                                },
+                                label = { Text("Scan barcode for this size") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    s.scanJob?.cancel()
+                                    acceptScan(s, s.scanText.trim())
+                                }),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                            )
                             // one barcode per piece: qty 3 = 3 barcodes, each scanned or made separately
                             val want = s.qty.toIntOrNull() ?: 0
                             Text("Barcodes: ${s.codes.size} of $want pieces", fontSize = 12.sp,
@@ -303,8 +336,6 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
             onClick = {
                 scope.launch {
                     try {
-                        val taken = draft.takenCodes()
-                        draft.variants.forEach { v -> v.sizes.forEach { s -> topUpCodes(app, s, taken) } }
                         app.repo.saveProduct(draft.build(), isNew = id == null)
                         toast(ctx, "Saved")
                         nav.back()
