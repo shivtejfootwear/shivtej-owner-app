@@ -70,7 +70,6 @@ fun PosScreen(app: App, nav: Nav) {
 
     var query by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
-    var hit by remember { mutableStateOf<Hit?>(null) }
     var unknownCode by remember { mutableStateOf<String?>(null) }
     var assignCode by remember { mutableStateOf<String?>(null) }
     var picker by remember { mutableStateOf<Product?>(null) }
@@ -82,15 +81,31 @@ fun PosScreen(app: App, nav: Nav) {
     // The search box keeps focus while no dialog is open, so a scan always lands there.
     val searchFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    val idle = hit == null && unknownCode == null && assignCode == null && picker == null && !scanning
+    val idle = unknownCode == null && assignCode == null && picker == null && !scanning
     LaunchedEffect(idle) { if (idle) { searchFocus.requestFocus(); keyboard?.hide() } }
 
+    /** Enter or the search icon: only a barcode (digits) is looked up and added. Typed words just filter the list below. */
+    fun submitSearch() {
+        val t = query.trim()
+        if (t.length >= 6 && t.all { it.isDigit() }) handleCode(t)
+    }
+
+    /** A scanned piece goes into the bill at once: one piece, no popup, no size or quantity to choose. */
     fun handleCode(code: String) {
         val c = code.trim()
         query = ""   // the box is empty for the next scan
+        if (c.isEmpty()) return
         scope.launch {
             val h = app.repo.lookup(c)
-            if (h != null) hit = h else unknownCode = c
+            when {
+                h == null -> unknownCode = c
+                cart.lines.any { line -> c in line.barcode.split(",") } -> toast(ctx, "This piece is already in the bill")
+                else -> {
+                    val err = cart.add(CartLine(h.product.id, h.product.article, h.product.name, h.colour, h.size.size,
+                        c, 1, maxOf(h.product.mrp, h.product.price), h.size.qty, h.product.mrp))
+                    if (err != null) toast(ctx, err) else toast(ctx, "Added: ${h.product.article} ${h.size.size}")
+                }
+            }
         }
     }
 
@@ -117,12 +132,19 @@ fun PosScreen(app: App, nav: Nav) {
             item {
                 Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
-                        value = query, onValueChange = { query = it }, singleLine = true,
+                        value = query,
+                        onValueChange = { v ->
+                            query = v
+                            val t = v.trim()
+                            if (t.length >= 6 && t.none { it.isWhitespace() })
+                                scope.launch { if (app.repo.isKnownBarcode(t)) handleCode(t) }
+                        },
+                        singleLine = true,
                         placeholder = { Text("Search product / type barcode") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) handleCode(query) }),
+                        keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
                         trailingIcon = {
-                            IconButton(onClick = { if (query.isNotBlank()) handleCode(query) }) { Icon(Icons.Filled.Search, "Find barcode") }
+                            IconButton(onClick = { submitSearch() }) { Icon(Icons.Filled.Search, "Find barcode") }
                         },
                         modifier = Modifier.weight(1f).focusRequester(searchFocus)
                     )
@@ -311,40 +333,6 @@ fun PosScreen(app: App, nav: Nav) {
 
     // ---- scanner
     if (scanning) ScannerDialog(onResult = { scanning = false; handleCode(it) }, onDismiss = { scanning = false })
-
-    // ---- scanned item preview
-    hit?.let { h ->
-        var qty by remember(h) { mutableIntStateOf(1) }
-        AlertDialog(
-            onDismissRequest = { hit = null },
-            title = { Text("Item found") },
-            text = {
-                Column {
-                    Text("Brand: ${h.product.brand.ifBlank { "-" }}")
-                    Text("Article: ${h.product.article}")
-                    Text("Colour: ${h.colour}")
-                    Text("Size: ${h.size.size}")
-                    if (h.product.mrp > h.product.price) Text("MRP: ${money(app, h.product.mrp)}")
-                    Text("Selling price: ${money(app, maxOf(h.product.mrp, h.product.price))}", fontWeight = FontWeight.Bold)
-                    Text("Stock: ${h.size.qty}", color = if (h.size.qty > 0) GreenOk else RedOut)
-                    Text("Barcode: ${h.scanned.ifBlank { h.size.barcode }}")
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-                        IconButton(onClick = { if (qty > 1) qty-- }) { Icon(Icons.Filled.Remove, "Less") }
-                        Text("$qty", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                        IconButton(onClick = { qty++ }) { Icon(Icons.Filled.Add, "More") }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(enabled = h.size.qty > 0, onClick = {
-                    val err = cart.add(CartLine(h.product.id, h.product.article, h.product.name, h.colour, h.size.size,
-                        h.scanned.ifBlank { h.size.barcode }, qty, maxOf(h.product.mrp, h.product.price), h.size.qty, h.product.mrp))
-                    if (err != null) toast(ctx, err) else { hit = null; query = "" }
-                }) { Text("Add to bill") }
-            },
-            dismissButton = { TextButton(onClick = { hit = null }) { Text("Cancel") } }
-        )
-    }
 
     // ---- unknown barcode
     unknownCode?.let { code ->

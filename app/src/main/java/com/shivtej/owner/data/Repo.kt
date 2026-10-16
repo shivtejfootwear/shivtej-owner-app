@@ -317,6 +317,12 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return prefs.barcodePrefix + System.currentTimeMillis()
     }
 
+    /** True when this code is a piece barcode (or a size barcode) of a product. Used to add a scan at once. */
+    suspend fun isKnownBarcode(code: String): Boolean {
+        val c = code.trim()
+        return dao.pieceByBarcode(c) != null || dao.sizesByBarcode(c).isNotEmpty()
+    }
+
     suspend fun lookup(code: String): Hit? {
         val c = code.trim()
         val piece = dao.pieceByBarcode(c)
