@@ -84,12 +84,6 @@ fun PosScreen(app: App, nav: Nav) {
     val idle = unknownCode == null && assignCode == null && picker == null && !scanning
     LaunchedEffect(idle) { if (idle) { searchFocus.requestFocus(); keyboard?.hide() } }
 
-    /** Enter or the search icon: only a barcode (digits) is looked up and added. Typed words just filter the list below. */
-    fun submitSearch() {
-        val t = query.trim()
-        if (t.length >= 6 && t.all { it.isDigit() }) handleCode(t)
-    }
-
     /** A scanned piece goes into the bill at once: one piece, no popup, no size or quantity to choose. */
     fun handleCode(code: String) {
         val c = code.trim()
@@ -107,6 +101,12 @@ fun PosScreen(app: App, nav: Nav) {
                 }
             }
         }
+    }
+
+    /** Enter or the search icon: only a barcode (digits) is looked up and added. Typed words just filter the list below. */
+    fun submitSearch() {
+        val t = query.trim()
+        if (t.length >= 6 && t.all { it.isDigit() }) handleCode(t)
     }
 
     val results = if (query.isBlank()) emptyList() else {
