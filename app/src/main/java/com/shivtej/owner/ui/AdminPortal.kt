@@ -34,6 +34,24 @@ private const val MAX_VIDEO_BYTES = 50L * 1024 * 1024
 /** Extra screens in the home slider (the red top screen is always there and is not counted). */
 private const val MAX_SLIDES = 6
 
+/** Season animations on the website. Same keys and order as season.js in the website (calendar order). */
+private data class SeasonItem(val key: String, val hi: String, val en: String, val what: String)
+private val SEASONS = listOf(
+    SeasonItem("sankranti", "मकर संक्रांति", "Makar Sankranti", "पतंगें, हवा की आवाज़"),
+    SeasonItem("republic", "गणतंत्र / स्वतंत्रता दिवस", "Republic & Independence Day", "तिरंगे की पंखुड़ियाँ, ढोल और घंटी"),
+    SeasonItem("holi", "होली", "Holi", "उड़ता गुलाल, ढोल"),
+    SeasonItem("padwa", "गुढी पाडवा", "Gudi Padwa", "आम के पत्ते और गेंदे का तोरण, घंटी"),
+    SeasonItem("summer", "गर्मी", "Summer", "धूप, तितलियाँ, चिड़ियों की आवाज़"),
+    SeasonItem("eid", "ईद", "Eid", "चाँद, तारे, कंदील, घंटियाँ"),
+    SeasonItem("monsoon", "बरसात", "Monsoon", "बारिश, बिजली, बारिश की आवाज़"),
+    SeasonItem("ganesh", "गणपति", "Ganesh Chaturthi", "जास्वंद और गेंदे के फूल, ढोल-ताशा, घंटी"),
+    SeasonItem("navratri", "नवरात्रि / दसरा", "Navratri & Dussehra", "रंगीन पंखुड़ियाँ, सुनहरी चमक, डांडिया"),
+    SeasonItem("diwali", "दिवाली", "Diwali", "दीये, आकाश कंदील, आतिशबाज़ी, पटाखे"),
+    SeasonItem("winter", "सर्दी", "Winter", "बर्फ़, ठंडी हवा"),
+    SeasonItem("christmas", "क्रिसमस", "Christmas", "रंगीन लाइटें, बर्फ़, घंटियाँ"),
+    SeasonItem("newyear", "नया साल", "New Year", "कंफ़ेटी, सुनहरी आतिशबाज़ी")
+)
+
 /** One extra screen of the home slider. kind is "photo" or "video" (empty url = plain red background). */
 private data class SlideDraft(
     val isVideo: Boolean = false, val url: String = "", val title: String = "",
@@ -103,6 +121,9 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var offerKind by remember { mutableStateOf("percent") }
     var offerValue by remember { mutableStateOf("") }
     var offerCategory by remember { mutableStateOf("") }
+
+    // Season animation on the website ("" = all off). Only one season can be on.
+    var season by remember { mutableStateOf("") }
 
     // Until the current website settings are loaded, nothing may be saved (it would overwrite them with blanks).
     val ready = !loading && error == null
@@ -233,6 +254,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                 offerValue = if (v <= 0.0) "" else if (v % 1.0 == 0.0) v.toLong().toString() else v.toString()
                 offerCategory = if (o.isNull("category")) "" else o.optString("category")
             }
+            season = s.optString("season", "")
             shipFee = r?.opt("shippingFee")?.toString()?.removeSuffix(".0") ?: ""
         } catch (e: Exception) {
             error = msg(e)
@@ -342,6 +364,28 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         }
     }
 
+    /** Turns one season on (others go off by themselves, because only one value is saved) or all off (""). */
+    fun saveSeason(key: String) = scope.launch {
+        val prev = season
+        season = key
+        try {
+            call("owner_save_site_settings", JSONObject().put("p_value", JSONObject().put("season", key)))
+            // the server keeps only the settings it knows; check that "season" was really saved
+            val r = call("owner_get_site_settings", JSONObject()) as? JSONObject
+            val saved = r?.optJSONObject("site")?.optString("season", "") ?: ""
+            if (saved != key) {
+                season = prev
+                toast(ctx, "Not saved. Run owner_update_13_season.sql in Supabase SQL Editor once, then try again.")
+                return@launch
+            }
+            val name = SEASONS.firstOrNull { it.key == key }?.hi
+            toast(ctx, if (name == null) "All seasons are off." else "$name is on. Other seasons are off.")
+        } catch (e: Exception) {
+            season = prev
+            toast(ctx, "Save failed: ${msg(e)}")
+        }
+    }
+
     fun setCouponActive(row: CouponRow, active: Boolean) = scope.launch {
         val c = JSONObject().put("code", row.code).put("kind", row.kind).put("value", row.value).put("active", active)
         if (row.category.isNotEmpty()) c.put("category", row.category)
@@ -428,6 +472,22 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         }
         Button(onClick = { saveOffer() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             Text("Save offer")
+        }
+
+        SectionTitle("Season animation (website)")
+        Text("The season that is on plays for about 8 seconds when the website opens, with a soft sound. " +
+            "Turn one on and the others go off by themselves. It saves as soon as you tap the switch.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SEASONS.forEachIndexed { i, s ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text("${i + 1}.", fontWeight = FontWeight.Bold, modifier = Modifier.width(30.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("${s.hi}  (${s.en})", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(s.what, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = season == s.key, enabled = ready,
+                    onCheckedChange = { on -> saveSeason(if (on) s.key else "") })
+            }
         }
 
         SectionTitle("Edit website")
