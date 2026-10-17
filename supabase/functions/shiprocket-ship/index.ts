@@ -25,6 +25,7 @@ const SR_EMAIL = Deno.env.get("SHIPROCKET_EMAIL") ?? "";
 const SR_PASSWORD = Deno.env.get("SHIPROCKET_PASSWORD") ?? "";
 const SR_PICKUP = Deno.env.get("SHIPROCKET_PICKUP") || "Primary";
 const SR_BASE = "https://apiv2.shiprocket.in/v1/external";
+const OTP_PEPPER = Deno.env.get("OTP_PEPPER") ?? "";
 
 // Until products have their own weight and size, every pair is counted with these values.
 const DEFAULT_WEIGHT_G = 500;
@@ -85,6 +86,23 @@ async function callerId(token: string): Promise<string | null> {
 
 async function isActiveAdmin(uid: string): Promise<boolean> {
   const rows = await dbSelect(`admin_users?id=eq.${uid}&active=eq.true&select=id`);
+  return rows.length > 0;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Admin logged in with WhatsApp OTP (admin-otp function). The token is kept only as a hash.
+async function isOtpAdmin(token: string): Promise<boolean> {
+  if (!/^[a-f0-9]{64}$/.test(token)) return false;
+  const sessions = await dbSelect(
+    `admin_sessions?token_hash=eq.${await sha256Hex(`admin:${token}:${OTP_PEPPER}`)}&select=admin_mobile,expires_at`,
+  );
+  const session = sessions[0];
+  if (!session || new Date(session.expires_at).getTime() < Date.now()) return false;
+  const rows = await dbSelect(`admin_users?mobile=eq.${session.admin_mobile}&active=eq.true&select=id`);
   return rows.length > 0;
 }
 
@@ -158,8 +176,6 @@ async function courierOptions(o: any, token: string): Promise<Record<string, unk
   const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=${cod}&weight=${weightKg}`;
   const res = await srGet(`/courier/serviceability/?${q}`, token);
   const list: any[] = res?.data?.available_courier_companies ?? [];
-  // The courier the customer chose (and paid for) at checkout comes first, marked.
-  const chosen = String(c.courier_choice?.id ?? "");
   return list
     .map((c: any) => ({
       courier_id: String(c.courier_company_id ?? c.id ?? ""),
@@ -168,7 +184,7 @@ async function courierOptions(o: any, token: string): Promise<Record<string, unk
       etd: String(c.etd ?? c.estimated_delivery_days ?? ""),
     }))
     .filter((c) => c.courier_id && c.name)
-    .map((c) => (chosen && c.courier_id === chosen ? { ...c, name: `★ ${c.name} (customer's choice)`, chosen: true } : c))
+    .map((x: any) => (String(o.customer?.courier_choice?.id ?? "") === x.courier_id ? { ...x, name: `★ ${x.name} (customer's choice)`, chosen: true } : x))
     .sort((a: any, b: any) => (b.chosen ? 1 : 0) - (a.chosen ? 1 : 0) || a.rate - b.rate);
 }
 
@@ -221,8 +237,11 @@ function buildPayload(o: any): Record<string, unknown> {
 
 async function createShipment(orderId: string, bearer: string, action: string, courierId: string): Promise<Record<string, unknown>> {
   const uid = await callerId(bearer);
-  if (!uid) throw new HttpError(401, "NOT_LOGGED_IN");
-  if (!(await isActiveAdmin(uid))) throw new HttpError(403, "NOT_ADMIN");
+  if (uid) {
+    if (!(await isActiveAdmin(uid))) throw new HttpError(403, "NOT_ADMIN");
+  } else if (!(await isOtpAdmin(bearer))) {
+    throw new HttpError(401, "NOT_LOGGED_IN");
+  }
 
   const rows = await dbSelect(`orders?id=eq.${encodeURIComponent(orderId)}&select=*`);
   const o = rows[0];
