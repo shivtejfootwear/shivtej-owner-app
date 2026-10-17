@@ -3,7 +3,10 @@
 // POST /functions/v1/create-payment
 //   { "token": "<customer login token>", "name": "...", "country": "India", "state": "...", "city": "...",
 //     "pincode": "413101", "address": "...", "payment": "ONLINE",
-//     "items": [{ "product_id": "...", "colour": "...", "size": "9", "qty": 1 }], "coupon": "" }
+//     "items": [{ "product_id": "...", "colour": "...", "size": "9", "qty": 1 }], "coupon": "",
+//     "courier_id": "<optional: the courier the customer chose from ship-rates>" }
+//   With courier_id the shipping charge is that courier's Shiprocket price (else the fixed shipping charge);
+//   400 COURIER_UNAVAILABLE when that courier no longer serves the pincode.
 //   -> 200 { key_id, razorpay_order_id, amount, currency, name, mobile, checkout_id, customer_name,
 //            subtotal, discount, coupon, shipping, total }
 //   -> 401 NOT_LOGGED_IN | 400 INVALID_DETAILS | INVALID_ITEMS | NOT_ONLINE | STOCK | RATE_LIMIT |
@@ -25,6 +28,38 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
 };
+
+// ---------- courier chosen by the customer (optional "courier_id") ----------
+// The price is asked from Shiprocket here again, never taken from the browser. Same rules as ship-rates:
+// 500 g per pair, pickup 413101, prepaid. Secrets: SHIPROCKET_EMAIL, SHIPROCKET_PASSWORD.
+const SR_EMAIL = Deno.env.get("SHIPROCKET_EMAIL") ?? "";
+const SR_PASSWORD = Deno.env.get("SHIPROCKET_PASSWORD") ?? "";
+const SR_BASE = "https://apiv2.shiprocket.in/v1/external";
+const SHOP_PIN = "413101";
+const PAIR_WEIGHT_KG = 0.5;
+
+async function courierQuote(pin: string, pairs: number, courierId: string) {
+  const login = await fetch(`${SR_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: SR_EMAIL, password: SR_PASSWORD }),
+  });
+  const lj: any = await login.json().catch(() => ({}));
+  if (!login.ok || !lj?.token) throw new Error(`shiprocket login failed (${login.status})`);
+  const weight = Math.max(PAIR_WEIGHT_KG, pairs * PAIR_WEIGHT_KG);
+  const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=0&weight=${weight}`;
+  const r = await fetch(`${SR_BASE}/courier/serviceability/?${q}`, { headers: { Authorization: `Bearer ${lj.token}` } });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`serviceability failed (${r.status})`);
+  const c = (j?.data?.available_courier_companies ?? []).find((x: any) => String(x.courier_company_id ?? x.id ?? "") === courierId);
+  if (!c) return null;
+  const rate = Math.ceil(Number(c.rate ?? c.freight_charge ?? 0));
+  if (!(rate > 0)) return null;
+  return {
+    id: courierId, name: String(c.courier_name ?? c.name ?? "").slice(0, 80), rate,
+    days: Number(c.estimated_delivery_days ?? 0) || null, etd: String(c.etd ?? "").slice(0, 40),
+  };
+}
 
 // Error words the database can raise (checkout rules); anything else is a server problem.
 const KNOWN_ERRORS = [
@@ -83,6 +118,24 @@ Deno.serve(async (req: Request) => {
   }
   if (!me) return json(401, { error: "NOT_LOGGED_IN" });
 
+  // 0) Courier chosen on the website: its price for this pincode and weight, straight from Shiprocket.
+  let courier: any = null;
+  const courierId = String(body?.courier_id ?? "").trim();
+  if (courierId) {
+    const pin = String(body?.pincode ?? "").replace(/\D/g, "");
+    const items: any[] = Array.isArray(body?.items) ? body.items : [];
+    const pairs = items.reduce((n, it) => n + (Number(it?.qty) || 0), 0);
+    if (!/^\d{1,12}$/.test(courierId) || !/^[1-9]\d{5}$/.test(pin) || pairs < 1 || pairs > 200) {
+      return json(400, { error: "COURIER_UNAVAILABLE" });
+    }
+    try {
+      courier = await courierQuote(pin, pairs, courierId);
+    } catch (e) {
+      console.error("create-payment: courier price failed", (e as Error).message);
+    }
+    if (!courier) return json(400, { error: "COURIER_UNAVAILABLE" });
+  }
+
   // 1) Check the details and stock, and keep the checkout (no order yet).
   const prep = await fetch(`${SUPABASE_URL}/rest/v1/rpc/site_prepare_checkout`, {
     method: "POST",
@@ -92,6 +145,8 @@ Deno.serve(async (req: Request) => {
         name: body?.name, mobile: me.mobile, country: body?.country, state: body?.state, city: body?.city,
         pincode: body?.pincode, address: body?.address, payment: body?.payment, items: body?.items,
         coupon: body?.coupon,
+        // only when the customer chose a courier; the database uses this instead of the fixed shipping charge
+        ...(courier ? { ship_fee: courier.rate, courier } : {}),
       },
     }),
   });
@@ -142,5 +197,6 @@ Deno.serve(async (req: Request) => {
     coupon: pr.coupon ?? "",
     shipping: pr.shipping,
     total: pr.total,
+    courier: courier ? courier.name : "",
   });
 });

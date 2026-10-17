@@ -158,6 +158,8 @@ async function courierOptions(o: any, token: string): Promise<Record<string, unk
   const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=${cod}&weight=${weightKg}`;
   const res = await srGet(`/courier/serviceability/?${q}`, token);
   const list: any[] = res?.data?.available_courier_companies ?? [];
+  // The courier the customer chose (and paid for) at checkout comes first, marked.
+  const chosen = String(c.courier_choice?.id ?? "");
   return list
     .map((c: any) => ({
       courier_id: String(c.courier_company_id ?? c.id ?? ""),
@@ -166,7 +168,8 @@ async function courierOptions(o: any, token: string): Promise<Record<string, unk
       etd: String(c.etd ?? c.estimated_delivery_days ?? ""),
     }))
     .filter((c) => c.courier_id && c.name)
-    .sort((a, b) => a.rate - b.rate);
+    .map((c) => (chosen && c.courier_id === chosen ? { ...c, name: `★ ${c.name} (customer's choice)`, chosen: true } : c))
+    .sort((a: any, b: any) => (b.chosen ? 1 : 0) - (a.chosen ? 1 : 0) || a.rate - b.rate);
 }
 
 function buildPayload(o: any): Record<string, unknown> {
