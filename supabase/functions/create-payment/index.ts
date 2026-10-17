@@ -38,7 +38,14 @@ const SR_BASE = "https://apiv2.shiprocket.in/v1/external";
 const SHOP_PIN = "413101";
 const PAIR_WEIGHT_KG = 0.5;
 
-async function courierQuote(pin: string, pairs: number, courierId: string) {
+// Full Shiprocket charge for one courier - same rule as ship-rates (the larger of "rate" and the charge parts).
+function chargeOf(c: any): number {
+  const n = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const parts = n(c.freight_charge) + n(c.coverage_charges) + n(c.other_charges) + n(c.cod_charges);
+  return Math.ceil(Math.max(n(c.rate), n(c.freight_charge), parts));
+}
+
+async function courierQuote(pin: string, pairs: number, courierId: string, value: number) {
   const login = await fetch(`${SR_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -47,13 +54,13 @@ async function courierQuote(pin: string, pairs: number, courierId: string) {
   const lj: any = await login.json().catch(() => ({}));
   if (!login.ok || !lj?.token) throw new Error(`shiprocket login failed (${login.status})`);
   const weight = Math.max(PAIR_WEIGHT_KG, pairs * PAIR_WEIGHT_KG);
-  const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=0&weight=${weight}`;
+  const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=0&weight=${weight}` + (value > 0 ? `&declared_value=${value}` : "");
   const r = await fetch(`${SR_BASE}/courier/serviceability/?${q}`, { headers: { Authorization: `Bearer ${lj.token}` } });
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`serviceability failed (${r.status})`);
   const c = (j?.data?.available_courier_companies ?? []).find((x: any) => String(x.courier_company_id ?? x.id ?? "") === courierId);
   if (!c) return null;
-  const rate = Math.ceil(Number(c.rate ?? c.freight_charge ?? 0));
+  const rate = chargeOf(c);
   if (!(rate > 0)) return null;
   return {
     id: courierId, name: String(c.courier_name ?? c.name ?? "").slice(0, 80), rate,
@@ -129,7 +136,15 @@ Deno.serve(async (req: Request) => {
       return json(400, { error: "COURIER_UNAVAILABLE" });
     }
     try {
-      courier = await courierQuote(pin, pairs, courierId);
+      // order value (product prices from the database x qty) - the website sends the same cart total to ship-rates
+      const ids = [...new Set(items.map((it) => String(it?.product_id ?? "")).filter(Boolean))];
+      let value = 0;
+      if (ids.length) {
+        const rows = await dbSelect(`products?id=in.(${ids.map((x) => encodeURIComponent(`"${x.replace(/"/g, "")}"`)).join(",")})&select=id,price`);
+        const price = new Map(rows.map((x: any) => [String(x.id), Number(x.price) || 0]));
+        value = Math.round(items.reduce((n, it) => n + (price.get(String(it?.product_id ?? "")) ?? 0) * (Number(it?.qty) || 0), 0));
+      }
+      courier = await courierQuote(pin, pairs, courierId, value > 0 && value <= 500000 ? value : 0);
     } catch (e) {
       console.error("create-payment: courier price failed", (e as Error).message);
     }
