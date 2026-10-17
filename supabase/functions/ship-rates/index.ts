@@ -44,10 +44,13 @@ async function srToken(): Promise<string> {
 }
 
 // Full Shiprocket charge for one courier (all fields Shiprocket may add on top of freight).
+// The Shiprocket panel shows every courier exactly Rs 5 more than the API "rate" (checked 17 Oct 2026:
+// Blue Dart 132.84 -> 137.84, India Post 46.02 -> 51.02, Shadowfax 74.72 -> 79.72), so that Rs 5 is added here.
+const SHIPROCKET_EXTRA = 5;
 function chargeOf(c: any): number {
   const n = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const parts = n(c.freight_charge) + n(c.coverage_charges) + n(c.other_charges) + n(c.cod_charges);
-  return Math.ceil(Math.max(n(c.rate), n(c.freight_charge), parts));
+  return Math.ceil(Math.max(n(c.rate), n(c.freight_charge), parts) + SHIPROCKET_EXTRA);
 }
 let logged = 0;
 
