@@ -19,6 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -95,6 +102,10 @@ fun CatalogScreen(app: App) {
     val types = remember(products) { products.map { it.productType.trim() }.filter { it.isNotEmpty() }.distinct().sorted() }
     val brands = remember(products) { products.map { it.brand.trim() }.filter { it.isNotEmpty() }.distinct().sorted() }
     val colours = remember(products) { products.flatMap { p -> p.variants.map { it.colour } }.filter { it.isNotBlank() }.distinct().sorted() }
+    val pool = remember(products) {
+        products.flatMap { p -> listOf(p.article.ifBlank { p.name }, p.brand.trim(), p.productType.trim()) + catsOf(p) + p.variants.map { it.colour.trim() } }
+            .filter { it.isNotBlank() }.distinct()
+    }
     val sizes = remember(products, cat) {
         products.filter { cat == "All" || cat == "NEW" || inCat(it, cat) }
             .flatMap { p -> p.variants.flatMap { v -> v.sizes.map { it.size } } }.distinct().sortedBy(sizeOrder)
@@ -135,7 +146,7 @@ fun CatalogScreen(app: App) {
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SearchField(query, { query = it }, "Search article, brand, colour, type")
+                SearchWithSuggestions(query, { query = it }, pool)
                 FilterRow("Category") {
                     Chip("All", cat == "All") { cat = "All" }
                     Chip("New", cat == "NEW") { cat = "NEW" }
@@ -185,6 +196,46 @@ fun CatalogScreen(app: App) {
     }
 
     open?.let { p -> CatalogDetail(app, p) { open = null } }
+}
+
+/** Suggestions while typing (like the website): matching articles, brands, product types, categories and colours. */
+private fun suggest(q: String, pool: List<String>): List<String> {
+    val n = normQ(q)
+    if (n.isEmpty()) return emptyList()
+    return pool.filter { val p = normQ(it); p.contains(n) && p != n }
+        .sortedWith(compareBy<String>({ !normQ(it).startsWith(n) }, { it.length })).take(6)
+}
+
+@Composable
+private fun SearchWithSuggestions(query: String, onChange: (String) -> Unit, pool: List<String>) {
+    var focused by remember { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+    val list = remember(query, pool) { suggest(query, pool) }
+    Column {
+        OutlinedTextField(
+            query, onChange, singleLine = true,
+            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+            placeholder = { Text("Search article, brand, colour, type") },
+            leadingIcon = { Icon(Icons.Filled.Search, null) },
+            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { onChange("") }) { Icon(Icons.Filled.Close, "Clear") } },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() })
+        )
+        if (focused && list.isNotEmpty()) Card(
+            Modifier.fillMaxWidth().padding(top = 2.dp), elevation = CardDefaults.cardElevation(4.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            list.forEach { s ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onChange(s); focus.clearFocus() }.padding(horizontal = 14.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Filled.Search, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(s, modifier = Modifier.padding(start = 10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
 }
 
 @Composable

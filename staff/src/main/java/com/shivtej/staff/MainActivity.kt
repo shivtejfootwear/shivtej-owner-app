@@ -74,14 +74,14 @@ fun StaffApp() {
     val store = remember { Store(ctx) }
     var token by remember { mutableStateOf(store.token) }
     var consent by remember { mutableStateOf(store.consent) }
-    var perm by remember { mutableStateOf(LocationService.hasPermission(ctx)) }
+    var perm by remember { mutableStateOf(LocationService.hasPrecise(ctx)) }
     var gps by remember { mutableStateOf(LocationService.gpsOn(ctx)) }
     var name by remember { mutableStateOf(store.name) }
     val scope = rememberCoroutineScope()
 
     OnResume {
         token = store.token
-        perm = LocationService.hasPermission(ctx)
+        perm = LocationService.hasPrecise(ctx)
         gps = LocationService.gpsOn(ctx)
         val t = store.token ?: return@OnResume
         LocationService.start(ctx)
@@ -100,7 +100,7 @@ fun StaffApp() {
     when {
         !consent -> ConsentScreen(store) { store.consent = true; consent = true }
         token == null -> LoginScreen(store) { t, n -> store.token = t; store.name = n; name = n; token = t; LocationService.start(ctx) }
-        !perm -> PermissionScreen { perm = LocationService.hasPermission(ctx); LocationService.start(ctx) }
+        !perm -> PermissionScreen { perm = LocationService.hasPrecise(ctx); LocationService.start(ctx) }
         !gps -> GpsOffScreen()
         else -> CatalogScreen(store, name) { store.logout(closedByOwner = true); token = null }
     }
@@ -203,7 +203,7 @@ private fun PermissionScreen(onDone: () -> Unit) {
     ) {
         Icon(Icons.Filled.LocationOn, null, tint = StaffBlue, modifier = Modifier.size(64.dp))
         Text("लोकेशन की अनुमति दें", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-        Text("Catalog खोलने के लिए लोकेशन की अनुमति ज़रूरी है। अगले पेज पर \"Precise\" चालू रखें और \"While using the app\" या \"Allow all the time\" चुनें।",
+        Text("Catalog खोलने के लिए सही (Precise) लोकेशन की अनुमति ज़रूरी है। अगले पेज पर \"Precise\" चालू रखें और \"While using the app\" या \"Allow all the time\" चुनें। \"Approximate\" चुनने पर catalog नहीं खुलेगा।",
             textAlign = TextAlign.Center)
         Button(onClick = {
             loc.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
