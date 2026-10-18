@@ -70,6 +70,8 @@ sealed interface Route {
     object CustomerNumbers : Route
     // ---- deleted bills (history of every deleted bill; they can be restored, never erased)
     object DeletedBills : Route
+    // ---- catalog (website products with MRP only, to show customers)
+    object Catalog : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

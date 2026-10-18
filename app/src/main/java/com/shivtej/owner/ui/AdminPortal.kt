@@ -65,7 +65,7 @@ private data class CouponRow(
 )
 
 /**
- * Admin Portal: the website text, photos, home slider, coupons, social links and shipping charge,
+ * Admin Portal: the website text, photos, home slider, coupons, social links and packing charge,
  * the same things the website admin page changes.
  * Online orders open the existing Orders screen.
  */
@@ -135,7 +135,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         val m = e.message.orEmpty()
         return when {
             m.contains("INVALID_OWNER_CODE") -> "Owner code is wrong. Check it in Settings."
-            m.contains("BAD_SHIPPING") -> "Shipping charge must be between 0 and 5000."
+            m.contains("BAD_SHIPPING") -> "Packing charge must be between 0 and 5000."
             m.contains("BAD_COUPON_CODE") -> "Coupon code must be 3 to 20 letters or numbers."
             m.contains("BAD_COUPON_KIND") -> "Choose rupees off or percent off."
             m.contains("BAD_COUPON_VALUE") -> "Value is not right. Percent must be 1 to 100, rupees more than 0."
@@ -307,7 +307,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         if (n == null || n < 0 || n > 5000) { toast(ctx, "Enter an amount between 0 and 5000."); return@launch }
         try {
             call("owner_set_shipping_fee", JSONObject().put("p_fee", n))
-            toast(ctx, "Shipping charge saved.")
+            toast(ctx, "Packing charge saved.")
         } catch (e: Exception) {
             toast(ctx, "Save failed: ${msg(e)}")
         }
@@ -408,10 +408,12 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             Text("Open online orders")
         }
 
-        SectionTitle("Shipping charge (website)")
-        Field("Shipping charge (0 to 5000)", shipFee, keyboard = KeyboardType.Decimal) { shipFee = it }
+        SectionTitle("Packing charge (website)")
+        Text("Added to every website order, on top of the courier price the customer chooses. Keep 0 for no packing charge.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Field("Packing charge (0 to 5000)", shipFee, keyboard = KeyboardType.Decimal) { shipFee = it }
         Button(onClick = { saveShipping() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Text("Save shipping charge")
+            Text("Save packing charge")
         }
 
         SectionTitle("Coupons")

@@ -293,6 +293,7 @@ fun Shell(app: App) {
         Route.AdminPortal -> "Admin Portal"
         Route.CustomerNumbers -> "Customer numbers"
         Route.DeletedBills -> "Deleted bills"
+        Route.Catalog -> "Catalog"
     }
 
     ModalNavigationDrawer(
@@ -376,6 +377,7 @@ fun Shell(app: App) {
                     Route.AdminPortal -> AdminPortalScreen(app, nav)
                     Route.CustomerNumbers -> CustomerNumbersScreen(app)
                     Route.DeletedBills -> DeletedBillsScreen(app, nav)
+                    Route.Catalog -> CatalogScreen(app)
                 }
             }
         }

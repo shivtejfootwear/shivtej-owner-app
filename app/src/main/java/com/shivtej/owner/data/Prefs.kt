@@ -8,7 +8,7 @@ class Prefs(ctx: Context) {
 
     companion object {
         /** The Quick actions shown on the dashboard when the owner has not changed them (ids: see ui/QuickActions.kt). */
-        const val DEFAULT_QUICK_ACTIONS = "bill,add_customer,add_product,staff,customers,reports,returns,printer"
+        const val DEFAULT_QUICK_ACTIONS = "bill,add_customer,add_product,staff,customers,reports,returns,printer,catalog"
         /** The product categories shown in the Category dropdown when the owner has not changed their order. */
         const val DEFAULT_CATEGORIES = "Men,Ladies,Boy,Girl,Senior Men,Senior Women"
         const val DEFAULT_NOTES = "Thank you for shopping with Shivtej Footwear.\n" +
@@ -161,7 +161,14 @@ class Prefs(ctx: Context) {
         get() = sp.getString("category_list", DEFAULT_CATEGORIES) ?: DEFAULT_CATEGORIES
         set(v) = sp.edit().putString("category_list", v).apply()
     var quickActions: String            // the dashboard Quick actions, in order, as comma separated ids
-        get() = sp.getString("quick_actions", DEFAULT_QUICK_ACTIONS) ?: DEFAULT_QUICK_ACTIONS
+        get() {
+            val v = sp.getString("quick_actions", DEFAULT_QUICK_ACTIONS) ?: DEFAULT_QUICK_ACTIONS
+            // Catalog is new: put it once on a dashboard that was arranged before (it can be removed after that).
+            if (sp.getBoolean("qa_catalog_added", false)) return v
+            val n = if (v.split(",").any { it.trim() == "catalog" }) v else if (v.isBlank()) "catalog" else "$v,catalog"
+            sp.edit().putString("quick_actions", n).putBoolean("qa_catalog_added", true).apply()
+            return n
+        }
         set(v) = sp.edit().putString("quick_actions", v).apply()
     var wallScope: String               // "dashboard" = only the dashboard / "app" = every main screen
         get() = sp.getString("wall_scope", "dashboard") ?: "dashboard"
