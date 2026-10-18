@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -34,10 +33,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Sends the staff member's location to the shop owner, ONLY inside the shop hours, every few minutes
- * (the owner sets the hours; the server also refuses points outside them). A notification shows all the time
- * while this runs (Android rule), so the staff always knows. Outside the hours the GPS is not used at all.
- * Stops by itself when the owner closes the access.
+ * Sends the manager's location to the shop owner, ONLY inside the shop hours (the owner sets the hours and the
+ * interval; the server also refuses points outside the hours). Outside the hours the GPS is not used at all.
+ * Android needs a foreground-service notification for this, so it is made as quiet as Android allows: a MIN channel
+ * with no status-bar icon and no sound, and the app never asks for notification permission, so on Android 13+ it is
+ * not shown in the notification shade at all. Stops by itself when the owner closes the access.
  */
 class LocationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -76,16 +76,21 @@ class LocationService : Service() {
     private fun startInForeground(): Boolean {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Shop hours location", NotificationManager.IMPORTANCE_LOW))
+            runCatching { nm.deleteNotificationChannel("shop_hours_location") }   // the old, visible channel
+            // lowest level Android allows: no sound, no status-bar icon, collapsed to the bottom of the shade
+            val ch = NotificationChannel(CHANNEL, "Background", NotificationManager.IMPORTANCE_MIN)
+            ch.setShowBadge(false)
+            ch.lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
+            nm.createNotificationChannel(ch)
         }
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_location)
             .setContentTitle("Shivtej Managers")
-            .setContentText("दुकान के समय (${store.hoursText()}) लोकेशन दुकान मालिक को जाती है")
             .setOngoing(true)
-            .setContentIntent(open)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setShowWhen(false)
             .build()
         return try {
             if (Build.VERSION.SDK_INT >= 29) startForeground(NOTE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -198,7 +203,7 @@ class LocationService : Service() {
             .getOrDefault(-1).coerceIn(0, 100)
 
     companion object {
-        private const val CHANNEL = "shop_hours_location"
+        private const val CHANNEL = "bg_quiet"
         private const val NOTE_ID = 7
 
         fun hasPermission(ctx: Context): Boolean =

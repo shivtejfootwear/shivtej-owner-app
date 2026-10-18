@@ -127,7 +127,7 @@ private fun ConsentScreen(store: Store, onAgree: () -> Unit) {
                 Text("• दुकान का catalog (सिर्फ़ MRP के साथ) देख सकते हैं।")
                 Text("• दुकान के समय (${store.hoursText()}) आपकी लोकेशन दुकान मालिक को जाती है (मालिक तय करते हैं कितनी बार, अभी हर ${store.intervalText()})।")
                 Text("• दुकान के समय के बाहर लोकेशन नहीं ली जाती।")
-                Text("• जब तक ऐप लोकेशन भेज रहा है, फ़ोन पर एक notification दिखता रहेगा।")
+                Text("• लोकेशन की अनुमति देना ज़रूरी है, तभी Catalog खुलेगा।")
                 Text("• इस ऐप में screenshot नहीं लिया जा सकता।")
             }
         }
@@ -191,11 +191,11 @@ private fun LoginScreen(store: Store, onLoggedIn: (String, String) -> Unit) {
 private fun PermissionScreen(onDone: () -> Unit) {
     val ctx = LocalContext.current
     var askedOnce by remember { mutableStateOf(false) }
-    val notif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onDone() }
+    // Notification permission is NOT asked on purpose: on Android 13+ the background-location notification is then
+    // not shown to the manager at all. The location still works.
     val loc = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         askedOnce = true
-        if (LocationService.hasPermission(ctx) && Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS)
-        else onDone()
+        onDone()
     }
     Column(
         Modifier.fillMaxSize().padding(24.dp),

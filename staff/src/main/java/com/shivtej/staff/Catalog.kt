@@ -86,7 +86,7 @@ fun CatalogScreen(store: Store, staffName: String, onClosed: () -> Unit) {
             } catch (e: NotAllowed) {
                 onClosed()
             } catch (e: Exception) {
-                loadError = "Catalog नहीं खुला। इंटरनेट चेक करके ऊपर ⟳ दबाएँ।"
+                loadError = "Catalog नहीं खुला। ऊपर ⟳ दबाएँ।\n(${(e.message ?: "unknown").take(140)})"
             } finally { loading = false }
         }
     }
