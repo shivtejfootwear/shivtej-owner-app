@@ -41,7 +41,7 @@ fun StaffScreen(app: App, nav: Nav) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Staff") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Sales report") })
-            Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Staff app") })
+            Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Managers app") })
         }
         when (tab) {
             0 -> StaffList(app)

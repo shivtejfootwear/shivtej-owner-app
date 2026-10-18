@@ -2,7 +2,7 @@
 # Outputs (download from the finished run > Artifacts):
 #   Shivtej-Owner-App        release APK (signed with the owner's release key when the secrets below are set)
 #   Shivtej-Owner-App-debug  debug APK
-#   Shivtej-Staff-App        the separate staff app (catalog + shop-hours location), signed with the same key
+#   Shivtej-Managers-App     the separate managers app (catalog + shop-hours location), signed with the same key
 #   unit-test-results        JVM unit test reports (always uploaded)
 #   build-failure-reports    lint and build reports (only when a step failed)
 #
@@ -142,7 +142,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           for pair in "app/build/outputs/apk/release/app-release.apk:Shivtej-Owner-App.apk" \
                       "app/build/outputs/apk/debug/app-debug.apk:Shivtej-Owner-App-debug.apk" \
-                      "staff/build/outputs/apk/release/staff-release.apk:Shivtej-Staff-App.apk"; do
+                      "staff/build/outputs/apk/release/staff-release.apk:Shivtej-Managers-App.apk"; do
             SRC="${pair%%:*}"; DST="${pair##*:}"
             if [ ! -f "$SRC" ]; then
               echo "::error::The build finished but $SRC does not exist. Files found:"
@@ -170,11 +170,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload the staff app APK (artifact Shivtej-Staff-App)
+      - name: Upload the managers app APK (artifact Shivtej-Managers-App)
         uses: actions/upload-artifact@v4
         with:
-          name: Shivtej-Staff-App
-          path: dist/Shivtej-Staff-App.apk
+          name: Shivtej-Managers-App
+          path: dist/Shivtej-Managers-App.apk
           if-no-files-found: error
           retention-days: 30
 

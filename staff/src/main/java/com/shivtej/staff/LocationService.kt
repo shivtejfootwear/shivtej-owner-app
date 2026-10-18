@@ -82,7 +82,7 @@ class LocationService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_location)
-            .setContentTitle("Shivtej Staff")
+            .setContentTitle("Shivtej Managers")
             .setContentText("दुकान के समय (${store.hoursText()}) लोकेशन दुकान मालिक को जाती है")
             .setOngoing(true)
             .setContentIntent(open)

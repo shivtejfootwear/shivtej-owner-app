@@ -119,8 +119,8 @@ private fun ConsentScreen(store: Store, onAgree: () -> Unit) {
     ) {
         Spacer(Modifier.height(24.dp))
         Logo()
-        Text("Shivtej Staff", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
-        Text("यह ऐप सिर्फ़ Shivtej Footwear के स्टाफ के लिए है।", textAlign = TextAlign.Center)
+        Text("Shivtej Managers", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
+        Text("यह ऐप सिर्फ़ Shivtej Footwear के मैनेजर्स के लिए है।", textAlign = TextAlign.Center)
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFF4F7FC))) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("इस ऐप में:", fontWeight = FontWeight.Bold)
@@ -149,7 +149,7 @@ private fun LoginScreen(store: Store, onLoggedIn: (String, String) -> Unit) {
     ) {
         Spacer(Modifier.height(24.dp))
         Logo()
-        Text("Staff login", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
+        Text("Manager login", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
         if (closed) Text("इस फ़ोन का access बंद है। दुकान मालिक से नया कोड लें।", color = BrandRed,
             fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         Text("अपना मोबाइल नंबर और दुकान मालिक से मिला 6 अंक का कोड डालें।", textAlign = TextAlign.Center,

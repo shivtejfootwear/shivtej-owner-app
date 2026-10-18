@@ -35,7 +35,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /*
- * Owner app > Staff > "Staff app": who may use the Shivtej Staff app (catalog), and where they were in shop hours.
+ * Owner app > Staff > "Managers app": who may use the Shivtej Managers app (catalog), and where they were in shop hours.
  *  - Give access: a 6-digit code for one staff member (works once, 24 hours, one phone).
  *  - Close access: the staff app logs out at once and can not open the catalog again (a new code gives access again).
  *  - Location: last point and today's points, opened in Google Maps. Only shop hours are recorded.
@@ -163,7 +163,7 @@ fun StaffAppTab(app: App) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Who can use the Shivtej Staff app (catalog with MRP only). Their location is saved only in shop hours.",
+                Text("Who can use the Shivtej Managers app (catalog with MRP only). Their location is saved only in shop hours.",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Schedule, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -249,7 +249,7 @@ fun StaffAppTab(app: App) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(c.chunked(3).joinToString(" "), fontSize = 36.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 4.sp)
-                    Text("Tell this code to $name. In the Shivtej Staff app they type their mobile number and this code. " +
+                    Text("Tell this code to $name. In the Shivtej Managers app they type their mobile number and this code. " +
                         "It works once, for 24 hours, on one phone. 5 wrong tries and it stops working.", fontSize = 13.sp)
                 }
             },
@@ -260,7 +260,7 @@ fun StaffAppTab(app: App) {
     closing?.let { s ->
         ConfirmDialog(
             "Close app access?",
-            "${s.name}'s Shivtej Staff app will log out and the catalog will not open again. You can give a new code later.",
+            "${s.name}'s Shivtej Managers app will log out and the catalog will not open again. You can give a new code later.",
             "Close access",
             onConfirm = {
                 scope.launch {

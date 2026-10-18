@@ -96,7 +96,7 @@ fun CatalogScreen(store: Store, staffName: String, onClosed: () -> Unit) {
         TopAppBar(
             title = {
                 Column {
-                    Text("Shivtej Staff", fontWeight = FontWeight.ExtraBold)
+                    Text("Shivtej Managers", fontWeight = FontWeight.ExtraBold)
                     if (staffName.isNotBlank()) Text(staffName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
