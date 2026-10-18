@@ -44,8 +44,14 @@ import java.time.format.DateTimeFormatter
 private data class AppAccess(
     val staffId: String, val active: Boolean, val hasDevice: Boolean, val deviceName: String,
     val codePending: Boolean, val codeExpires: String, val lastSeen: String,
-    val lat: Double?, val lng: Double?, val battery: Int?, val status: String, val at: String
+    val lat: Double?, val lng: Double?, val battery: Int?, val status: String, val at: String,
+    val intervalSec: Int
 )
+
+/** How often the location is sent (seconds) -> label. Live = every 15 seconds. */
+private val INTERVALS = listOf(15 to "Live (every 15 sec)", 60 to "Every 1 min", 300 to "Every 5 min", 600 to "Every 10 min",
+    1800 to "Every 30 min", 3600 to "Every 1 hour", 7200 to "Every 2 hours")
+private fun intervalLabel(sec: Int) = INTERVALS.firstOrNull { it.first == sec }?.second ?: "Every ${sec / 60} min"
 
 private fun JSONObject.dbl(k: String): Double? = if (isNull(k) || !has(k)) null else optDouble(k).takeIf { !it.isNaN() }
 private fun JSONObject.txt(k: String): String = if (isNull(k)) "" else optString(k, "")
@@ -53,7 +59,8 @@ private fun JSONObject.txt(k: String): String = if (isNull(k)) "" else optString
 private fun parseAccess(o: JSONObject) = AppAccess(
     o.txt("staff_id"), o.optBoolean("active"), o.optBoolean("has_device"), o.txt("device_name"),
     o.optBoolean("code_pending"), o.txt("code_expires"), o.txt("last_seen"),
-    o.dbl("lat"), o.dbl("lng"), if (o.isNull("battery")) null else o.optInt("battery"), o.txt("status"), o.txt("at")
+    o.dbl("lat"), o.dbl("lng"), if (o.isNull("battery")) null else o.optInt("battery"), o.txt("status"), o.txt("at"),
+    o.optInt("interval_sec", 600)
 )
 
 private val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
@@ -104,22 +111,40 @@ fun StaffAppTab(app: App) {
             m.contains("INVALID_OWNER_CODE") -> "Owner code is wrong. Check it in Settings."
             m.contains("BAD_MOBILE") -> "Add a correct 10-digit mobile number to this staff first."
             m.contains("BAD_HOURS") -> "Start and end time can not be the same."
+            m.contains("NO_ACCESS") -> "Give app access to this staff first."
             m.contains("Could not find the function") || m.contains("PGRST202") ->
                 "Run owner_update_15_staff_app.sql in Supabase first."
             else -> "No internet or server problem. Try again."
         }
     }
 
-    fun load() = scope.launch {
-        loading = true; error = null
+    fun load(quiet: Boolean = false) = scope.launch {
+        if (!quiet) { loading = true; error = null }
         try {
             val r = withContext(Dispatchers.IO) { Api.rpc("owner_staff_app_list", JSONObject().put("p_code", code)) } as JSONObject
             r.optJSONObject("hours")?.let { startMin = it.optInt("start_min", 540); endMin = it.optInt("end_min", 1320) }
             val a = r.optJSONArray("staff") ?: JSONArray()
             access = (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(::parseAccess) }.associateBy { it.staffId }
-        } catch (e: Exception) { error = msg(e) } finally { loading = false }
+        } catch (e: Exception) { if (!quiet) error = msg(e) } finally { loading = false }
     }
     LaunchedEffect(Unit) { load() }
+    // keeps the locations fresh while this screen is open: every 15 seconds when someone is on Live, else every minute
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(if (access.values.any { it.active && it.intervalSec <= 15 }) 15_000L else 60_000L)
+            load(quiet = true)
+        }
+    }
+
+    fun setInterval(s: StaffE, sec: Int) = scope.launch {
+        try {
+            withContext(Dispatchers.IO) {
+                Api.rpc("owner_staff_app_interval", JSONObject().put("p_code", code).put("p_staff_id", s.id).put("p_sec", sec))
+            }
+            toast(ctx, "${s.name}: ${intervalLabel(sec)}. The phone switches within about 2 minutes.")
+            load(quiet = true)
+        } catch (e: Exception) { toast(ctx, msg(e)) }
+    }
 
     fun giveCode(s: StaffE) = scope.launch {
         try {
@@ -180,6 +205,26 @@ fun StaffAppTab(app: App) {
                         } + (a.battery?.let { " · battery $it%" } ?: "")
                         Text(line, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                             color = if (a.status == "ok") MaterialTheme.colorScheme.onSurface else RedOut)
+                    }
+                    if (a != null && a.active) {
+                        var menu by remember { mutableStateOf(false) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Location: ", fontSize = 13.sp)
+                            Box {
+                                AssistChip(
+                                    onClick = { menu = true },
+                                    label = { Text(intervalLabel(a.intervalSec), fontWeight = FontWeight.Bold,
+                                        color = if (a.intervalSec <= 15) RedOut else Color.Unspecified) },
+                                    trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) }
+                                )
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    INTERVALS.forEach { (sec, label) ->
+                                        DropdownMenuItem(text = { Text(label) }, onClick = { menu = false; setInterval(s, sec) })
+                                    }
+                                }
+                            }
+                            if (a.intervalSec <= 15) Text("  ● LIVE", color = RedOut, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
                         if (a?.lat != null && a.lng != null) OutlinedButton(onClick = { open(mapUrl(a.lat, a.lng)) }) {
@@ -257,7 +302,14 @@ private fun TrailDialog(app: App, s: StaffE, open: (String) -> Unit, onClose: ()
                 Api.rpc("owner_staff_app_trail", JSONObject().put("p_code", app.prefs.ownerCode).put("p_staff_id", s.id)
                     .put("p_day", day.toString()))
             } as? JSONArray ?: JSONArray()
-            points = (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+            // Live saves a point every 15 seconds: the list shows at most one point per minute (GPS-off rows always)
+            var last = 0L
+            points = (0 until a.length()).mapNotNull { a.optJSONObject(it) }.filter { p ->
+                val t = runCatching { OffsetDateTime.parse(p.optString("at")).toInstant().toEpochMilli() }.getOrDefault(0L)
+                val keep = p.optString("status") != "ok" || t - last >= 60_000L
+                if (keep) last = t
+                keep
+            }
         } catch (e: Exception) { error = "Could not load. Check the internet." }
     }
     AlertDialog(

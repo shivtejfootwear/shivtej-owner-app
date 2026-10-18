@@ -40,15 +40,22 @@ class Store(ctx: Context) {
     var endMin: Int
         get() = sp.getInt("end_min", 1320)
         private set(v) = sp.edit().putInt("end_min", v).apply()
-    var intervalMin: Int
-        get() = sp.getInt("interval_min", 10).coerceIn(2, 60)
-        private set(v) = sp.edit().putInt("interval_min", v).apply()
+    /** How often the location goes to the owner, in seconds (the owner chooses: Live 15 s ... 2 hours). */
+    var intervalSec: Int
+        get() = sp.getInt("interval_sec", 600).coerceIn(10, 7200)
+        private set(v) = sp.edit().putInt("interval_sec", v).apply()
 
     fun saveHours(o: JSONObject?) {
         if (o == null) return
         startMin = o.optInt("start_min", startMin)
         endMin = o.optInt("end_min", endMin)
-        intervalMin = o.optInt("interval_min", intervalMin)
+        intervalSec = if (o.has("interval_sec")) o.optInt("interval_sec", intervalSec) else o.optInt("interval_min", intervalSec / 60) * 60
+    }
+
+    fun intervalText(): String = when {
+        intervalSec < 60 -> "$intervalSec सेकंड"
+        intervalSec < 3600 -> "${intervalSec / 60} मिनट"
+        else -> "${intervalSec / 3600} घंटे"
     }
 
     /** True inside the shop hours (phone time). */

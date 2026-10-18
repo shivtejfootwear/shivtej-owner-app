@@ -8,8 +8,11 @@
 --   * Block = the login key is deleted at once; the staff app logs out and wipes the catalog the next time it checks
 --     (on opening and every few minutes). Making a new code also logs the old phone out.
 -- Location
---   * Saved only inside shop hours (set by the owner, India time), at most once every 2 minutes per staff.
---     Outside shop hours nothing is saved, even if a phone sends it. Points older than 60 days are deleted.
+--   * Saved only inside shop hours (set by the owner, India time). Outside shop hours nothing is saved,
+--     even if a phone sends it. Points older than 60 days are deleted.
+--   * How often: chosen per staff in the owner app - Live (every 15 seconds), 1/5/10/30 minutes, 1 or 2 hours.
+--     Default 10 minutes. A change reaches the staff phone within about 2 minutes.
+-- (This file replaces the first version of update 15 - running it again keeps all data.)
 -- Catalog
 --   * Same products as the website (switched on, some stock). Only the MRP is sent - never the selling price.
 
@@ -68,6 +71,10 @@ create table if not exists public.staff_app_settings (
 alter table public.staff_app_settings enable row level security;
 insert into public.staff_app_settings (id) values (1) on conflict (id) do nothing;
 
+-- how often the location is sent, in seconds (per staff; empty = the default in staff_app_settings)
+alter table public.staff_app_users add column if not exists interval_sec int;
+alter table public.staff_app_settings add column if not exists interval_sec int not null default 600;
+
 revoke all on public.staff_app_users, public.staff_app_sessions, public.staff_locations, public.staff_app_settings
   from anon, authenticated;
 
@@ -77,8 +84,19 @@ language sql immutable as $$ select encode(sha256(convert_to(t, 'UTF8')), 'hex')
 
 create or replace function public._staff_hours() returns jsonb
 language sql stable security definer set search_path = public as $$
-  select jsonb_build_object('start_min', start_min, 'end_min', end_min, 'interval_min', interval_min)
+  select jsonb_build_object('start_min', start_min, 'end_min', end_min, 'interval_min', interval_min,
+                            'interval_sec', interval_sec)
     from staff_app_settings where id = 1
+$$;
+
+-- shop hours + this staff member's own interval (sent to the staff app with every answer)
+create or replace function public._staff_conf(p_staff_id text) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('start_min', s.start_min, 'end_min', s.end_min,
+           'interval_sec', coalesce(u.interval_sec, s.interval_sec),
+           'interval_min', greatest(1, coalesce(u.interval_sec, s.interval_sec) / 60))
+    from staff_app_settings s left join staff_app_users u on u.staff_id = p_staff_id
+   where s.id = 1
 $$;
 
 -- true when India time now is inside shop hours
@@ -118,7 +136,8 @@ begin
         'device_name', device_name, 'has_device', device_id is not null and active,
         'code_pending', code_hash is not null and code_expires > now(), 'code_expires', code_expires,
         'last_seen', last_seen, 'lat', last_lat, 'lng', last_lng, 'acc', last_acc,
-        'battery', last_battery, 'status', last_status, 'at', last_at) order by name)
+        'battery', last_battery, 'status', last_status, 'at', last_at,
+        'interval_sec', coalesce(interval_sec, (select interval_sec from staff_app_settings where id = 1))) order by name)
       from staff_app_users), '[]'::jsonb));
 end $$;
 
@@ -149,6 +168,16 @@ begin
   update staff_app_users set active = false, code_hash = null, code_expires = null, device_id = null,
          device_name = null, updated_at = now() where staff_id = p_staff_id;
   delete from staff_app_sessions where staff_id = p_staff_id;
+end $$;
+
+-- How often one staff member's location is sent: 15 (Live), 60, 300, 600, 1800, 3600 or 7200 seconds.
+create or replace function public.owner_staff_app_interval(p_code text, p_staff_id text, p_sec int) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform _owner_ok(p_code);
+  if p_sec is null or p_sec not in (15, 60, 300, 600, 1800, 3600, 7200) then raise exception 'BAD_INTERVAL'; end if;
+  update staff_app_users set interval_sec = p_sec, updated_at = now() where staff_id = p_staff_id;
+  if not found then raise exception 'NO_ACCESS'; end if;
 end $$;
 
 -- Location points of one staff member on one day (India date), oldest first.
@@ -191,7 +220,7 @@ begin
       update staff_app_users set code_hash = null, code_expires = null, code_tries = 0, device_id = p_device,
              device_name = left(coalesce(p_device_name, ''), 80), last_seen = now(), updated_at = now()
        where staff_id = u.staff_id;
-      return jsonb_build_object('token', v_token, 'name', u.name, 'hours', _staff_hours());
+      return jsonb_build_object('token', v_token, 'name', u.name, 'hours', _staff_conf(u.staff_id));
     end if;
     update staff_app_users set code_tries = code_tries + 1,
            code_hash = case when code_tries + 1 >= 5 then null else code_hash end
@@ -206,7 +235,7 @@ language plpgsql security definer set search_path = public as $$
 declare u staff_app_users%rowtype;
 begin
   u := _staff_session(p_token, p_device);
-  return jsonb_build_object('ok', true, 'name', u.name, 'hours', _staff_hours());
+  return jsonb_build_object('ok', true, 'name', u.name, 'hours', _staff_conf(u.staff_id));
 end $$;
 
 create or replace function public.staff_location(p_token text, p_device text, p_lat double precision,
@@ -217,13 +246,16 @@ begin
   u := _staff_session(p_token, p_device);
   if v_status not in ('ok', 'gps_off', 'no_permission') then v_status := 'ok'; end if;
   if not _staff_in_hours() then
-    return jsonb_build_object('ok', true, 'saved', false, 'hours', _staff_hours());
+    return jsonb_build_object('ok', true, 'saved', false, 'hours', _staff_conf(u.staff_id));
   end if;
   if v_status = 'ok' and (p_lat is null or p_lng is null or p_lat not between -90 and 90 or p_lng not between -180 and 180) then
     raise exception 'BAD_LOCATION';
   end if;
-  if exists (select 1 from staff_locations where staff_id = u.staff_id and at > now() - interval '2 minutes') then
-    return jsonb_build_object('ok', true, 'saved', false, 'hours', _staff_hours());
+  -- not more often than half the chosen interval (Live = every 15 seconds -> at most one point per 7.5 seconds)
+  if exists (select 1 from staff_locations where staff_id = u.staff_id
+               and at > now() - make_interval(secs => greatest(
+                     coalesce(u.interval_sec, (select interval_sec from staff_app_settings where id = 1)) * 0.5, 5))) then
+    return jsonb_build_object('ok', true, 'saved', false, 'hours', _staff_conf(u.staff_id));
   end if;
   insert into staff_locations (staff_id, lat, lng, acc, battery, status)
   values (u.staff_id, case when v_status = 'ok' then p_lat end, case when v_status = 'ok' then p_lng end,
@@ -235,7 +267,7 @@ begin
    where staff_id = u.staff_id;
   -- keep 60 days
   delete from staff_locations where at < now() - interval '60 days';
-  return jsonb_build_object('ok', true, 'saved', true, 'hours', _staff_hours());
+  return jsonb_build_object('ok', true, 'saved', true, 'hours', _staff_conf(u.staff_id));
 end $$;
 
 -- Website products for the staff catalog: MRP only (no selling price), sizes only as in stock / not in stock.
@@ -279,6 +311,9 @@ revoke all on function public._staff_hash(text) from public, anon, authenticated
 revoke all on function public._staff_hours() from public, anon, authenticated;
 revoke all on function public._staff_in_hours() from public, anon, authenticated;
 revoke all on function public._staff_session(text, text) from public, anon, authenticated;
+revoke all on function public._staff_conf(text) from public, anon, authenticated;
+revoke all on function public.owner_staff_app_interval(text, text, int) from public;
+grant execute on function public.owner_staff_app_interval(text, text, int) to anon, authenticated;
 revoke all on function public.owner_staff_app_list(text) from public;
 revoke all on function public.owner_staff_app_code(text, text, text, text) from public;
 revoke all on function public.owner_staff_app_block(text, text) from public;

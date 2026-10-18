@@ -46,11 +46,13 @@ class LocationService : Service() {
     private var updating = false
     private var lastSent = 0L
     private var lastStatusSent = 0L
-    private var lastCheck = 0L
+    @Volatile private var lastCheck = 0L
+    private var activeSec = 0
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(r: LocationResult) {
             r.lastLocation?.let { send(it) }
+            scope.launch { checkConf(2 * 60_000L) }
         }
     }
 
@@ -97,37 +99,53 @@ class LocationService : Service() {
     private suspend fun loop() {
         while (scope.isActive) {
             if (store.token == null) { stopSelf(); return }
-            val now = System.currentTimeMillis()
             if (store.inHours()) {
                 when {
                     !hasPermission(this) -> { stopUpdates(); report("no_permission") }
                     !gpsOn(this) -> { stopUpdates(); report("gps_off") }
                     else -> startUpdates()
                 }
+                checkConf(2 * 60_000L)          // the owner may switch Live on: learn it within about 2 minutes
             } else {
                 stopUpdates()
-                // outside the hours: only check now and then that the access is still open (and get new hours)
-                if (now - lastCheck > 30 * 60_000L) {
-                    lastCheck = now
-                    val t = store.token ?: return
-                    try { store.saveHours(Api.check(t, store.deviceId).optJSONObject("hours")) }
-                    catch (e: NotAllowed) { closed(); return }
-                    catch (_: Exception) { }
-                }
+                checkConf(30 * 60_000L)         // outside the hours: only check now and then (access, new hours)
             }
             delay(60_000L)
         }
     }
 
+    /** Asks the server for the access, the hours and this staff member's interval, at most once per [every] ms. */
+    private suspend fun checkConf(every: Long) {
+        val now = System.currentTimeMillis()
+        if (now - lastCheck < every) return
+        lastCheck = now
+        val t = store.token ?: return
+        try {
+            store.saveHours(Api.check(t, store.deviceId).optJSONObject("hours"))
+            if (updating && activeSec != store.intervalSec) launchRestart()
+        } catch (e: NotAllowed) { closed() }
+        catch (_: Exception) { }
+    }
+
+    /**
+     * Up to 5 minutes: GPS updates at the chosen interval (Live = every 15 seconds).
+     * Longer (30 min .. 2 hours): cheap network location every 2 minutes, which keeps the app awake enough to notice
+     * when the owner switches Live on; a point is sent only when the chosen time has passed.
+     */
     @SuppressLint("MissingPermission")
     private fun startUpdates() {
         if (updating) return
-        val ms = store.intervalMin * 60_000L
-        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, ms).setMinUpdateIntervalMillis(ms / 2).build()
+        val sec = store.intervalSec
+        val req = if (sec <= 300) {
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, sec * 1000L).setMinUpdateIntervalMillis(sec * 500L).build()
+        } else {
+            LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 120_000L).setMinUpdateIntervalMillis(60_000L).build()
+        }
         try {
             fused.requestLocationUpdates(req, callback, Looper.getMainLooper())
             fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { it?.let(::send) }
             updating = true
+            activeSec = sec
         } catch (_: Exception) { }
     }
 
@@ -139,13 +157,15 @@ class LocationService : Service() {
 
     private fun send(l: Location) {
         val now = System.currentTimeMillis()
-        if (!store.inHours() || now - lastSent < store.intervalMin * 60_000L - 45_000L) return
+        val ms = store.intervalSec * 1000L
+        if (!store.inHours() || now - lastSent < ms - minOf(45_000L, ms / 4)) return
         lastSent = now
         val t = store.token ?: return
         scope.launch {
             try {
                 val r = Api.location(t, store.deviceId, l.latitude, l.longitude, if (l.hasAccuracy()) l.accuracy else null, battery(), "ok")
                 store.saveHours(r.optJSONObject("hours"))
+                if (activeSec != store.intervalSec) launchRestart()
             } catch (e: NotAllowed) { closed() }
             catch (_: Exception) { lastSent = 0L } // no internet: try again with the next point
         }
@@ -154,12 +174,17 @@ class LocationService : Service() {
     /** Tells the owner that the GPS is off or the permission was taken away (once per interval). */
     private suspend fun report(status: String) {
         val now = System.currentTimeMillis()
-        if (now - lastStatusSent < store.intervalMin * 60_000L) return
+        if (now - lastStatusSent < maxOf(store.intervalSec, 60) * 1000L) return
         lastStatusSent = now
         val t = store.token ?: return
         try { Api.location(t, store.deviceId, null, null, null, battery(), status) }
         catch (e: NotAllowed) { closed() }
         catch (_: Exception) { lastStatusSent = 0L }
+    }
+
+    /** The owner changed the interval: start the location updates again with the new one (on the main thread). */
+    private fun launchRestart() {
+        android.os.Handler(Looper.getMainLooper()).post { stopUpdates(); if (store.inHours() && hasPermission(this) && gpsOn(this)) startUpdates() }
     }
 
     private fun closed() {

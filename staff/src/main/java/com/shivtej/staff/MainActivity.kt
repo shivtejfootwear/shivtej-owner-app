@@ -125,7 +125,7 @@ private fun ConsentScreen(store: Store, onAgree: () -> Unit) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("इस ऐप में:", fontWeight = FontWeight.Bold)
                 Text("• दुकान का catalog (सिर्फ़ MRP के साथ) देख सकते हैं।")
-                Text("• दुकान के समय (${store.hoursText()}) आपकी लोकेशन हर ${store.intervalMin} मिनट में दुकान मालिक को जाती है।")
+                Text("• दुकान के समय (${store.hoursText()}) आपकी लोकेशन दुकान मालिक को जाती है (मालिक तय करते हैं कितनी बार, अभी हर ${store.intervalText()})।")
                 Text("• दुकान के समय के बाहर लोकेशन नहीं ली जाती।")
                 Text("• जब तक ऐप लोकेशन भेज रहा है, फ़ोन पर एक notification दिखता रहेगा।")
                 Text("• इस ऐप में screenshot नहीं लिया जा सकता।")
