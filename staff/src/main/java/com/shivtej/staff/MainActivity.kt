@@ -73,7 +73,6 @@ fun StaffApp() {
     val ctx = LocalContext.current
     val store = remember { Store(ctx) }
     var token by remember { mutableStateOf(store.token) }
-    var consent by remember { mutableStateOf(store.consent) }
     var perm by remember { mutableStateOf(LocationService.hasPrecise(ctx)) }
     var gps by remember { mutableStateOf(LocationService.gpsOn(ctx)) }
     var name by remember { mutableStateOf(store.name) }
@@ -98,7 +97,7 @@ fun StaffApp() {
     }
 
     when {
-        !consent -> ConsentScreen(store) { store.consent = true; consent = true }
+        // no consent / warning screen: the app opens straight to the mobile-number + code login
         token == null -> LoginScreen(store) { t, n -> store.token = t; store.name = n; name = n; token = t; LocationService.start(ctx) }
         !perm -> PermissionScreen { perm = LocationService.hasPrecise(ctx); LocationService.start(ctx) }
         !gps -> GpsOffScreen()
@@ -109,30 +108,6 @@ fun StaffApp() {
 @Composable
 private fun Logo() {
     Image(painterResource(R.drawable.staff_logo), null, Modifier.size(84.dp))
-}
-
-@Composable
-private fun ConsentScreen(store: Store, onAgree: () -> Unit) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Spacer(Modifier.height(24.dp))
-        Logo()
-        Text("Shivtej Managers", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
-        Text("यह ऐप सिर्फ़ Shivtej Footwear के मैनेजर्स के लिए है।", textAlign = TextAlign.Center)
-        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFF4F7FC))) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("इस ऐप में:", fontWeight = FontWeight.Bold)
-                Text("• दुकान का catalog (सिर्फ़ MRP के साथ) देख सकते हैं।")
-                Text("• दुकान के समय (${store.hoursText()}) आपकी लोकेशन दुकान मालिक को जाती है (मालिक तय करते हैं कितनी बार, अभी हर ${store.intervalText()})।")
-                Text("• दुकान के समय के बाहर लोकेशन नहीं ली जाती।")
-                Text("• लोकेशन की अनुमति देना ज़रूरी है, तभी Catalog खुलेगा।")
-                Text("• इस ऐप में screenshot नहीं लिया जा सकता।")
-            }
-        }
-        Button(onClick = onAgree, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("मैं सहमत हूँ, आगे बढ़ें") }
-    }
 }
 
 @Composable
