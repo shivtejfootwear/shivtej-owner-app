@@ -601,12 +601,15 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
     }
 }
 
+/** The one and only database version. DbGuard reads this too, so the two can never disagree again. */
+const val DB_VERSION = 15
+
 @Database(
     entities = [ProductE::class, VariantE::class, SizeE::class, OpE::class, BillE::class,
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class, PieceBarcodeE::class],
-    version = 15,
+    version = DB_VERSION,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
