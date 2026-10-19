@@ -15,6 +15,7 @@ data class BillDraft(
     val customerMobile: String = "",
     val customerName: String = "",
     val customerAddress: String = "",
+    val customerGender: String = "",     // "M" / "F" / "" (not chosen)
     val salesPersonId: String = "",
     val salesPersonName: String = "",
     val method: String = "Cash",
@@ -27,6 +28,25 @@ class CartStore(private val prefs: Prefs) {
     val lines = mutableStateListOf<CartLine>()
     var draft by mutableStateOf(BillDraft())
         private set
+
+    // When editing a saved bill, these hold which bill (same id / number); "" = a new bill.
+    var editingBillId by mutableStateOf(prefs.editingBillId)
+        private set
+    var editingBillNo by mutableStateOf(prefs.editingBillNo)
+        private set
+
+    /** Re-open a saved bill for editing: its items and customer details fill the cart, keeping its number. */
+    fun startEditing(billId: String, billNo: String, newLines: List<CartLine>, d: BillDraft) {
+        lines.clear(); lines.addAll(newLines); save()
+        editingBillId = billId; editingBillNo = billNo
+        prefs.editingBillId = billId; prefs.editingBillNo = billNo
+        draft = d; saveDraft()
+    }
+
+    private fun stopEditing() {
+        editingBillId = ""; editingBillNo = ""
+        prefs.editingBillId = ""; prefs.editingBillNo = ""
+    }
 
     init {
         try {
@@ -42,7 +62,7 @@ class CartStore(private val prefs: Prefs) {
             if (prefs.draftMeta.isNotBlank()) {
                 val o = JSONObject(prefs.draftMeta)
                 draft = BillDraft(
-                    o.str("customerMobile"), o.str("customerName"), o.str("customerAddress"),
+                    o.str("customerMobile"), o.str("customerName"), o.str("customerAddress"), o.str("customerGender"),
                     o.str("salesPersonId"), o.str("salesPersonName"),
                     o.str("method").ifBlank { "Cash" }, o.str("taxText"), o.str("paidText")
                 )
@@ -66,7 +86,7 @@ class CartStore(private val prefs: Prefs) {
     private fun saveDraft() {
         val d = draft
         prefs.draftMeta = JSONObject().put("customerMobile", d.customerMobile).put("customerName", d.customerName)
-            .put("customerAddress", d.customerAddress).put("salesPersonId", d.salesPersonId)
+            .put("customerAddress", d.customerAddress).put("customerGender", d.customerGender).put("salesPersonId", d.salesPersonId)
             .put("salesPersonName", d.salesPersonName).put("method", d.method)
             .put("taxText", d.taxText).put("paidText", d.paidText).toString()
     }
@@ -125,6 +145,7 @@ class CartStore(private val prefs: Prefs) {
     fun clear() {
         lines.clear()
         save()
+        stopEditing()
         updateDraft { BillDraft(salesPersonId = it.salesPersonId, salesPersonName = it.salesPersonName, method = it.method) }
     }
 }

@@ -5,6 +5,7 @@ package com.shivtej.owner.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -179,13 +180,30 @@ fun PosScreen(app: App, nav: Nav) {
                 }
             }
 
-            // ---------------- items: right under the scan box, so each scanned piece is seen at once
+            // ---------------- edit banner (when a saved bill is being changed)
+            if (cart.editingBillId.isNotBlank()) item {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftRed)) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Edit, null, tint = BrandRed)
+                        Text("  Editing bill ${cart.editingBillNo} - the number stays the same", fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold, color = BrandRed)
+                    }
+                }
+            }
+
+            // ---------------- customer: layout A keeps the customer right under the scan box
+            item { CustomerCard(app, nav, posCustomers, webCustomers, bills) }
+
+            // ---------------- items
             item { SectionTitle("Items (${cart.lines.size})") }
             if (cart.lines.isEmpty()) item { EmptyState("Scan a barcode or search a product to start a bill.") }
             items(cart.lines.size, key = { i -> cart.lines.getOrNull(i)?.let { it.productId + "|" + it.colour + "|" + it.size } ?: "x$i" }) { i ->
                 val l = cart.lines.getOrNull(i)
                 if (l != null) CartLineCard(app, i, l, onRateDone = { keyboard?.hide(); searchFocus.requestFocus() })
             }
+
+            // ---------------- sales person (layout A: after the items, before the totals)
+            if (cart.lines.isNotEmpty()) item { BillInfoCard(app, staff) }
 
             // ---------------- totals
             if (cart.lines.isNotEmpty()) {
@@ -257,13 +275,6 @@ fun PosScreen(app: App, nav: Nav) {
                     }
                 }
             }
-            // ---------------- customer + bill info: below the bill, so the items and rates stay at the top
-            item {
-                CustomerCard(app, nav, posCustomers, webCustomers, bills)
-            }
-            item {
-                BillInfoCard(app, staff)
-            }
             item { Spacer(Modifier.height(8.dp)) }
         }
 
@@ -295,28 +306,37 @@ fun PosScreen(app: App, nav: Nav) {
                         }
                         if (bad != null) { error = bad } else {
                             busy = true
+                            val editingId = cart.editingBillId
                             scope.launch {
                                 try {
-                                    // online: refresh from the server first so we bill against the latest stock
-                                    if (app.net.online.value) withTimeoutOrNull(6000) { app.sync.syncNow() }
-                                    val fresh = app.repo.products.first()
-                                    val problems = cart.lines.mapNotNull { l ->
-                                        val q = fresh.firstOrNull { it.id == l.productId }?.variants?.firstOrNull { it.colour == l.colour }
-                                            ?.sizes?.firstOrNull { it.size == l.size }?.qty ?: 0
-                                        if (l.qty > q) "${l.name} ${l.colour}/${l.size}: only $q left" else null
-                                    }
-                                    if (problems.isNotEmpty()) {
-                                        error = problems.joinToString("\n")
-                                    } else {
-                                        val d = cart.draft
-                                        val extra = BillExtra(
-                                            salesPersonId = d.salesPersonId, salesPerson = d.salesPersonName,
-                                            customerName = d.customerName, customerMobile = d.customerMobile,
-                                            customerAddress = d.customerAddress, taxPercent = taxPct, amountPaid = paidTyped
-                                        )
-                                        val bill = app.repo.createBill(cart.lines.toList(), d.method, extra)
+                                    val d = cart.draft
+                                    val extra = BillExtra(
+                                        salesPersonId = d.salesPersonId, salesPerson = d.salesPersonName,
+                                        customerName = d.customerName, customerMobile = d.customerMobile,
+                                        customerAddress = d.customerAddress, customerGender = d.customerGender,
+                                        taxPercent = taxPct, amountPaid = paidTyped
+                                    )
+                                    if (editingId.isNotBlank()) {
+                                        // editing a saved bill: replaceBill checks the stock itself (old items come back first)
+                                        val bill = app.repo.replaceBill(editingId, cart.lines.toList(), d.method, extra)
                                         cart.clear()
                                         nav.replace(Route.Receipt(bill.id))
+                                    } else {
+                                        // new bill: refresh from the server first so we bill against the latest stock
+                                        if (app.net.online.value) withTimeoutOrNull(6000) { app.sync.syncNow() }
+                                        val fresh = app.repo.products.first()
+                                        val problems = cart.lines.mapNotNull { l ->
+                                            val q = fresh.firstOrNull { it.id == l.productId }?.variants?.firstOrNull { it.colour == l.colour }
+                                                ?.sizes?.firstOrNull { it.size == l.size }?.qty ?: 0
+                                            if (l.qty > q) "${l.name} ${l.colour}/${l.size}: only $q left" else null
+                                        }
+                                        if (problems.isNotEmpty()) {
+                                            error = problems.joinToString("\n")
+                                        } else {
+                                            val bill = app.repo.createBill(cart.lines.toList(), d.method, extra)
+                                            cart.clear()
+                                            nav.replace(Route.Receipt(bill.id))
+                                        }
                                     }
                                 } catch (e: Exception) {
                                     error = e.message ?: "Could not complete the bill"
@@ -325,9 +345,10 @@ fun PosScreen(app: App, nav: Nav) {
                         }
                     }
                 ) {
+                    val editing = cart.editingBillId.isNotBlank()
                     Text(
-                        if (busy) "Please wait..." else if (cart.lines.isEmpty()) "Complete bill"
-                        else "Complete bill · " + moneyG(app, totals.grandTotal),
+                        if (busy) "Please wait..." else if (cart.lines.isEmpty()) (if (editing) "Update bill" else "Complete bill")
+                        else (if (editing) "Update bill · " else "Complete bill · ") + moneyG(app, totals.grandTotal),
                         fontSize = 16.sp, fontWeight = FontWeight.Bold
                     )
                 }
@@ -382,6 +403,21 @@ fun PosScreen(app: App, nav: Nav) {
         { confirmClear = false })
 }
 
+val MaleBlue = Color(0xFF1A56C4)
+val FemalePink = Color(0xFFB5277E)
+
+/** A small MALE / FEMALE toggle button (tap, no typing). Shows its colour when chosen. */
+@Composable
+private fun GenderButton(label: String, icon: String, code: String, selected: Boolean, colour: Color, onClick: () -> Unit) {
+    val bg = if (selected) colour.copy(alpha = 0.12f) else Color.Transparent
+    val fg = if (selected) colour else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(onClick = onClick, color = bg, shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.2.dp, if (selected) colour else MaterialTheme.colorScheme.outlineVariant)) {
+        Text("$icon $label", color = fg, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.5.sp,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp))
+    }
+}
+
 @Composable
 private fun TotalRow(label: String, value: String, color: Color = Color.Unspecified, bold: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -417,6 +453,7 @@ private fun CartLineCard(app: App, i: Int, l: CartLine, onRateDone: () -> Unit) 
                     Text("MRP ${moneyG(app, mrp)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.width(8.dp))
+                // the selling rate: a bigger, bold box so it is easy to see and tap (the owner sets it here)
                 OutlinedTextField(
                     value = rateText,
                     onValueChange = { v ->
@@ -425,8 +462,11 @@ private fun CartLineCard(app: App, i: Int, l: CartLine, onRateDone: () -> Unit) 
                         // a cleared or invalid rate must not keep the old price in the cart (Complete bill then refuses it)
                         cart.setPrice(i, f.toDoubleOrNull() ?: 0.0)
                     },
-                    label = { Text("Rate") }, singleLine = true, modifier = Modifier.width(112.dp),
+                    label = { Text("RATE ₹", fontWeight = FontWeight.Bold) }, singleLine = true, modifier = Modifier.width(132.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center),
                     isError = rateText.toDoubleOrNull() == null || (rateText.toDoubleOrNull() ?: 0.0) <= 0.0,
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = BrandRed, unfocusedBorderColor = BrandRed),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { onRateDone() })
                 )
@@ -464,12 +504,14 @@ private fun CustomerCard(
     val matches = if (!typing || (m.length == 10 && (saved != null || web != null))) emptyList()
         else customerMatches(m, d.customerName, posCustomers, webCustomers)
 
-    LaunchedEffect(m, saved?.name, saved?.address, web?.name) {
+    LaunchedEffect(m, saved?.name, saved?.address, saved?.gender, web?.name) {
         if (m.length == 10 && (saved != null || web != null)) {
             val name = saved?.name?.ifBlank { null } ?: web?.name?.ifBlank { null } ?: ""
             val addr = saved?.address ?: ""
+            val gen = saved?.gender ?: ""
             if (autoLoaded || (cart.draft.customerName.isBlank() && cart.draft.customerAddress.isBlank())) {
-                cart.updateDraft { it.copy(customerName = name, customerAddress = addr) }
+                cart.updateDraft { it.copy(customerName = name, customerAddress = addr,
+                    customerGender = if (gen.isNotBlank()) gen else it.customerGender) }
                 autoLoaded = true
             }
         } else if (m.length != 10 && autoLoaded) {
@@ -479,23 +521,35 @@ private fun CustomerCard(
     }
 
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Customer Details", fontWeight = FontWeight.Bold)
-            OutlinedTextField(
-                value = d.customerMobile,
-                // pasted numbers such as "+91 98765 43210" are reduced to the 10 digits
-                onValueChange = { v -> typing = true; cart.updateDraft { it.copy(customerMobile = BillMath.normMobile(v)) } },
-                label = { Text("Mobile number") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                leadingIcon = { Icon(Icons.Filled.Phone, null) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                isError = m.isNotEmpty() && m.length != 10,
-                supportingText = { if (m.isNotEmpty() && m.length != 10) Text("Mobile number must be 10 digits") }
-            )
-            OutlinedTextField(
-                value = d.customerName, onValueChange = { v -> autoLoaded = false; typing = true; cart.updateDraft { it.copy(customerName = v) } },
-                label = { Text("Customer name (empty = Walk-in Customer)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                leadingIcon = { Icon(Icons.Filled.Person, null) }
-            )
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            // header: "Customer" on the left, MALE / FEMALE on the right (tap, no typing)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Customer", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                GenderButton("MALE", "♂", "M", d.customerGender == "M", MaleBlue) {
+                    cart.updateDraft { it.copy(customerGender = if (it.customerGender == "M") "" else "M") }
+                }
+                Spacer(Modifier.width(6.dp))
+                GenderButton("FEMALE", "♀", "F", d.customerGender == "F", FemalePink) {
+                    cart.updateDraft { it.copy(customerGender = if (it.customerGender == "F") "" else "F") }
+                }
+            }
+            // mobile + name on one row to save space (layout A)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = d.customerMobile,
+                    onValueChange = { v -> typing = true; cart.updateDraft { it.copy(customerMobile = BillMath.normMobile(v)) } },
+                    label = { Text("Mobile") }, singleLine = true, modifier = Modifier.weight(1f),
+                    leadingIcon = { Icon(Icons.Filled.Phone, null) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    isError = m.isNotEmpty() && m.length != 10
+                )
+                OutlinedTextField(
+                    value = d.customerName, onValueChange = { v -> autoLoaded = false; typing = true; cart.updateDraft { it.copy(customerName = v) } },
+                    label = { Text("Name") }, singleLine = true, modifier = Modifier.weight(1f),
+                    leadingIcon = { Icon(Icons.Filled.Person, null) }
+                )
+            }
+            if (m.isNotEmpty() && m.length != 10) Text("Mobile number must be 10 digits", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
             if (matches.isNotEmpty()) {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftRed)) {
                     Column {
@@ -768,6 +822,35 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
         Text(if (b.synced) "Saved and synced" else "Saved on this phone - will sync when online",
             color = if (b.synced) GreenOk else AmberLow, modifier = Modifier.padding(vertical = 8.dp))
 
+        // Edit this bill: re-open its items and customer in POS Billing. The bill number stays the same.
+        if (!b.deleted) {
+            fun reopen() {
+                scope.launch {
+                    try {
+                        val lines = app.repo.cartLinesFromBill(b)
+                        if (lines.isEmpty()) { toast(ctx, "This bill has no items to edit"); return@launch }
+                        val d = BillDraft(
+                            customerMobile = b.customerMobile, customerName = b.customerName, customerAddress = b.customerAddress,
+                            customerGender = b.customerGender, salesPersonId = b.salesPersonId, salesPersonName = b.salesPerson,
+                            method = b.method.ifBlank { "Cash" },
+                            taxText = if (b.taxPercent > 0.0) BillMath.plain(b.taxPercent) else "",
+                            paidText = if (b.amountPaid >= 0.0) BillMath.plain(b.amountPaid) else ""
+                        )
+                        app.cart.startEditing(b.id, b.billNo, lines, d)
+                        nav.replace(Route.Pos)
+                    } catch (e: Exception) { toast(ctx, e.message ?: "Could not open the bill for editing") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(50.dp)) {
+                    Icon(Icons.Filled.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit bill")
+                }
+                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(50.dp)) {
+                    Icon(Icons.Filled.AddShoppingCart, null); Spacer(Modifier.width(4.dp)); Text("Add item")
+                }
+            }
+        }
+
         Button(
             onClick = { printBill() }, enabled = !printing,
             colors = ButtonDefaults.buttonColors(containerColor = BrandRed),
@@ -835,7 +918,7 @@ fun SaveCustomerOffer(app: App, bill: BillE) {
             TextButton(enabled = name.isNotBlank(), onClick = {
                 scope.launch {
                     try {
-                        app.repo.saveCustomer(bill.customerMobile, name, address)
+                        app.repo.saveCustomer(bill.customerMobile, name, address, gender = bill.customerGender)
                         isNew = false
                         toast(ctx, "Customer saved")
                     } catch (e: Exception) { toast(ctx, e.message ?: "Could not save the customer") }

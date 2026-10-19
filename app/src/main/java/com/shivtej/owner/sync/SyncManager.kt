@@ -142,6 +142,7 @@ class SyncManager(
                 repo.markOp(op.id, "DONE", null)
                 when (op.type) {
                     "CREATE_POS_BILL" -> repo.billSynced(op.refId)
+                    "UPDATE_POS_BILL" -> repo.billSyncedIfIdle(op.refId)
                     "UPDATE_ORDER" -> repo.orderSyncedIfIdle(op.refId)
                     "RETURN_EXCHANGE" -> repo.returnSynced(op.refId)
                     "UPSERT_STAFF" -> repo.staffSyncedIfIdle(op.refId)
@@ -213,6 +214,7 @@ class SyncManager(
                     .put("p_op", p.getString("opId")).put("p_reason", p.optString("reason", "MANUAL")))
             }
             "CREATE_POS_BILL" -> Api.rpc("owner_create_bill", a(code).put("p", JSONObject(op.payload)))
+            "UPDATE_POS_BILL" -> Api.rpc("owner_update_bill", a(code).put("p", JSONObject(op.payload)))
             "ADD_CUSTOMER_PAYMENT" -> Api.rpc("owner_add_customer_payment", a(code).put("p", JSONObject(op.payload)))
             "DELETE_POS_BILL" -> Api.rpc("owner_delete_bill", a(code).put("p", JSONObject(op.payload)))
             "RESTORE_POS_BILL" -> Api.rpc("owner_restore_bill", a(code).put("p", JSONObject(op.payload)))

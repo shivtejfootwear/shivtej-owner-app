@@ -85,7 +85,9 @@ data class BillE(
     val metaJson: String = "",          // shop details + bill design exactly as they were when the bill was made
     // ---- added in database version 8: a deleted bill is kept (not erased) so its history stays traceable; lists hide it
     @androidx.room.ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
-    @androidx.room.ColumnInfo(defaultValue = "0") val deletedAt: Long = 0L
+    @androidx.room.ColumnInfo(defaultValue = "0") val deletedAt: Long = 0L,
+    // ---- version 15: the customer's gender on this bill ("M"/"F"/""), copied to the saved customer
+    @androidx.room.ColumnInfo(defaultValue = "''") val customerGender: String = ""
 ) {
     /** What was actually paid (older bills have no payment record: they were paid in full). */
     val paid: Double get() = if (amountPaid < 0.0) total else amountPaid
@@ -115,7 +117,9 @@ data class PosCustomerE(
     // added in version 7: dues this customer had BEFORE the app was introduced (kept on this phone, not synced)
     val openingBalance: Double = 0.0,
     // version 11: the customer's ONLINE (website) contact number, kept apart from the offline (shop) number above; "" = none
-    @androidx.room.ColumnInfo(defaultValue = "''") val onlineContact: String = ""
+    @androidx.room.ColumnInfo(defaultValue = "''") val onlineContact: String = "",
+    // version 15: "M" = male, "F" = female, "" = not set (used to share male / female contacts apart)
+    @androidx.room.ColumnInfo(defaultValue = "''") val gender: String = ""
 )
 
 /** A supplier / distributor the shop buys stock from. */
@@ -581,6 +585,14 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
     }
 }
 
+/** Version 14 -> 15: customer gender (male / female) on the customer and on the bill. Only new columns; no data changes. */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `pos_customers` ADD COLUMN `gender` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `bills` ADD COLUMN `customerGender` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
 /** Version 12 -> 13: the piece_barcodes table (one barcode per piece). Only a new table is added; no data is changed. */
 val MIGRATION_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -594,7 +606,7 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
         CustomerPaymentE::class, TaskE::class, PieceBarcodeE::class],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -604,7 +616,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }

@@ -30,26 +30,41 @@ import java.io.File
 fun CustomerNumbersScreen(app: App) {
     val ctx = LocalContext.current
     val customers by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
-    val rows = remember(customers) {
+    var gender by remember { mutableStateOf("") }   // "" = all, "M" = male, "F" = female
+    val all = remember(customers) {
         customers.mapNotNull { c ->
             val m = BillMath.normMobile(c.mobile)
             if (m.length == 10) c to m else null
         }.sortedBy { it.first.name.lowercase() }
     }
+    val maleN = all.count { it.first.gender == "M" }
+    val femaleN = all.count { it.first.gender == "F" }
+    val rows = remember(all, gender) { if (gender.isBlank()) all else all.filter { it.first.gender == gender } }
+    val tag = when (gender) { "M" -> "male"; "F" -> "female"; else -> "all" }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-        Text("${rows.size} customers with a mobile number. They are added when you save a customer from a bill.",
+        Text("${all.size} customers with a mobile number. Share all, or only male / female customers (for offers and tasks).",
             fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // who to share
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            FilterChip(selected = gender == "", onClick = { gender = "" }, label = { Text("All (${all.size})") }, modifier = Modifier.weight(1f))
+            FilterChip(selected = gender == "M", onClick = { gender = "M" }, label = { Text("♂ Male ($maleN)") }, modifier = Modifier.weight(1f))
+            FilterChip(selected = gender == "F", onClick = { gender = "F" }, label = { Text("♀ Female ($femaleN)") }, modifier = Modifier.weight(1f))
+        }
+        Text("Sharing ${rows.size} ${if (gender.isBlank()) "customers" else tag + " customers"}.", fontSize = 12.sp,
+            fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Button(onClick = { shareFile(ctx, "customer-contacts.vcf", "text/vcard", vcard(rows)) },
+            Button(onClick = { shareFile(ctx, "customer-contacts-$tag.vcf", "text/vcard", vcard(rows)) },
                 enabled = rows.isNotEmpty(), modifier = Modifier.weight(1f).height(50.dp)) {
-                Icon(Icons.Filled.Share, null); Spacer(Modifier.width(4.dp)); Text("Share contacts")
+                Icon(Icons.Filled.Share, null); Spacer(Modifier.width(4.dp)); Text("Contacts")
             }
-            OutlinedButton(onClick = { shareFile(ctx, "customer-numbers.csv", "text/csv", csv(rows)) },
+            OutlinedButton(onClick = { shareFile(ctx, "customer-numbers-$tag.csv", "text/csv", csv(rows)) },
                 enabled = rows.isNotEmpty(), modifier = Modifier.weight(1f).height(50.dp)) {
-                Text("Share CSV")
+                Text("CSV")
             }
         }
+        Text("Gender is set on the bill (MALE / FEMALE) or on the customer's page. Customers saved before this update show under \"All\" until you set it.",
+            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
         rows.forEach { (c, m) ->
             Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {

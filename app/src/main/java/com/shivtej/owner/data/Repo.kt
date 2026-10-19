@@ -134,6 +134,7 @@ data class BillExtra(
     val customerName: String = "",
     val customerMobile: String = "",
     val customerAddress: String = "",
+    val customerGender: String = "",      // "M" / "F" / ""
     val taxPercent: Double = 0.0,
     val amountPaid: Double? = null        // null = paid in full
 )
@@ -437,7 +438,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             salesPersonId = extra.salesPersonId, salesPerson = extra.salesPerson.trim(),
             customerName = cName, customerMobile = if (mobile.length == 10) mobile else "", customerAddress = cAddr,
             totalMrp = t.totalMrp, totalDiscount = t.totalDiscount, subTotal = t.subTotal,
-            taxPercent = t.taxPercent, taxAmount = t.taxAmount, amountPaid = paid, balance = balance, metaJson = meta)
+            taxPercent = t.taxPercent, taxAmount = t.taxAmount, amountPaid = paid, balance = balance, metaJson = meta,
+            customerGender = if (extra.customerGender in listOf("M", "F")) extra.customerGender else "")
         db.withTransaction {
             dao.putBill(bill)
             lines.forEachIndexed { i, l ->
@@ -464,10 +466,12 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 if (old != null) {
                     val name = old.name.ifBlank { cName }
                     val addr = old.address.ifBlank { cAddr }
-                    if (name != old.name || addr != old.address) {
-                        dao.putPosCustomer(old.copy(name = name, address = addr, pendingSync = true))
+                    // gender set on the bill fills it on the saved customer (an already-set gender is not changed here)
+                    val gen = if (old.gender.isBlank() && bill.customerGender in listOf("M", "F")) bill.customerGender else old.gender
+                    if (name != old.name || addr != old.address || gen != old.gender) {
+                        dao.putPosCustomer(old.copy(name = name, address = addr, gender = gen, pendingSync = true))
                         enqueue("UPSERT_CUSTOMER", bill.customerMobile, JSONObject().put("mobile", bill.customerMobile)
-                            .put("name", name).put("address", addr).put("force", false)
+                            .put("name", name).put("address", addr).put("gender", gen).put("force", false)
                             .put("created_at", java.time.Instant.ofEpochMilli(old.createdAt).toString()))
                     }
                 }
@@ -543,6 +547,96 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         onChanged()
     }
 
+    /**
+     * Turns a saved bill's items into cart lines so the bill can be re-opened and edited.
+     * This bill's items are still OUT of stock, so the quantity each line can go up to while editing is
+     * the stock left now PLUS this line's own quantity (it comes back when the edit is saved).
+     */
+    suspend fun cartLinesFromBill(bill: BillE): List<CartLine> = parseBillItems(bill.itemsJson).map { l ->
+        val now = dao.qtyOf(l.productId, l.colour, l.size)
+        val maxQ = if (now == null) l.qty else now + l.qty      // product gone -> can keep but not increase
+        CartLine(l.productId, l.article, l.name, l.colour, l.size, l.barcode, l.qty, l.price, maxQ, l.mrp)
+    }
+
+    /**
+     * Edits a saved bill in place ("Edit bill" / "Add item"): the bill KEEPS its number, date and id.
+     * Its old items go back into stock, the new items leave stock, and the bill row is rewritten.
+     * Everything is one transaction, so if any item can not be billed nothing changes.
+     */
+    suspend fun replaceBill(oldBillId: String, lines: List<CartLine>, method: String, extra: BillExtra): BillE {
+        require(lines.isNotEmpty()) { "Bill is empty" }
+        var out: BillE? = null
+        db.withTransaction {
+            val old = dao.bill(oldBillId) ?: throw IllegalArgumentException("This bill was not found")
+            require(!old.deleted) { "This bill is deleted - restore it first" }
+            val now = System.currentTimeMillis()
+            // 1) return the old items to stock (same as a delete, but kept inside this edit)
+            parseBillItems(old.itemsJson).forEachIndexed { i, l ->
+                val before = dao.qtyOf(l.productId, l.colour, l.size)
+                if (before == null) return@forEachIndexed   // product removed later: nothing to return
+                dao.adjust(l.productId, l.colour, l.size, l.qty)
+                l.barcode.split(',').forEach { returnPiece(l.productId, l.colour, l.size, it.trim()) }
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE("$oldBillId#eu${i + 1}:$now", l.productId, l.article, l.colour, l.size,
+                    after - before, after, "BILL_EDIT_UNDO", now, false))
+            }
+            // 2) check every new line has enough stock now (old stock is already back)
+            val short = lines.mapNotNull { l ->
+                val have = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+                if (l.qty > have) "${l.name} ${l.colour}/${l.size}: only $have left" else null
+            }
+            if (short.isNotEmpty()) throw IllegalArgumentException(short.joinToString("\n"))
+            // 3) take the new items out of stock
+            lines.forEachIndexed { i, l ->
+                val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
+                dao.adjust(l.productId, l.colour, l.size, -l.qty)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode)
+                val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
+                dao.putLog(StockLogE("$oldBillId#ev${i + 1}:$now", l.productId, l.article, l.colour, l.size,
+                    after - before, after, "POS_SALE", now, false))
+            }
+            // 4) rewrite the bill row (same id, number and date)
+            val t = BillMath.compute(lines.map { MathLine(it.mrp, it.price, it.qty) }, extra.taxPercent)
+            val total = t.grandTotal
+            val paid = BillMath.round2((extra.amountPaid ?: total).coerceAtLeast(0.0))
+            val mobile = BillMath.normMobile(extra.customerMobile)
+            val cName = extra.customerName.trim(); val cAddr = extra.customerAddress.trim()
+            val gender = if (extra.customerGender in listOf("M", "F")) extra.customerGender else ""
+            val items = JSONArray()
+            for (l in lines) items.put(JSONObject().put("productId", l.productId).put("article", l.article)
+                .put("name", l.name).put("colour", l.colour).put("size", l.size).put("barcode", l.barcode)
+                .put("qty", l.qty).put("price", l.price).put("mrp", BillMath.lineMrp(l.mrp, l.price)))
+            val bill = old.copy(total = total, method = method, itemsJson = items.toString(), synced = false,
+                salesPersonId = extra.salesPersonId, salesPerson = extra.salesPerson.trim(),
+                customerName = cName, customerMobile = if (mobile.length == 10) mobile else "", customerAddress = cAddr,
+                totalMrp = t.totalMrp, totalDiscount = t.totalDiscount, subTotal = t.subTotal,
+                taxPercent = t.taxPercent, taxAmount = t.taxAmount, amountPaid = paid,
+                balance = BillMath.balance(total, paid), customerGender = gender)
+            dao.putBill(bill)
+            enqueue("UPDATE_POS_BILL", oldBillId, JSONObject().put("id", oldBillId).put("bill_no", old.billNo)
+                .put("total", total).put("payment_method", method).put("items", items)
+                .put("created_at", iso(old.createdAt)).put("cycle", now.toString())
+                .put("sales_person_id", extra.salesPersonId).put("sales_person", bill.salesPerson)
+                .put("customer_name", cName).put("customer_mobile", bill.customerMobile).put("customer_address", cAddr))
+            if (bill.customerMobile.isNotEmpty()) {
+                val oc = dao.posCustomer(bill.customerMobile)
+                if (oc != null) {
+                    val gen = if (oc.gender.isBlank() && gender.isNotBlank()) gender else oc.gender
+                    if (gen != oc.gender) {
+                        dao.putPosCustomer(oc.copy(gender = gen, pendingSync = true))
+                        enqueue("UPSERT_CUSTOMER", bill.customerMobile, JSONObject().put("mobile", bill.customerMobile)
+                            .put("name", oc.name).put("address", oc.address).put("gender", gen).put("force", false)
+                            .put("created_at", iso(oc.createdAt)))
+                    }
+                }
+            }
+            out = bill
+        }
+        if (extra.salesPersonId.isNotBlank()) prefs.lastSalesPersonId = extra.salesPersonId
+        onChanged()
+        return out!!
+    }
+
     // ---------------------------------------------------------- staff (people who make sales)
     private fun iso(ms: Long): String = java.time.Instant.ofEpochMilli(ms).toString()
 
@@ -572,7 +666,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     /** Adds or edits a customer from the Customers screen. The values typed here replace the saved ones. */
     suspend fun saveCustomer(
         mobile: String, name: String, address: String, photoPath: String? = null, openingBalance: Double? = null,
-        onlineContact: String? = null   // null = keep the saved online contact (used by the bill screen); "" = remove it
+        onlineContact: String? = null,  // null = keep the saved online contact (used by the bill screen); "" = remove it
+        gender: String? = null          // null = keep the saved gender; "M"/"F"/"" sets it
     ): PosCustomerE {
         val m = BillMath.normMobile(mobile)
         require(m.length == 10) { "Mobile number must be 10 digits" }
@@ -590,13 +685,18 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 else -> BillMath.normMobile(onlineContact)
             }
             require(online.isEmpty() || online.length == 10) { "Online contact must be 10 digits" }
+            val gen = when {
+                gender == null -> old?.gender.orEmpty()
+                gender in listOf("M", "F") -> gender
+                else -> ""
+            }
             val c = PosCustomerE(m, name.trim(), address.trim(), old?.createdAt ?: System.currentTimeMillis(), true,
                 photoPath = photo, photoUrl = if (photo.isBlank()) "" else old?.photoUrl ?: "",
                 openingBalance = openingBalance?.let { BillMath.round2(it) } ?: old?.openingBalance ?: 0.0,
-                onlineContact = online)
+                onlineContact = online, gender = gen)
             dao.putPosCustomer(c)
             enqueue("UPSERT_CUSTOMER", m, JSONObject().put("mobile", m).put("name", c.name).put("address", c.address)
-                .put("online_contact", online)
+                .put("online_contact", online).put("gender", gen)
                 .put("force", true).put("created_at", iso(c.createdAt)))
             // a removal must also reach the server when only the server copy still has a photo
             val removing = photoPath != null && photoPath.isBlank() && !old?.photoUrl.isNullOrBlank()
@@ -1133,6 +1233,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun markOp(id: Long, status: String, err: String?) = dao.markOp(id, status, err)
     suspend fun retryFailed() { dao.retryFailed(); onChanged() }
     suspend fun billSynced(id: String) = dao.billSynced(id)
+    suspend fun billSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPDATE_POS_BILL") == 0) dao.billSynced(id) }
     suspend fun orderSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPDATE_ORDER") == 0) dao.orderSynced(id) }
     suspend fun paymentRejected(id: String) = dao.paymentRejectedCount(id) > 0
     suspend fun staffSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPSERT_STAFF") == 0) dao.staffSynced(id) }
@@ -1382,9 +1483,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val old = dao.posCustomer(m)
             // the server sends a value only once update 9 is installed and the number was saved there; null = keep the phone's value
             val online = if (o.has("online_contact") && !o.isNull("online_contact")) o.str("online_contact") else old?.onlineContact.orEmpty()
+            // gender arrives only once update 16 is installed and a value was saved; null/blank = keep the phone's value
+            val gender = if (o.has("gender") && !o.isNull("gender") && o.str("gender").isNotBlank()) o.str("gender") else old?.gender.orEmpty()
             list.add(PosCustomerE(m, o.str("name"), o.str("address"), parseTime(o.str("created_at")), false,
                 photoPath = old?.photoPath ?: "", photoUrl = o.str("photo_url").ifBlank { old?.photoUrl ?: "" },
-                openingBalance = old?.openingBalance ?: 0.0, onlineContact = online))
+                openingBalance = old?.openingBalance ?: 0.0, onlineContact = online, gender = gender))
         }
         dao.putPosCustomers(list)
     }

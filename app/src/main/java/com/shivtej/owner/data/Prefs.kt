@@ -123,6 +123,13 @@ class Prefs(ctx: Context) {
     var draftMeta: String               // customer / sales person / payment typed on the bill in progress
         get() = sp.getString("draft_meta", "") ?: ""
         set(v) = sp.edit().putString("draft_meta", v).apply()
+    // When set, the bill in progress is an EDIT of this saved bill (same id and number); "" = a new bill.
+    var editingBillId: String
+        get() = sp.getString("editing_bill_id", "") ?: ""
+        set(v) = sp.edit().putString("editing_bill_id", v).apply()
+    var editingBillNo: String
+        get() = sp.getString("editing_bill_no", "") ?: ""
+        set(v) = sp.edit().putString("editing_bill_no", v).apply()
 
     // ---- Bluetooth receipt printer
     var printerAddress: String
