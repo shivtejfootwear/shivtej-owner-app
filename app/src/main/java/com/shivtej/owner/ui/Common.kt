@@ -72,6 +72,8 @@ sealed interface Route {
     object DeletedBills : Route
     // ---- catalog (website products with MRP only, to show customers)
     object Catalog : Route
+    // ---- staff bills (pending bills the managers sent from the Shivtej Managers app)
+    object StaffBills : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

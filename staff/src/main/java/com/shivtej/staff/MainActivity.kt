@@ -101,7 +101,14 @@ fun StaffApp() {
         token == null -> LoginScreen(store) { t, n -> store.token = t; store.name = n; name = n; token = t; LocationService.start(ctx) }
         !perm -> PermissionScreen { perm = LocationService.hasPrecise(ctx); LocationService.start(ctx) }
         !gps -> GpsOffScreen()
-        else -> CatalogScreen(store, name) { store.logout(closedByOwner = true); token = null }
+        else -> {
+            var screen by remember { mutableStateOf("catalog") }
+            val logout = { store.logout(closedByOwner = true); token = null }
+            when (screen) {
+                "makebill" -> MakeBillScreen(store, onBack = { screen = "catalog" }, onClosed = logout)
+                else -> CatalogScreen(store, name, onMakeBill = { screen = "makebill" }, onClosed = logout)
+            }
+        }
     }
 }
 

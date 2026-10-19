@@ -547,6 +547,30 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         onChanged()
     }
 
+    /** Build cart lines from a manager's sent (pending) bill items, for the owner to finish. Rate starts at the MRP. */
+    suspend fun cartLinesFromPending(items: org.json.JSONArray): List<CartLine> {
+        val out = ArrayList<CartLine>()
+        for (i in 0 until items.length()) {
+            val o = items.optJSONObject(i) ?: continue
+            val pid = o.str("productId"); val colour = o.str("colour"); val size = o.str("size")
+            if (pid.isBlank() || size.isBlank()) continue
+            val prod = dao.product(pid)
+            val mrp = o.optDouble("mrp", 0.0).takeIf { it > 0.0 } ?: (prod?.mrp ?: 0.0)
+            val price = (prod?.price ?: 0.0).takeIf { it > 0.0 } ?: mrp
+            val maxQ = dao.qtyOf(pid, colour, size) ?: 0
+            out.add(CartLine(pid, o.str("article").ifBlank { prod?.article ?: "" },
+                o.str("name").ifBlank { prod?.name ?: "" }, colour, size, o.str("barcode"),
+                o.optInt("qty", 1).coerceAtLeast(1), maxOf(mrp, price), maxQ, mrp))
+        }
+        return out
+    }
+
+    /** Mark a manager's pending bill as done on the server (after the owner made the real bill). */
+    suspend fun markStaffBillDone(pendingId: String, posBillId: String) {
+        enqueue("STAFF_BILL_DONE", pendingId, JSONObject().put("p_id", pendingId).put("p_pos_bill_id", posBillId))
+        onChanged()
+    }
+
     /**
      * Turns a saved bill's items into cart lines so the bill can be re-opened and edited.
      * This bill's items are still OUT of stock, so the quantity each line can go up to while editing is

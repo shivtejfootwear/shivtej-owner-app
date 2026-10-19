@@ -294,6 +294,7 @@ fun Shell(app: App) {
         Route.CustomerNumbers -> "Customer numbers"
         Route.DeletedBills -> "Deleted bills"
         Route.Catalog -> "Catalog"
+        Route.StaffBills -> "Staff Bills"
     }
 
     ModalNavigationDrawer(
@@ -378,6 +379,7 @@ fun Shell(app: App) {
                     Route.CustomerNumbers -> CustomerNumbersScreen(app)
                     Route.DeletedBills -> DeletedBillsScreen(app, nav)
                     Route.Catalog -> CatalogScreen(app)
+                    Route.StaffBills -> StaffBillsScreen(app, nav)
                 }
             }
         }

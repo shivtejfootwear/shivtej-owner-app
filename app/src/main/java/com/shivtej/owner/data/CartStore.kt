@@ -34,6 +34,17 @@ class CartStore(private val prefs: Prefs) {
         private set
     var editingBillNo by mutableStateOf(prefs.editingBillNo)
         private set
+    // When this bill came from a manager's "Staff Bill", this holds that pending bill's id ("" = normal bill).
+    var fromPendingId by mutableStateOf(prefs.fromPendingId)
+        private set
+
+    /** Start a NEW bill from a manager's sent items (the owner then adds the customer and rates). */
+    fun startFromPending(pendingId: String, newLines: List<CartLine>) {
+        lines.clear(); lines.addAll(newLines); save()
+        editingBillId = ""; editingBillNo = ""; prefs.editingBillId = ""; prefs.editingBillNo = ""
+        fromPendingId = pendingId; prefs.fromPendingId = pendingId
+        updateDraft { BillDraft(salesPersonId = it.salesPersonId, salesPersonName = it.salesPersonName, method = it.method) }
+    }
 
     /** Re-open a saved bill for editing: its items and customer details fill the cart, keeping its number. */
     fun startEditing(billId: String, billNo: String, newLines: List<CartLine>, d: BillDraft) {
@@ -44,8 +55,8 @@ class CartStore(private val prefs: Prefs) {
     }
 
     private fun stopEditing() {
-        editingBillId = ""; editingBillNo = ""
-        prefs.editingBillId = ""; prefs.editingBillNo = ""
+        editingBillId = ""; editingBillNo = ""; fromPendingId = ""
+        prefs.editingBillId = ""; prefs.editingBillNo = ""; prefs.fromPendingId = ""
     }
 
     init {

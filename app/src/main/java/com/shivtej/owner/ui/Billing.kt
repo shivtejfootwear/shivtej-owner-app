@@ -191,6 +191,17 @@ fun PosScreen(app: App, nav: Nav) {
                 }
             }
 
+            // ---------------- banner when this bill came from a manager (Staff Bills)
+            if (cart.fromPendingId.isNotBlank()) item {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFE8ECF8))) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Inbox, null, tint = Color(0xFF283593))
+                        Text("  From a manager - set the customer and rate, then Complete bill", fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold, color = Color(0xFF283593))
+                    }
+                }
+            }
+
             // ---------------- customer: layout A keeps the customer right under the scan box
             item { CustomerCard(app, nav, posCustomers, webCustomers, bills) }
 
@@ -333,7 +344,9 @@ fun PosScreen(app: App, nav: Nav) {
                                         if (problems.isNotEmpty()) {
                                             error = problems.joinToString("\n")
                                         } else {
+                                            val pendingId = cart.fromPendingId   // set when this came from a manager's Staff Bill
                                             val bill = app.repo.createBill(cart.lines.toList(), d.method, extra)
+                                            if (pendingId.isNotBlank()) app.repo.markStaffBillDone(pendingId, bill.id)
                                             cart.clear()
                                             nav.replace(Route.Receipt(bill.id))
                                         }

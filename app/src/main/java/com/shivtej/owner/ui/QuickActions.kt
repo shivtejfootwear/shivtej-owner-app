@@ -38,7 +38,8 @@ val QUICK_CATALOG: List<QuickActionDef> = listOf(
     QuickActionDef("theme", "Theme", Icons.Filled.Settings, Color(0xFF6D4C41), Route.ThemeSettings),
     QuickActionDef("admin_portal", "Admin Portal", Icons.Filled.AdminPanelSettings, Color(0xFF880E4F), Route.AdminPortal),
     QuickActionDef("deleted_bills", "Deleted bills", Icons.Filled.DeleteForever, Color(0xFFB71C1C), Route.DeletedBills),
-    QuickActionDef("catalog", "Catalog", Icons.Filled.AutoStories, Color(0xFF1565C0), Route.Catalog)
+    QuickActionDef("catalog", "Catalog", Icons.Filled.AutoStories, Color(0xFF1565C0), Route.Catalog),
+    QuickActionDef("staff_bills", "Staff Bills", Icons.Filled.Inbox, Color(0xFF283593), Route.StaffBills)
 )
 
 /** The shortcuts for a saved list of ids, in that order. Unknown and repeated ids are ignored. */

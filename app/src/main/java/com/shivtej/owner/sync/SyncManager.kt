@@ -215,6 +215,10 @@ class SyncManager(
             }
             "CREATE_POS_BILL" -> Api.rpc("owner_create_bill", a(code).put("p", JSONObject(op.payload)))
             "UPDATE_POS_BILL" -> Api.rpc("owner_update_bill", a(code).put("p", JSONObject(op.payload)))
+            "STAFF_BILL_DONE" -> {
+                val p = JSONObject(op.payload)
+                Api.rpc("owner_staff_bill_done", a(code).put("p_id", p.getString("p_id")).put("p_pos_bill_id", p.optString("p_pos_bill_id")))
+            }
             "ADD_CUSTOMER_PAYMENT" -> Api.rpc("owner_add_customer_payment", a(code).put("p", JSONObject(op.payload)))
             "DELETE_POS_BILL" -> Api.rpc("owner_delete_bill", a(code).put("p", JSONObject(op.payload)))
             "RESTORE_POS_BILL" -> Api.rpc("owner_restore_bill", a(code).put("p", JSONObject(op.payload)))

@@ -19,6 +19,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Close
@@ -71,7 +75,7 @@ private val COLOUR_HEX: Map<String, Long> = mapOf(
 private fun colourOf(name: String): Color = Color(COLOUR_HEX[name.trim().lowercase()] ?: 0xFFC9C9C9)
 
 @Composable
-fun CatalogScreen(store: Store, staffName: String, onClosed: () -> Unit) {
+fun CatalogScreen(store: Store, staffName: String, onMakeBill: () -> Unit, onClosed: () -> Unit) {
     val scope = rememberCoroutineScope()
     var products by remember { mutableStateOf<List<SProduct>?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -100,7 +104,19 @@ fun CatalogScreen(store: Store, staffName: String, onClosed: () -> Unit) {
                     if (staffName.isNotBlank()) Text(staffName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
-            actions = { IconButton(onClick = { load() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh") } },
+            actions = {
+                IconButton(onClick = { load() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh") }
+                var menu by remember { mutableStateOf(false) }
+                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Menu") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Catalog") }, onClick = { menu = false },
+                        leadingIcon = { Icon(Icons.Filled.MenuBook, null) })
+                    DropdownMenuItem(text = { Text("Make Bill") }, onClick = { menu = false; onMakeBill() },
+                        leadingIcon = { Icon(Icons.Filled.ReceiptLong, null) })
+                    DropdownMenuItem(text = { Text("Logout") }, onClick = { menu = false; onClosed() },
+                        leadingIcon = { Icon(Icons.Filled.Logout, null) })
+                }
+            },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
         )
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())

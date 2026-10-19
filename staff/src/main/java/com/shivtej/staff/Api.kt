@@ -54,6 +54,22 @@ object Api {
     fun catalog(token: String, device: String): JSONArray =
         (rpc("staff_catalog", JSONObject().put("p_token", token).put("p_device", device)) as? JSONArray) ?: JSONArray()
 
+    // ---- Make Bill (pending bills the manager sends to the owner) ----
+    fun lookup(token: String, device: String, code: String): JSONObject =
+        rpc("staff_lookup", JSONObject().put("p_token", token).put("p_device", device).put("p_code", code)) as JSONObject
+
+    fun billSend(token: String, device: String, items: JSONArray): JSONObject =
+        rpc("staff_bill_send", JSONObject().put("p_token", token).put("p_device", device).put("p_items", items)) as JSONObject
+
+    fun billUpdate(token: String, device: String, id: String, items: JSONArray): JSONObject =
+        rpc("staff_bill_update", JSONObject().put("p_token", token).put("p_device", device).put("p_id", id).put("p_items", items)) as JSONObject
+
+    fun billDelete(token: String, device: String, id: String): JSONObject =
+        rpc("staff_bill_delete", JSONObject().put("p_token", token).put("p_device", device).put("p_id", id)) as JSONObject
+
+    fun billsList(token: String, device: String): JSONArray =
+        (rpc("staff_bills_list", JSONObject().put("p_token", token).put("p_device", device)) as? JSONArray) ?: JSONArray()
+
     fun location(token: String, device: String, lat: Double?, lng: Double?, acc: Float?, battery: Int, status: String): JSONObject =
         rpc("staff_location", JSONObject()
             .put("p_token", token).put("p_device", device)

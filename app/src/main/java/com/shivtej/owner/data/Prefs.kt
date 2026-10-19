@@ -8,7 +8,7 @@ class Prefs(ctx: Context) {
 
     companion object {
         /** The Quick actions shown on the dashboard when the owner has not changed them (ids: see ui/QuickActions.kt). */
-        const val DEFAULT_QUICK_ACTIONS = "bill,add_customer,add_product,staff,customers,reports,returns,printer,catalog"
+        const val DEFAULT_QUICK_ACTIONS = "bill,add_customer,add_product,staff,customers,reports,returns,printer,catalog,staff_bills"
         /** The product categories shown in the Category dropdown when the owner has not changed their order. */
         const val DEFAULT_CATEGORIES = "Men,Ladies,Boy,Girl,Senior Men,Senior Women"
         const val DEFAULT_NOTES = "Thank you for shopping with Shivtej Footwear.\n" +
@@ -130,6 +130,10 @@ class Prefs(ctx: Context) {
     var editingBillNo: String
         get() = sp.getString("editing_bill_no", "") ?: ""
         set(v) = sp.edit().putString("editing_bill_no", v).apply()
+    // When set, the bill in progress came from a manager's "Staff Bill"; completing it marks that pending bill done.
+    var fromPendingId: String
+        get() = sp.getString("from_pending_id", "") ?: ""
+        set(v) = sp.edit().putString("from_pending_id", v).apply()
 
     // ---- Bluetooth receipt printer
     var printerAddress: String
@@ -171,10 +175,16 @@ class Prefs(ctx: Context) {
         get() {
             val v = sp.getString("quick_actions", DEFAULT_QUICK_ACTIONS) ?: DEFAULT_QUICK_ACTIONS
             // Catalog is new: put it once on a dashboard that was arranged before (it can be removed after that).
-            if (sp.getBoolean("qa_catalog_added", false)) return v
-            val n = if (v.split(",").any { it.trim() == "catalog" }) v else if (v.isBlank()) "catalog" else "$v,catalog"
-            sp.edit().putString("quick_actions", n).putBoolean("qa_catalog_added", true).apply()
-            return n
+            var v2 = v
+            if (!sp.getBoolean("qa_catalog_added", false)) {
+                v2 = if (v2.split(",").any { it.trim() == "catalog" }) v2 else if (v2.isBlank()) "catalog" else "$v2,catalog"
+                sp.edit().putString("quick_actions", v2).putBoolean("qa_catalog_added", true).apply()
+            }
+            if (!sp.getBoolean("qa_staffbills_added", false)) {
+                v2 = if (v2.split(",").any { it.trim() == "staff_bills" }) v2 else if (v2.isBlank()) "staff_bills" else "$v2,staff_bills"
+                sp.edit().putString("quick_actions", v2).putBoolean("qa_staffbills_added", true).apply()
+            }
+            return v2
         }
         set(v) = sp.edit().putString("quick_actions", v).apply()
     var wallScope: String               // "dashboard" = only the dashboard / "app" = every main screen
