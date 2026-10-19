@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write    # needed to publish the APKs to a Release (artifact storage can fill up; Releases do not)
 
 concurrency:
   group: build-apk-${{ github.ref }}
@@ -162,7 +162,23 @@ jobs:
             "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$f" || true
           done
 
+      # Publish the APKs to a Release (always overwrites the "latest-build" release). Release storage is separate
+      # from the Actions artifact storage, so the download keeps working even when the artifact quota is full.
+      - name: Publish the APKs to the "latest-build" Release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -eu
+          TAG="latest-build"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" "$GITHUB_WORKSPACE/dist/"*.apk \
+            --title "Latest build" \
+            --notes "Shivtej Owner + Managers APKs. Built from ${GITHUB_SHA:0:7}. Download the file you need below."
+
       - name: Upload the release APK (artifact Shivtej-Owner-App)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: Shivtej-Owner-App
@@ -171,6 +187,7 @@ jobs:
           retention-days: 30
 
       - name: Upload the managers app APK (artifact Shivtej-Managers-App)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: Shivtej-Managers-App
@@ -179,6 +196,7 @@ jobs:
           retention-days: 30
 
       - name: Upload the debug APK (artifact Shivtej-Owner-App-debug)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: Shivtej-Owner-App-debug
@@ -204,6 +222,7 @@ jobs:
 
       - name: Upload the Gradle logs (always)
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: gradle-logs
@@ -213,6 +232,7 @@ jobs:
 
       - name: Upload the unit test reports (always)
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-results
@@ -224,6 +244,7 @@ jobs:
 
       - name: Upload build and lint reports (only if a step failed)
         if: failure()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: build-failure-reports
