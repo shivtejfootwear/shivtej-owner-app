@@ -72,6 +72,8 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
     var pending by remember { mutableStateOf<List<PendingBill>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf<SProduct?>(null) }
+    var scanning by remember { mutableStateOf(false) }
+    val withCamera = rememberWithCamera()
 
     fun refresh() {
         val t = store.token ?: return onClosed()
@@ -95,23 +97,28 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
         if (i >= 0) cart[i] = cart[i].copy(qty = cart[i].qty + it.qty) else cart.add(it)
     }
 
+    // resolve a barcode on the server and add it to the bill
+    fun lookupAndAdd(raw: String, quiet: Boolean = false) {
+        val t = raw.trim()
+        if (t.isEmpty()) return
+        val tok = store.token ?: return onClosed()
+        scope.launch {
+            try {
+                val r = withContext(Dispatchers.IO) { Api.lookup(tok, store.deviceId, t) }
+                if (r.optBoolean("found")) {
+                    addItem(MBItem(r.optString("productId"), r.optString("article"), r.optString("name"),
+                        r.optString("colour"), r.optString("size"), r.optString("barcode"), 1, r.optDouble("mrp", 0.0)))
+                    query = ""; toast(ctx, "जोड़ा: ${r.optString("article")} ${r.optString("size")}")
+                } else if (!quiet) toast(ctx, "यह बारकोड नहीं मिला")
+            } catch (e: NotAllowed) { onClosed() } catch (_: Exception) { if (!quiet) toast(ctx, "फिर कोशिश करें") }
+        }
+    }
+
     fun onQuery(v: String) {
         query = v
         val t = v.trim()
-        // a scanned / typed barcode (digits, 6+): resolve it on the server and add
-        if (t.length >= 6 && t.none { it.isWhitespace() } && t.any { it.isDigit() }) {
-            val tok = store.token ?: return
-            scope.launch {
-                try {
-                    val r = withContext(Dispatchers.IO) { Api.lookup(tok, store.deviceId, t) }
-                    if (r.optBoolean("found")) {
-                        addItem(MBItem(r.optString("productId"), r.optString("article"), r.optString("name"),
-                            r.optString("colour"), r.optString("size"), r.optString("barcode"), 1, r.optDouble("mrp", 0.0)))
-                        query = ""; toast(ctx, "Added: ${r.optString("article")} ${r.optString("size")}")
-                    }
-                } catch (e: NotAllowed) { onClosed() } catch (_: Exception) { }
-            }
-        }
+        // a typed barcode (digits, 6+): resolve it on the server and add (stay quiet if nothing matches)
+        if (t.length >= 6 && t.none { it.isWhitespace() } && t.any { it.isDigit() }) lookupAndAdd(t, quiet = true)
     }
 
     fun send() {
@@ -139,22 +146,33 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
         products.filter { p -> listOf(p.article, p.brand, p.name, p.type).any { it.lowercase().contains(q) } }.take(20)
     }
 
-    Column(Modifier.fillMaxSize()) {
-        TopAppBar(
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
-            title = { Text(if (editingId != null) "Edit Bill" else "Make Bill", fontWeight = FontWeight.ExtraBold) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = StaffBlue, titleContentColor = Color.White,
-                navigationIconContentColor = Color.White)
+    Column(Modifier.fillMaxSize().background(PanelBg)) {
+        PremiumHeader(
+            title = if (editingId != null) "Edit Bill" else "Make Bill",
+            subtitle = "प्रोडक्ट जोड़ें और मालिक को भेजें",
+            onBack = onBack
         )
-        OutlinedTextField(
-            query, { onQuery(it) }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            placeholder = { Text("Search article / brand, or scan barcode") },
-            leadingIcon = { Icon(Icons.Filled.Search, null) },
-            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear") } },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { kb?.hide() })
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                query, { onQuery(it) }, singleLine = true,
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Search article / brand") },
+                leadingIcon = { Icon(Icons.Filled.Search, null) },
+                trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear") } },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { kb?.hide() }),
+                shape = RoundedCornerShape(12.dp)
+            )
+            // live barcode scanner
+            Box(
+                Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).background(StaffBlue)
+                    .clickable { withCamera { scanning = true } },
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Filled.QrCodeScanner, "Scan barcode", tint = Color.White, modifier = Modifier.size(30.dp)) }
+        }
 
         LazyColumn(Modifier.weight(1f).padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (results.isNotEmpty()) item {
@@ -239,6 +257,12 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
             }
         }
     }
+
+    // live camera barcode scanner: one scan adds the item, then it closes
+    if (scanning) ScannerDialog(
+        onResult = { code -> scanning = false; lookupAndAdd(code) },
+        onDismiss = { scanning = false }
+    )
 
     // pick a colour + size for a product tapped from the search results
     picker?.let { p ->

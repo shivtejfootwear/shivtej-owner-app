@@ -96,28 +96,21 @@ fun CatalogScreen(store: Store, staffName: String, onMakeBill: () -> Unit, onClo
     }
     LaunchedEffect(Unit) { load() }
 
-    Column(Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Column {
-                    Text("Shivtej Managers", fontWeight = FontWeight.ExtraBold)
-                    if (staffName.isNotBlank()) Text(staffName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
+    Column(Modifier.fillMaxSize().background(PanelBg)) {
+        var menu by remember { mutableStateOf(false) }
+        PremiumHeader(
+            title = "Shivtej Managers",
+            subtitle = staffName.ifBlank { "दुकान कैटलॉग" },
             actions = {
-                IconButton(onClick = { load() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh") }
-                var menu by remember { mutableStateOf(false) }
-                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Menu") }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("Catalog") }, onClick = { menu = false },
-                        leadingIcon = { Icon(Icons.Filled.MenuBook, null) })
-                    DropdownMenuItem(text = { Text("Make Bill") }, onClick = { menu = false; onMakeBill() },
-                        leadingIcon = { Icon(Icons.Filled.ReceiptLong, null) })
-                    DropdownMenuItem(text = { Text("Logout") }, onClick = { menu = false; onClosed() },
-                        leadingIcon = { Icon(Icons.Filled.Logout, null) })
+                IconButton(onClick = { load() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh", tint = Color.White) }
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Menu", tint = Color.White) }
+                    MenuSheet(expanded = menu, onDismiss = { menu = false },
+                        onCatalog = { menu = false },
+                        onMakeBill = { menu = false; onMakeBill() },
+                        onLogout = { menu = false; onClosed() })
                 }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+            }
         )
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         val list = products
@@ -129,6 +122,48 @@ fun CatalogScreen(store: Store, staffName: String, onMakeBill: () -> Unit, onClo
             else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
     }
+}
+
+/** The premium three-dot menu: larger items with an icon badge, a title and a one-line hint. Make Bill is highlighted. */
+@Composable
+private fun MenuSheet(
+    expanded: Boolean, onDismiss: () -> Unit,
+    onCatalog: () -> Unit, onMakeBill: () -> Unit, onLogout: () -> Unit
+) {
+    DropdownMenu(
+        expanded = expanded, onDismissRequest = onDismiss,
+        modifier = Modifier.background(Color.White).width(248.dp)
+    ) {
+        MenuLine("Catalog", "सभी प्रोडक्ट देखें", Icons.Filled.MenuBook, StaffBlue, onCatalog)
+        HorizontalDivider()
+        MenuLine("Make Bill", "बिल बनाकर मालिक को भेजें", Icons.Filled.ReceiptLong, BrandRed, onMakeBill, highlight = true)
+        HorizontalDivider()
+        MenuLine("Logout", "ऐप से बाहर निकलें", Icons.Filled.Logout, Color(0xFF6B7280), onLogout)
+    }
+}
+
+@Composable
+private fun MenuLine(
+    title: String, sub: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color, onClick: () -> Unit, highlight: Boolean = false
+) {
+    DropdownMenuItem(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        modifier = if (highlight) Modifier.background(Color(0xFFFDEEEE)) else Modifier,
+        leadingIcon = {
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(11.dp)).background(tint.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) { Icon(icon, null, tint = tint) }
+        },
+        text = {
+            Column {
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Ink)
+                Text(sub, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    )
 }
 
 @Composable
@@ -329,9 +364,9 @@ private fun CatalogCard(p: SProduct, onOpen: () -> Unit) {
     val photo = (c?.images ?: emptyList()).firstOrNull() ?: (p.images + p.colours.flatMap { it.images }).firstOrNull()
     Card(
         modifier = Modifier.fillMaxWidth().clickable { onOpen() },
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(2.dp)
+        elevation = CardDefaults.cardElevation(3.dp)
     ) {
         Box {
             Photo(p.id, photo, Modifier.fillMaxWidth().aspectRatio(1f))

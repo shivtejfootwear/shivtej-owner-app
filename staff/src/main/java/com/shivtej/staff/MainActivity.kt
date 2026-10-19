@@ -14,17 +14,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -43,14 +48,26 @@ import kotlinx.coroutines.withContext
 val BrandRed = Color(0xFFC62828)
 val StaffBlue = Color(0xFF1565C0)
 
+// ---- premium palette (used across the Managers app) ----
+val HeaderTop = Color(0xFF17315F)   // deep premium navy (header gradient top)
+val HeaderBot = Color(0xFF0E1E3C)   // header gradient bottom
+val Gold = Color(0xFFD4AF37)        // subtle premium accent line
+val PanelBg = Color(0xFFF3F5FA)     // soft app background
+val Ink = Color(0xFF0F172A)         // strong text
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // No screenshots or screen recording of the catalog (the screen shows black in them)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(primary = BrandRed, secondary = StaffBlue)) {
-                Surface(Modifier.fillMaxSize(), color = Color.White) { StaffApp() }
+            MaterialTheme(
+                colorScheme = lightColorScheme(
+                    primary = StaffBlue, secondary = HeaderTop, tertiary = Gold,
+                    background = PanelBg, surface = Color.White, onSurface = Ink
+                )
+            ) {
+                Surface(Modifier.fillMaxSize(), color = PanelBg) { StaffApp() }
             }
         }
     }
@@ -117,6 +134,44 @@ private fun Logo() {
     Image(painterResource(R.drawable.staff_logo), null, Modifier.size(84.dp))
 }
 
+/**
+ * A premium gradient header used on every screen of the Managers app.
+ * Deep navy gradient, a thin gold accent line, white bold title + optional subtitle, and action icons on the right.
+ */
+@Composable
+fun PremiumHeader(
+    title: String,
+    subtitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {}
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(Brush.verticalGradient(listOf(HeaderTop, HeaderBot)))
+            .statusBarsPadding()
+    ) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 4.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) }
+            else Spacer(Modifier.width(14.dp))
+            Image(
+                painterResource(R.drawable.staff_logo), null,
+                Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(Color.White).padding(3.dp)
+            )
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(title, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp)
+                if (!subtitle.isNullOrBlank())
+                    Text(subtitle, color = Color(0xFFBFD0EA), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            }
+            actions()
+        }
+        // gold accent line
+        Spacer(Modifier.fillMaxWidth().height(2.dp).background(Gold))
+    }
+}
+
 @Composable
 private fun LoginScreen(store: Store, onLoggedIn: (String, String) -> Unit) {
     val scope = rememberCoroutineScope()
@@ -126,23 +181,35 @@ private fun LoginScreen(store: Store, onLoggedIn: (String, String) -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val closed = remember { store.closedNote }
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)
+        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(HeaderTop, HeaderBot)))
+            .verticalScroll(rememberScrollState()).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Spacer(Modifier.height(24.dp))
-        Logo()
-        Text("Manager login", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-        if (closed) Text("इस फ़ोन का access बंद है। दुकान मालिक से नया कोड लें।", color = BrandRed,
-            fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-        Text("अपना मोबाइल नंबर और दुकान मालिक से मिला 6 अंक का कोड डालें।", textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(40.dp))
+        Box(Modifier.size(104.dp).clip(RoundedCornerShape(24.dp)).background(Color.White).padding(10.dp),
+            contentAlignment = Alignment.Center) { Logo() }
+        Text("Shivtej Managers", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = Color.White)
+        Text("दुकान का कैटलॉग और बिल बनाने के लिए", fontSize = 13.sp, color = Color(0xFFBFD0EA))
+        Spacer(Modifier.height(8.dp))
+        Card(
+            Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(8.dp)
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Login", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Ink)
+                if (closed) Text("इस फ़ोन का access बंद है। दुकान मालिक से नया कोड लें।", color = BrandRed,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                Text("अपना मोबाइल नंबर और दुकान मालिक से मिला 6 अंक का कोड डालें।",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         OutlinedTextField(mobile, { mobile = it.filter(Char::isDigit).take(10) }, label = { Text("मोबाइल नंबर") },
             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), modifier = Modifier.fillMaxWidth())
         OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("6 अंक का कोड") },
             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.fillMaxWidth())
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
         Button(
             enabled = !busy && mobile.length == 10 && code.length == 6,
+            colors = ButtonDefaults.buttonColors(containerColor = StaffBlue),
             onClick = {
                 busy = true; error = null
                 scope.launch {
@@ -164,8 +231,11 @@ private fun LoginScreen(store: Store, onLoggedIn: (String, String) -> Unit) {
                     } finally { busy = false }
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text(if (busy) "रुकिए..." else "Login") }
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) { Text(if (busy) "रुकिए..." else "Login", fontWeight = FontWeight.Bold) }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
     }
 }
 
