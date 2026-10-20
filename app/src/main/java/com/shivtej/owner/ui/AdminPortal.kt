@@ -1,5 +1,6 @@
 package com.shivtej.owner.ui
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -85,6 +87,9 @@ private data class SlideDraft(
     val text: String = "", val article: String = "", val active: Boolean = true
 )
 
+/** One brand film line: a video or a photo, the article code (opens on the website) and the sound setting of a video. */
+private data class FilmDraft(val isVideo: Boolean = false, val url: String = "", val article: String = "", val muted: Boolean = true)
+
 /** One coupon from the database. category "" = all categories. */
 private data class CouponRow(
     val code: String, val kind: String, val value: Double, val category: String,
@@ -146,8 +151,9 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var heroImage by remember { mutableStateOf("") }
     var heroArtImage by remember { mutableStateOf("") }
     var bandImage by remember { mutableStateOf("") }
-    var filmVideo by remember { mutableStateOf("") }
-    var filmArticle by remember { mutableStateOf("") }
+    // Brand films: 4 lines. Film 1 comes after 6 products, film 2 after 12, film 3 after 18, film 4 after 24.
+    val films = remember { mutableStateListOf(FilmDraft(), FilmDraft(), FilmDraft(), FilmDraft()) }
+    var filmOpen by remember { mutableStateOf(-1) }
     var uploadingSlot by remember { mutableStateOf<String?>(null) }
     var pickSlot by remember { mutableStateOf("") }
     var pickIndex by remember { mutableStateOf(-1) }
@@ -201,7 +207,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         val idx = pickIndex
         if (uri != null && slot.isNotEmpty()) {
             scope.launch {
-                uploadingSlot = if (slot == "slide") "slide$idx" else slot
+                uploadingSlot = if (slot == "slide" || slot == "film") "$slot$idx" else slot
                 try {
                     val mime = ctx.contentResolver.getType(uri).orEmpty()
                     val isVideo = mime.startsWith("video/")
@@ -224,7 +230,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                     when (slot) {
                         "hero" -> heroImage = url
                         "band" -> bandImage = url
-                        "film" -> filmVideo = url
+                        "film" -> if (idx in films.indices) films[idx] = films[idx].copy(url = url, isVideo = isVideo)
                         "slide" -> if (idx in slides.indices) slides[idx] = slides[idx].copy(url = url, isVideo = isVideo)
                         else -> heroArtImage = url
                     }
@@ -298,8 +304,18 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             heroImage = s.optString("heroImage", "")
             heroArtImage = s.optString("heroArtImage", "")
             bandImage = s.optString("bandImage", "")
-            filmVideo = s.optString("filmVideo", "")
-            filmArticle = s.optString("filmArticle", "")
+            // brand films (4 lines). An old single brand film becomes line 1 until the lines are saved.
+            for (k in 0 until 4) films[k] = FilmDraft()
+            val fArr = s.optJSONArray("films")
+            if (fArr != null && fArr.length() > 0) {
+                for (k in 0 until minOf(4, fArr.length())) {
+                    val o = fArr.optJSONObject(k) ?: continue
+                    films[k] = FilmDraft(isVideo = o.optString("kind") == "video", url = o.optString("url"),
+                        article = o.optString("article"), muted = o.optBoolean("muted", true))
+                }
+            } else if (s.optString("filmVideo").isNotBlank()) {
+                films[0] = FilmDraft(isVideo = true, url = s.optString("filmVideo"), article = s.optString("filmArticle"), muted = true)
+            }
             slides.clear()
             s.optJSONArray("slides")?.let { arr ->
                 for (k in 0 until arr.length()) {
@@ -348,6 +364,14 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                 .put("article", s.article.trim())
                 .put("active", s.active))
         }
+        val filmArr = JSONArray()
+        films.forEach { f ->
+            filmArr.put(JSONObject()
+                .put("kind", if (f.isVideo) "video" else "photo")
+                .put("url", f.url)
+                .put("article", f.article.trim())
+                .put("muted", f.muted))
+        }
         val v = JSONObject()
             .put("heroTitle", heroTitle.trim())
             .put("heroText", heroText.trim())
@@ -375,8 +399,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("heroImage", heroImage)
             .put("heroArtImage", heroArtImage)
             .put("bandImage", bandImage)
-            .put("filmVideo", filmVideo)
-            .put("filmArticle", filmArticle.trim())
+            .put("films", filmArr)
             .put("slides", slideArr)
         try {
             call("owner_save_site_settings", JSONObject().put("p_value", v))
@@ -495,6 +518,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                 if (key == "orders") {
                     nav.go(Route.Orders("all"))
                 } else {
+                    filmOpen = -1
                     page = key
                 }
             }
@@ -527,11 +551,82 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                     emptyText = "Default photo is used")
                 PhotoRow("3. Middle band photo or video", bandImage, uploadingSlot == "band", ready,
                     onPick = { pickPhoto("band") }, onRemove = { bandImage = "" }, removeLabel = "Remove")
-                PhotoRow("4. Brand film video (box above the shop)", filmVideo, uploadingSlot == "film", ready,
-                    onPick = { pickPhoto("film") }, onRemove = { filmVideo = "" }, removeLabel = "Remove",
-                    emptyText = "No video. The box says Brand film coming soon")
-                Field("Product article code (click on the film opens this product, optional)", filmArticle) { filmArticle = it }
                 SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "films" -> {
+                BackHandler(enabled = filmOpen in 0 until films.size) { filmOpen = -1 }
+                if (filmOpen in 0 until films.size) {
+                    val i = filmOpen
+                    val f = films[i]
+                    TextButton(onClick = { filmOpen = -1 }) { Text("‹ फ़िल्म की सूची") }
+                    Text("फ़िल्म ${i + 1} · ${(i + 1) * 6} प्रोडक्ट के बाद", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text(if (f.article.isBlank()) "पहले फ़िल्म की लाइन में आर्टिकल कोड डालें।" else "आर्टिकल ${f.article}",
+                        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("प्रोडक्ट", fontWeight = FontWeight.SemiBold)
+                            Text("वेबसाइट पर इस आर्टिकल का पेज खुलेगा।", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedButton(
+                                onClick = {
+                                    ctx.startActivity(Intent(Intent.ACTION_VIEW,
+                                        Uri.parse("https://shivtejfootwear.com/?article=" + Uri.encode(f.article))))
+                                },
+                                enabled = f.article.isNotBlank()
+                            ) { Text("प्रोडक्ट खोलें") }
+                        }
+                    }
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("म्यूट / अनम्यूट", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    when {
+                                        !f.isVideo -> "फ़ोटो है, इसमें आवाज़ नहीं होती"
+                                        f.muted -> "अभी: म्यूट (आवाज़ बंद)"
+                                        else -> "अभी: अनम्यूट (आवाज़ चालू)"
+                                    },
+                                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(f.muted, { films[i] = f.copy(muted = it) }, enabled = f.isVideo && ready && uploadingSlot == null)
+                        }
+                    }
+                    Text("म्यूट चालू हो तो फ़िल्म बिना आवाज़ चलेगी और वेबसाइट पर \"आवाज़ चालू करें\" का बटन दिखेगा।",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SaveWebsiteButton(enabled = saving) { saveWebsite() }
+                } else {
+                    Text("वेबसाइट पर हर 6 प्रोडक्ट के बाद एक फ़िल्म आएगी: फ़िल्म 1 के बाद 6 प्रोडक्ट, फ़िल्म 2 के बाद 12, फ़िल्म 3 के बाद 18, फ़िल्म 4 के बाद 24। " +
+                        "हर लाइन में वीडियो या फ़ोटो डालें। आर्टिकल कोड डालकर लाइन खोलें, वहाँ \"प्रोडक्ट\" और \"म्यूट / अनम्यूट\" के विकल्प होंगे।",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    films.forEachIndexed { i, f ->
+                        Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("${i + 1}. फ़िल्म ${i + 1} · ${(i + 1) * 6} प्रोडक्ट के बाद", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    when {
+                                        f.url.isBlank() -> "अभी कुछ नहीं डला है (यह लाइन वेबसाइट पर नहीं दिखेगी)"
+                                        f.isVideo -> "वीडियो अपलोड हो गया"
+                                        else -> "फ़ोटो अपलोड हो गई"
+                                    },
+                                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = { pickPhoto("film", i) }, enabled = ready && uploadingSlot == null) {
+                                        Text(if (uploadingSlot == "film$i") "अपलोड हो रहा है..." else "वीडियो या फ़ोटो चुनें")
+                                    }
+                                    if (f.url.isNotBlank()) {
+                                        TextButton(onClick = { films[i] = FilmDraft() }, enabled = ready && uploadingSlot == null) { Text("हटाएँ") }
+                                    }
+                                }
+                                Field("आर्टिकल कोड (इस लाइन को खोलने के लिए)", f.article) { films[i] = films[i].copy(article = it.trim()) }
+                                if (f.article.isNotBlank()) {
+                                    TextButton(onClick = { filmOpen = i }) { Text("${f.article} खोलें ›") }
+                                }
+                            }
+                        }
+                    }
+                    SaveWebsiteButton(enabled = saving) { saveWebsite() }
+                }
             }
             "slider" -> {
                 Text("The first screen is the red top screen (it stays as it is). Add up to $MAX_SLIDES more screens below. " +
@@ -800,7 +895,8 @@ private val AdminSlate = Color(0xFF546E7A)
 private val ADMIN_GROUPS = listOf(
     AdminGroup("वेबसाइट के टेक्स्ट और फ़ोटो", listOf(
         AdminTileItem("text", "मुख्य हेडिंग और टेक्स्ट", "हेडिंग, छोटा टेक्स्ट, टेक्स्ट एनिमेशन", Icons.Filled.Edit, AdminRed),
-        AdminTileItem("photos", "फ़ोटो और वीडियो", "ऊपर का फ़ोटो, फ़्लोटिंग सैंडल, बैंड, फ़िल्म", Icons.Filled.PhotoLibrary, AdminOrange),
+        AdminTileItem("photos", "फ़ोटो और वीडियो", "ऊपर का फ़ोटो, फ़्लोटिंग सैंडल, बैंड", Icons.Filled.PhotoLibrary, AdminOrange),
+        AdminTileItem("films", "ब्रांड फिल्में और वीडियो", "4 लाइन: 6, 12, 18, 24 प्रोडक्ट के बाद", Icons.Filled.VideoLibrary, AdminPurple),
         AdminTileItem("slider", "होम स्लाइडर और बीच का बैंड", "स्लाइड, दिखाएँ या छिपाएँ, क्रम", Icons.Filled.PlayCircle, AdminOrange),
         AdminTileItem("social", "Instagram, Facebook, WhatsApp", "सोशल लिंक और WhatsApp नंबर", Icons.Filled.Share, AdminBlue)
     )),
