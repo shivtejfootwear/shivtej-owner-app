@@ -97,7 +97,7 @@ Status meanings: **Code done** = written and read through; **Logic checked** = t
 These rules are in `util/Ledger.kt` and are the same in the customer outstanding, the purchase history and the account ledger.
 - **Shop bill:** charge = bill total. Received at sale = the amount paid on the bill (old bills with no payment record count as paid).
 - **Website order (not cancelled):** charge = order total. Received at sale = the whole total only when the payment status is "Paid".
-  The website writes "COD - pending" or "Pending payment", so such an order stays owed until the owner records the money
+  The website writes "Pending payment", so such an order stays owed until the owner records the money
   (Receive payment > On account). Online payments that the app does not know about must be recorded the same way.
 - **Return:** the goods handed back reduce what the customer owes (their value at the sale price).
 - **Exchange:** the replacement goods are added to what the customer owes.

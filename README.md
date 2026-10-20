@@ -121,8 +121,7 @@ The app asks for these only when you open the Printer screen or print. Printing 
 - **Tasks and reminders** (drawer "Tasks & Reminders"): create, edit, complete, delete; due date and time; example tasks. Reminders use
   WorkManager (`util/Reminders.kt`) and need the notification permission (Android 13 and newer ask for it). Tasks stay on this phone and are not synced.
 - **Returns, refunds and website orders in the customer ledger** (final update, `util/Ledger.kt`, `data/LedgerInput.kt`):
-  - A website order that is not cancelled is a charge on the customer's account. The website saves orders as "COD - pending" or
-    "Pending payment", so they stay owed until the owner records the money (Receive payment > On account). An order counts as paid
+  - A website order that is not cancelled is a charge on the customer's account. The website saves orders as "Pending payment", so they stay owed until the owner records the money (Receive payment > On account). An order counts as paid
     only when its payment status is "Paid".
   - A return takes back the value of the goods (it reduces what is owed). An exchange adds the replacement goods to what is owed.
   - A refund is cash handed back to the customer, so it is recorded as cash. The return screen allows cash only up to what the
