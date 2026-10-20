@@ -115,9 +115,9 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var announceText by remember { mutableStateOf("") }
     var freeAbove by remember { mutableStateOf("") }
     var trustOn by remember { mutableStateOf(false) }
-    var trust1 by remember { mutableStateOf("") }
-    var trust2 by remember { mutableStateOf("") }
-    var trust3 by remember { mutableStateOf("") }
+    var trust1 by remember { mutableStateOf("100% ओरिजिनल प्रोडक्ट") }
+    var trust2 by remember { mutableStateOf("सुरक्षित भुगतान") }
+    var trust3 by remember { mutableStateOf("Akluj में अपनी दुकान") }
     var promoOn by remember { mutableStateOf(false) }
     var promoText by remember { mutableStateOf("") }
     var promoCode by remember { mutableStateOf("") }
@@ -278,7 +278,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             announceText = s.optString("announceText", "")
             freeAbove = s.optString("freeDeliveryAbove", "")
             trustOn = s.optBoolean("trustOn", false)
-            trust1 = s.optString("trust1", ""); trust2 = s.optString("trust2", ""); trust3 = s.optString("trust3", "")
+            trust1 = s.optString("trust1", "100% ओरिजिनल प्रोडक्ट"); trust2 = s.optString("trust2", "सुरक्षित भुगतान"); trust3 = s.optString("trust3", "Akluj में अपनी दुकान")
             promoOn = s.optBoolean("promoOn", false)
             promoText = s.optString("promoText", ""); promoCode = s.optString("promoCode", "")
             promoTerms = s.optString("promoTerms", "")
@@ -611,10 +611,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                 SaveWebsiteButton(enabled = saving) { saveWebsite() }
             }
             "trust" -> {
-                SwitchRow("Trust line under the top bar", trustOn) { trustOn = it }
+                SwitchRow("Trust line under the top bar (the 4th point, भारत में डिलीवरी, is always shown)", trustOn) { trustOn = it }
                 Field("Trust point 1 (example: 100% ओरिजिनल प्रोडक्ट)", trust1) { trust1 = it }
                 Field("Trust point 2 (example: सुरक्षित भुगतान)", trust2) { trust2 = it }
-                Field("Trust point 3 (example: ओरिजिनल प्रोडक्ट)", trust3) { trust3 = it }
+                Field("Trust point 3 (example: Akluj में अपनी दुकान)", trust3) { trust3 = it }
                 SaveWebsiteButton(enabled = saving) { saveWebsite() }
             }
             "promo" -> {
