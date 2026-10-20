@@ -71,7 +71,7 @@ class ProductDraft(val id: String) {
     var mrp by mutableStateOf("")
     var price by mutableStateOf("")
     var active by mutableStateOf(true)
-    var newItem by mutableStateOf(false)
+    var newItem by mutableStateOf(true)   // a new product is NEW by default; the owner can switch it off
     val images = mutableStateListOf<String>()
     val videos = mutableStateListOf<String>()
     val variants = mutableStateListOf<VariantDraft>()

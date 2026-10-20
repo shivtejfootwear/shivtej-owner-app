@@ -122,7 +122,7 @@ fun CatalogScreen(app: App) {
         val text = (listOf(p.name, p.article, p.brand, p.productType, p.category) + p.variants.map { it.colour }).joinToString(" ").lowercase()
         val textN = normQ(text)
         (cat == "All" || cat == "NEW" || inCat(p, cat)) &&
-            (!(cat == "NEW" || newOnly) || p.newItem) &&
+            (!(cat == "NEW" || newOnly) || p.isNewNow) &&
             (brand.isEmpty() || p.brand.trim() == brand) &&
             (type.isEmpty() || p.productType.trim() == type) &&
             (catalogMrp(p) >= range.start - 0.001 && catalogMrp(p) <= range.endInclusive + 0.001) &&
@@ -133,7 +133,7 @@ fun CatalogScreen(app: App) {
         when (sort) {
             "low" -> list.sortedBy { catalogMrp(it) }
             "high" -> list.sortedByDescending { catalogMrp(it) }
-            else -> list.sortedByDescending { it.newItem }
+            else -> list.sortedByDescending { it.isNewNow }
         }
     }
 
@@ -283,7 +283,7 @@ private fun CatalogCard(app: App, p: Product, onOpen: () -> Unit) {
     ) {
         Box {
             CatalogPhoto(photo, Modifier.fillMaxWidth().aspectRatio(1f))
-            if (p.newItem) Text("NEW", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            if (p.isNewNow) Text("NEW", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(8.dp).clip(RoundedCornerShape(6.dp)).background(BrandRed).padding(horizontal = 6.dp, vertical = 2.dp))
         }
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {

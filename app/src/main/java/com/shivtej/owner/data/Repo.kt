@@ -29,6 +29,8 @@ fun titleOf(brand: String, article: String, fallback: String): String =
     listOf(brand.trim(), article.trim()).filter { it.isNotEmpty() }.joinToString(" ").ifBlank { fallback.trim() }
 
 /** Starter suggestions for the Product type field (the owner can type any other type too; it is then suggested next time). */
+const val NEW_DAYS = 120L   // the NEW tag goes off this many days after a product was added (same as the website and staff app)
+
 val PRODUCT_TYPE_START = listOf("चप्पल", "सैंडल", "शूज़", "लोफर", "फ्लिप फ्लॉप", "क्रॉप्स")
 
 data class Product(
@@ -45,10 +47,13 @@ data class Product(
     val images: List<String>,
     val variants: List<Variant>,
     val videos: List<String> = emptyList(),    // product videos (local file or https URL), added in update 4
-    val productType: String = ""               // चप्पल, सैंडल, शूज़ ... (database version 14)
+    val productType: String = "",              // चप्पल, सैंडल, शूज़ ... (database version 14)
+    val createdAt: Long = 0L                   // date the product was added (database version 16); 0 = not known yet
 ) {
     val totalStock: Int get() = variants.sumOf { v -> v.sizes.sumOf { it.qty } }
     val allImages: List<String> get() = images + variants.flatMap { it.images }
+    /** The NEW tag: on for a new item (switched on by default) until 120 days after it was added. */
+    val isNewNow: Boolean get() = newItem && (createdAt <= 0L || System.currentTimeMillis() - createdAt < NEW_DAYS * 86_400_000L)
 }
 
 /** scanned = the barcode that was scanned (one piece), "" when found by search. */
@@ -178,7 +183,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     )
                 }.sortedBy { it.colour.lowercase() }
                 Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
-                    p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList(), productType = p.productType)
+                    p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt)
             }
         }
 
@@ -214,7 +219,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pieces, it.colour, it.size, it.barcode)) })
         }.sortedBy { it.colour.lowercase() }
         return Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
-            p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList(), productType = p.productType)
+            p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt)
     }
 
     fun productJson(p: Product): JSONObject {
@@ -262,9 +267,10 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 "Can not remove ${o.colour} / ${o.size}: it still has ${o.qty} in stock. Save it with stock 0 first, then remove it."
             }
             val now = System.currentTimeMillis()
+            val createdAtKept = dao.product(p.id)?.createdAt?.takeIf { it > 0L } ?: now
             dao.putProduct(ProductE(p.id, p.article.trim(), p.name.trim(), p.brand.trim(), p.category.trim(),
                 p.description.trim(), p.mrp, p.price, p.active, p.newItem, p.images.toJsonText(), now, p.videos.toJsonText(),
-                p.productType.trim()))
+                p.productType.trim(), createdAt = createdAtKept))
             dao.delVariants(p.id)
             dao.delSizes(p.id)
             dao.putVariants(p.variants.map { VariantE(p.id, it.colour, it.images.toJsonText()) })
@@ -1317,7 +1323,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             (o.optJSONArray("images") ?: JSONArray()).strings().toJsonText(),
             parseTime(o.str("updated_at")),
             (o.optJSONArray("videos") ?: JSONArray()).strings().toJsonText(),
-            if (o.has("product_type")) o.str("product_type").trim() else ""   // not sent yet by the server: kept locally
+            if (o.has("product_type")) o.str("product_type").trim() else "",   // not sent yet by the server: kept locally
+            if (o.has("created_at") && !o.isNull("created_at")) parseTime(o.str("created_at")) else 0L
         )
         val topSizes = (o.optJSONArray("sizes") ?: JSONArray()).strings()
         val vs = ArrayList<VariantE>()
