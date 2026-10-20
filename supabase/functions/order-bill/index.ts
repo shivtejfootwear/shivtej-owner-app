@@ -28,7 +28,7 @@ const LOGO_URL = "https://shivtejfootwear.com/logo.png";
 const BILL_STATES = ["Confirmed", "Packed", "Shipped", "Delivered"];
 // The bill is not stored anywhere. It is made again each time it is asked for, and only for this many days after the order.
 const BILL_DAYS = 15;
-// Online payment only (no Cash on Delivery). "Paid" yes; "pending" or "unpaid" no.
+// Online payment only. "Paid" yes; "pending" or "unpaid" no.
 function isPaid(s: unknown): boolean {
   const v = String(s ?? "").toLowerCase();
   return v.includes("paid") && !v.includes("unpaid") && !v.includes("pending");
@@ -77,7 +77,6 @@ function money(n: unknown): string {
 // How the payment is shown on the bill.
 function paymentLabel(s: unknown): string {
   const v = String(s ?? "").toLowerCase();
-  if (v.includes("cod")) return "Cash on Delivery";
   if (v.includes("paid")) return "Paid online";
   if (v.includes("pending")) return "Online payment pending";
   return plain(s) || "-";

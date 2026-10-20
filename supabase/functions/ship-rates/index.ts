@@ -6,7 +6,7 @@
 //          tag: "cheapest" | "fastest" | ""   (rate in whole rupees, rounded up)
 //   -> 400 BAD_PINCODE | BAD_PAIRS     502 SHIPROCKET_FAILED
 //
-// Weight: 500 g per pair (2 pairs = 1 kg). Pickup from the shop pincode 413101. Prepaid (no COD).
+// Weight: 500 g per pair (2 pairs = 1 kg). Pickup from the shop pincode 413101. Prepaid only.
 // The order value is sent to Shiprocket as declared_value (the panel's Rate Calculator uses it too), and the price
 // shown is the full charge: the larger of "rate" and freight + coverage + other charges, so the customer never pays
 // less than Shiprocket will charge the shop.

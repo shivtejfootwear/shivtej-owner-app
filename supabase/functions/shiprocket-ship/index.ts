@@ -172,8 +172,7 @@ async function courierOptions(o: any, token: string): Promise<Record<string, unk
   const items: any[] = Array.isArray(o.items) ? o.items : [];
   const pairs = items.reduce((n, it) => n + Number(it.qty ?? it.q ?? 1), 0);
   const weightKg = Math.max(0.5, (pairs * DEFAULT_WEIGHT_G) / 1000);
-  const cod = String(o.payment_status ?? "").toLowerCase().includes("cod") ? 1 : 0;
-  const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=${cod}&weight=${weightKg}`;
+  const q = `pickup_postcode=${SHOP_PIN}&delivery_postcode=${pin}&cod=0&weight=${weightKg}`;
   const res = await srGet(`/courier/serviceability/?${q}`, token);
   const list: any[] = res?.data?.available_courier_companies ?? [];
   return list
@@ -197,9 +196,8 @@ function buildPayload(o: any): Record<string, unknown> {
     throw new HttpError(400, "ADDRESS_INCOMPLETE");
   }
 
-  const cod = String(o.payment_status ?? "").toLowerCase().includes("cod");
   const paid = String(o.payment_status ?? "").toLowerCase().includes("paid");
-  if (!cod && !paid) throw new HttpError(400, "PAYMENT_NOT_CONFIRMED");
+  if (!paid) throw new HttpError(400, "PAYMENT_NOT_CONFIRMED");
 
   const items: any[] = Array.isArray(o.items) ? o.items : [];
   const pairs = items.reduce((n, it) => n + Number(it.qty ?? it.q ?? 1), 0);
@@ -218,7 +216,7 @@ function buildPayload(o: any): Record<string, unknown> {
     billing_country: "India",
     billing_phone: String(c.mobile ?? ""),
     shipping_is_billing: true,
-    payment_method: cod ? "COD" : "Prepaid",
+    payment_method: "Prepaid",
     sub_total: Number(o.subtotal ?? 0),
     length: BOX.length,
     breadth: BOX.breadth,

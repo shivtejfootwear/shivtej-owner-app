@@ -9,7 +9,7 @@ import com.shivtej.owner.data.CustomerPaymentE
  * Every sale of a customer is one of:
  *  - a shop (POS) bill: charge = bill total; received at sale = the amount paid on the bill (old bills: all paid);
  *  - a website order (not cancelled): charge = order total; received at sale = the whole total only when the payment
- *    status says "Paid". The website saves orders as "COD - pending" / "Pending payment", so an order stays owed until
+ *    status says "Paid". The website saves orders as "Pending payment", so an order stays owed until
  *    the owner records the money in the customer's ledger (as a payment on account).
  *
  * Things that change the amount after the sale:

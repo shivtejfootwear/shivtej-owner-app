@@ -13,7 +13,7 @@ class LedgerReturnsTest {
     private fun bill(id: String, total: Double, paid: Double) = BillE(id, "B-$id", total, "Cash", "", now - 10_000L, true,
         customerName = "Test", customerMobile = m, amountPaid = paid)
 
-    private fun order(id: String, total: Double, paymentStatus: String = "COD - pending", orderStatus: String = "New") =
+    private fun order(id: String, total: Double, paymentStatus: String = "Pending payment", orderStatus: String = "New") =
         Ledger.WebOrder(id, m, total, paymentStatus, orderStatus, now - 5_000L)
 
     private fun ret(id: String, refType: String, refId: String, back: Double, out: Double = 0.0,
