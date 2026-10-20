@@ -133,7 +133,7 @@ fun PersonAvatar(name: String, localPath: String, remoteUrl: String, size: Dp = 
 }
 
 @Composable
-fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus: String = "all") {
+fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus: String = "all", fixedKind: String = "all") {
     val posC by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
     val webC by app.repo.customers.collectAsStateWithLifecycle(emptyList())
     val bills by app.repo.bills.collectAsStateWithLifecycle(emptyList())
@@ -142,7 +142,7 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
     val returns by app.repo.returns.collectAsStateWithLifecycle(emptyList())
     var query by remember { mutableStateOf("") }
     var status by remember { mutableStateOf(initialStatus) }      // all | owes | clear
-    var kind by remember { mutableStateOf("all") }                // all | shop (offline) | online (website)
+    val kind = fixedKind                                          // all | shop (offline) | online (website): set by the menu item, no chips
     var sort by remember { mutableStateOf(if (initialStatus == "owes") "due" else "spent") }  // spent | due | oldest
     var adding by remember { mutableStateOf(openAdd) }
     val rows = remember(posC, webC, bills, orders, pays, returns) { buildCustRows(posC, webC, bills, orders, pays, returns) }
@@ -198,11 +198,6 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
                 Chip("All", status == "all") { status = "all" }
                 Chip("Owes money", status == "owes") { status = "owes" }
                 Chip("No dues", status == "clear") { status = "clear" }
-            }
-            Row(Modifier.padding(top = 6.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
-                Chip("Everyone", kind == "all") { kind = "all" }
-                Chip("Shop (offline)", kind == "shop") { kind = "shop" }
-                Chip("Online (website)", kind == "online") { kind = "online" }
             }
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
                 Chip("Most spent", sort == "spent") { sort = "spent" }
@@ -514,4 +509,49 @@ fun readPhoneContact(ctx: Context, uri: Uri): Pair<String, String>? {
         }
     }
     return number?.let { name to it }
+}
+
+/** Online customers: only their numbers (the website customers), with search. No names, no dues. */
+@Composable
+fun OnlineCustomerNumbersScreen(app: App, nav: Nav) {
+    val webC by app.repo.customers.collectAsStateWithLifecycle(emptyList())
+    val bills by app.repo.bills.collectAsStateWithLifecycle(emptyList())
+    val orders by app.repo.orders.collectAsStateWithLifecycle(emptyList())
+    val pays by app.repo.customerPayments.collectAsStateWithLifecycle(emptyList())
+    val returns by app.repo.returns.collectAsStateWithLifecycle(emptyList())
+    val posC by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
+    var query by remember { mutableStateOf("") }
+    val rows = remember(posC, webC, bills, orders, pays, returns) {
+        buildCustRows(posC, webC, bills, orders, pays, returns).filter { it.online }
+            .map { it to it.onlineContact.ifBlank { it.mobile } }
+            .filter { it.second.isNotBlank() }
+            .sortedBy { it.second }
+    }
+    val q = query.trim().filter { it.isDigit() }
+    val shown = if (q.isEmpty()) rows else rows.filter { it.second.contains(q) }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        OutlinedTextField(
+            value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            placeholder = { Text("Search by mobile number") },
+            leadingIcon = { Icon(Icons.Filled.Search, null) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
+        )
+        Text("${shown.size} online customer number(s)", fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+        if (shown.isEmpty()) EmptyState(
+            if (rows.isEmpty()) "No online customers yet. They appear here when someone orders on the website."
+            else "No number matches."
+        )
+        LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
+            items(shown, key = { it.second }) { (c, number) ->
+                Row(Modifier.fillMaxWidth().clickable { nav.go(Route.CustomerDetail(c.mobile)) }.padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(number, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    Text("Open", color = BrandRed, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+                HorizontalDivider()
+            }
+        }
+    }
 }

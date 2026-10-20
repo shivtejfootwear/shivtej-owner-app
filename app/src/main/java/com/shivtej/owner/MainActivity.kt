@@ -226,7 +226,16 @@ fun PinScreen(app: App, onOk: () -> Unit) {
 }
 
 // ------------------------------------------------------------------ shell: drawer + top bar
-private data class DrawerItem(val label: String, val icon: ImageVector, val route: Route)
+private data class DrawerItem(val label: String, val icon: ImageVector, val route: Route, val color: Color, val badge: String = "")
+private data class DrawerSection(val title: String, val items: List<DrawerItem>)
+
+private val DrawerRed = Color(0xFFD91E18)
+private val DrawerOrange = Color(0xFFEF6C00)
+private val DrawerBlue = Color(0xFF1E63C8)
+private val DrawerTeal = Color(0xFF00897B)
+private val DrawerPurple = Color(0xFF7B3FA0)
+private val DrawerIndigo = Color(0xFF3949AB)
+private val DrawerSlate = Color(0xFF546E7A)
 
 @Composable
 fun Shell(app: App) {
@@ -237,25 +246,36 @@ fun Shell(app: App) {
     val ctx = LocalContext.current
     val route = stack.last()
 
-    val items = listOf(
-        DrawerItem("Dashboard", Icons.Filled.Dashboard, Route.Dashboard),
-        DrawerItem("Products", Icons.Filled.Inventory2, Route.Products()),
-        DrawerItem("Add Item", Icons.Filled.AddCircle, Route.ProductEdit(null)),
-        DrawerItem("Stock / Inventory", Icons.Filled.Warehouse, Route.Stock()),
-        DrawerItem("POS Billing", Icons.Filled.PointOfSale, Route.Pos),
-        DrawerItem("Online Orders", Icons.Filled.ShoppingCart, Route.Orders("all")),
-        DrawerItem("Shipping", Icons.Filled.LocalShipping, Route.Orders("shipping")),
-        DrawerItem("Returns & Exchanges", Icons.Filled.Replay, Route.Returns),
-        DrawerItem("Customers", Icons.Filled.People, Route.Customers),
-        DrawerItem("Customer numbers", Icons.Filled.ContactPhone, Route.CustomerNumbers),
-        DrawerItem("Staff", Icons.Filled.Group, Route.Staff),
-        DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers),
-        DrawerItem("Reports", Icons.Filled.BarChart, Route.Reports),
-        DrawerItem("Printer", Icons.Filled.Print, Route.Printer),
-        DrawerItem("Shop & Bill Settings", Icons.Filled.Receipt, Route.ShopSettings),
-        DrawerItem("AI Assistant", Icons.Filled.SmartToy, Route.Assistant),
-        DrawerItem("Tasks & Reminders", Icons.Filled.Checklist, Route.Tasks),
-        DrawerItem("Settings", Icons.Filled.Settings, Route.Settings)
+    val sections = listOf(
+        DrawerSection("Sales", listOf(
+            DrawerItem("Dashboard", Icons.Filled.Dashboard, Route.Dashboard, DrawerRed),
+            DrawerItem("POS Billing", Icons.Filled.PointOfSale, Route.Pos, DrawerRed),
+            DrawerItem("Online Orders", Icons.Filled.ShoppingCart, Route.Orders("all"), DrawerRed),
+            DrawerItem("Shipping", Icons.Filled.LocalShipping, Route.Orders("shipping"), DrawerRed),
+            DrawerItem("Returns & Exchanges", Icons.Filled.Replay, Route.Returns, DrawerRed)
+        )),
+        DrawerSection("Stock", listOf(
+            DrawerItem("Products", Icons.Filled.Inventory2, Route.Products(), DrawerOrange),
+            DrawerItem("Add Item", Icons.Filled.AddCircle, Route.ProductEdit(null), DrawerOrange),
+            DrawerItem("Stock / Inventory", Icons.Filled.Warehouse, Route.Stock(), DrawerOrange),
+            DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers, DrawerOrange)
+        )),
+        DrawerSection("Customers", listOf(
+            DrawerItem("Offline customers", Icons.Filled.People, Route.Customers, DrawerBlue),
+            DrawerItem("Online customers", Icons.Filled.Language, Route.CustomersOnline, DrawerTeal),
+            DrawerItem("Customer numbers", Icons.Filled.ContactPhone, Route.CustomerNumbers, DrawerBlue)
+        )),
+        DrawerSection("Team", listOf(
+            DrawerItem("Staff", Icons.Filled.Group, Route.Staff, DrawerPurple)
+        )),
+        DrawerSection("Reports & Settings", listOf(
+            DrawerItem("Reports", Icons.Filled.BarChart, Route.Reports, DrawerTeal),
+            DrawerItem("Printer", Icons.Filled.Print, Route.Printer, DrawerIndigo),
+            DrawerItem("Shop & Bill Settings", Icons.Filled.Receipt, Route.ShopSettings, DrawerTeal),
+            DrawerItem("AI Assistant", Icons.Filled.SmartToy, Route.Assistant, DrawerIndigo),
+            DrawerItem("Tasks & Reminders", Icons.Filled.Checklist, Route.Tasks, DrawerSlate),
+            DrawerItem("Settings", Icons.Filled.Settings, Route.Settings, DrawerSlate)
+        ))
     )
 
     BackHandler(enabled = drawer.isOpen || nav.canGoBack) {
@@ -271,7 +291,8 @@ fun Shell(app: App) {
         is Route.Receipt -> "Receipt"
         is Route.Orders -> if (route.mode == "shipping") "Shipping" else "Online Orders"
         is Route.OrderDetail -> "Order"
-        Route.Customers -> "Customers"
+        Route.Customers -> "Offline customers"
+        Route.CustomersOnline -> "Online customers"
         Route.CustomerNew -> "Add customer"
         is Route.CustomerDetail -> "Customer"
         Route.Staff -> "Staff & Sales"
@@ -306,14 +327,33 @@ fun Shell(app: App) {
                     Text("Shivtej Footwear", fontSize = 22.sp, fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(20.dp))
                     StorageCard(app, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
-                    items.forEach { item ->
-                        NavigationDrawerItem(
-                            label = { Text(item.label) },
-                            icon = { Icon(item.icon, null) },
-                            selected = false,
-                            onClick = { nav.top(item.route); scope.launch { drawer.close() } },
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
+                    sections.forEach { section ->
+                        Text(section.title.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 28.dp, top = 14.dp, bottom = 2.dp))
+                        section.items.forEach { item ->
+                            NavigationDrawerItem(
+                                label = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(item.label, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                                        if (item.badge.isNotEmpty()) Text(item.badge, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            modifier = Modifier.background(item.color, RoundedCornerShape(50))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp))
+                                    }
+                                },
+                                icon = {
+                                    Box(Modifier.size(36.dp).background(item.color, RoundedCornerShape(10.dp)),
+                                        contentAlignment = Alignment.Center) {
+                                        Icon(item.icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                    }
+                                },
+                                selected = false,
+                                onClick = { nav.top(item.route); scope.launch { drawer.close() } },
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                            )
+                        }
                     }
                 }
             }
@@ -356,7 +396,8 @@ fun Shell(app: App) {
                     is Route.Receipt -> ReceiptScreen(app, nav, route.billId)
                     is Route.Orders -> OrdersScreen(app, nav, route.mode)
                     is Route.OrderDetail -> OrderDetailScreen(app, nav, route.id)
-                    Route.Customers -> CustomersScreen(app, nav)
+                    Route.Customers -> CustomersScreen(app, nav, fixedKind = "shop")
+                    Route.CustomersOnline -> OnlineCustomerNumbersScreen(app, nav)
                     Route.CustomerNew -> CustomersScreen(app, nav, openAdd = true)
                     is Route.CustomerDetail -> CustomerDetailScreen(app, nav, route.mobile)
                     Route.Staff -> StaffScreen(app, nav)
