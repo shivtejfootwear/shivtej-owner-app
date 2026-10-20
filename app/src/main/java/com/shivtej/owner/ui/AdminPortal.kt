@@ -648,7 +648,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
 
         SectionTitle("Website extras (saved now; shown on the website after it is applied)")
         SwitchRow("Trust line under the top bar", trustOn) { trustOn = it }
-        Field("Trust point 1 (example: 30 दिन में वापसी)", trust1) { trust1 = it }
+        Field("Trust point 1 (example: 100% ओरिजिनल प्रोडक्ट)", trust1) { trust1 = it }
         Field("Trust point 2 (example: सुरक्षित भुगतान)", trust2) { trust2 = it }
         Field("Trust point 3 (example: ओरिजिनल प्रोडक्ट)", trust3) { trust3 = it }
         SwitchRow("Promo banner with a coupon code", promoOn) { promoOn = it }
