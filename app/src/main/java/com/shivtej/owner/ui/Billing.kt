@@ -278,7 +278,7 @@ fun PosScreen(app: App, nav: Nav) {
                     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
                         Column(Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Notes / Return policy (printed on the bill)", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), fontSize = 14.sp)
+                                Text("Notes (printed on the bill)", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), fontSize = 14.sp)
                                 TextButton(onClick = { nav.go(Route.ShopSettings) }) { Text("Edit") }
                             }
                             shop.notes.forEach { Text("• $it", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -947,14 +947,6 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                 border = BorderStroke(1.dp, ColSlate.copy(alpha = 0.6f)),
                 modifier = Modifier.weight(1f).height(ActBtnH)) {
                 Icon(Icons.Filled.Add, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("New bill", fontSize = 14.sp)
-            }
-            OutlinedButton(
-                onClick = { nav.go(Route.ReturnForm("BILL", b.id)) },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = ColBrown),
-                border = BorderStroke(1.dp, ColBrown.copy(alpha = 0.6f)),
-                modifier = Modifier.weight(1f).height(ActBtnH)
-            ) {
-                Icon(Icons.Filled.SwapHoriz, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Return / Exchange", fontSize = 14.sp)
             }
         }
     }

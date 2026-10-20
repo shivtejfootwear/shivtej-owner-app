@@ -251,8 +251,7 @@ fun Shell(app: App) {
             DrawerItem("Dashboard", Icons.Filled.Dashboard, Route.Dashboard, DrawerRed),
             DrawerItem("POS Billing", Icons.Filled.PointOfSale, Route.Pos, DrawerRed),
             DrawerItem("Online Orders", Icons.Filled.ShoppingCart, Route.Orders("all"), DrawerRed),
-            DrawerItem("Shipping", Icons.Filled.LocalShipping, Route.Orders("shipping"), DrawerRed),
-            DrawerItem("Returns & Exchanges", Icons.Filled.Replay, Route.Returns, DrawerRed)
+            DrawerItem("Shipping", Icons.Filled.LocalShipping, Route.Orders("shipping"), DrawerRed)
         )),
         DrawerSection("Stock", listOf(
             DrawerItem("Products", Icons.Filled.Inventory2, Route.Products(), DrawerOrange),
@@ -309,8 +308,6 @@ fun Shell(app: App) {
         Route.Printer -> "Bluetooth Printer"
         Route.ShopSettings -> "Shop & Bill Settings"
         Route.BillDesign -> "Bill Design"
-        is Route.ReturnForm -> "Return / Exchange"
-        Route.Returns -> "Returns & Exchanges"
         Route.Reports -> "Reports"
         Route.Assistant -> "AI Assistant"
         Route.Settings -> "Settings"
@@ -417,8 +414,6 @@ fun Shell(app: App) {
                     Route.Printer -> PrinterScreen(app)
                     Route.ShopSettings -> ShopSettingsScreen(app, nav)
                     Route.BillDesign -> BillDesignScreen(app, nav)
-                    is Route.ReturnForm -> ReturnFormScreen(app, nav, route.refType, route.refId)
-                    Route.Returns -> ReturnsScreen(app, nav)
                     Route.Reports -> ReportsScreen(app, nav)
                     Route.Assistant -> AssistantScreen(app)
                     Route.Settings -> SettingsScreen(app) { nav.go(it) }

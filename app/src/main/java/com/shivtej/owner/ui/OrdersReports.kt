@@ -188,12 +188,6 @@ fun OrderDetailScreen(app: App, nav: Nav, id: String) {
             },
             modifier = Modifier.fillMaxWidth().height(54.dp)
         ) { Text("Save order") }
-        if (o.orderStatus != "New" && o.orderStatus != "Cancelled") {
-            OutlinedButton(
-                onClick = { nav.go(Route.ReturnForm("ORDER", o.id)) },
-                modifier = Modifier.fillMaxWidth().height(50.dp).padding(top = 8.dp)
-            ) { Text("Return / Exchange") }
-        }
         Spacer(Modifier.height(32.dp))
     }
 }

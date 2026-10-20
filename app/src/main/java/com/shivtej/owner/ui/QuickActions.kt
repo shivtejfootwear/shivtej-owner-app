@@ -28,7 +28,6 @@ val QUICK_CATALOG: List<QuickActionDef> = listOf(
     QuickActionDef("customers", "Customers", Icons.Filled.People, Color(0xFFEF6C00), Route.Customers),
     QuickActionDef("dues", "Customer Dues", Icons.Filled.Warning, RedOut, Route.Dues),
     QuickActionDef("reports", "Reports", Icons.Filled.BarChart, Color(0xFF00838F), Route.Reports),
-    QuickActionDef("returns", "Returns / Exchange", Icons.Filled.Replay, BrandInk, Route.Returns),
     QuickActionDef("printer", "Printer", Icons.Filled.Print, BrandInk, Route.Printer),
     QuickActionDef("orders", "Online Orders", Icons.Filled.ShoppingCart, Color(0xFF283593), Route.Orders("all")),
     QuickActionDef("stock", "Stock / Inventory", Icons.Filled.Warehouse, Color(0xFF2E7D32), Route.Stock()),
