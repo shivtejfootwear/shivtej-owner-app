@@ -690,6 +690,19 @@ private fun BillInfoCard(app: App, staff: List<StaffE>) {
 // ================================================================== RECEIPT
 private class Rendered(val data: ReceiptData?, val theme: BillTheme?, val bmp: Bitmap)
 
+// Receipt buttons: each action has its own colour, and the icons are a little smaller and lighter.
+private val ActBtnH = 46.dp
+private val ActIcon = 18.dp
+private val ColIndigo = Color(0xFF3949AB)   // Print Bill (Bluetooth)
+private val ColPurple = Color(0xFF7B3FA0)   // Share PDF
+private val ColWhatsApp = Color(0xFF25D366) // WhatsApp (brand green)
+private val ColBlue = Color(0xFF1E63C8)     // Edit bill
+private val ColTeal = Color(0xFF00897B)     // Add item, Save PDF
+private val ColOrange = Color(0xFFEF6C00)   // Print (other)
+private val ColSlate = Color(0xFF455A64)    // New bill
+private val ColBrown = Color(0xFF6D4C41)    // Return / Exchange
+private val ColRed = Color(0xFFC62828)      // Delete (kept red: it is a warning action)
+
 @Composable
 fun ReceiptScreen(app: App, nav: Nav, billId: String) {
     val ctx = LocalContext.current
@@ -822,11 +835,12 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
         } else {
             OutlinedButton(
                 onClick = { askDelete = true }, enabled = !deleting,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
-                modifier = Modifier.fillMaxWidth().height(50.dp)
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ColRed),
+                border = BorderStroke(1.dp, ColRed.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth().height(ActBtnH)
             ) {
-                Icon(Icons.Filled.Delete, null); Spacer(Modifier.width(6.dp))
-                Text("डिलीट", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Icon(Icons.Filled.Delete, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp))
+                Text("डिलीट", fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
         Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -855,22 +869,26 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(50.dp)) {
-                    Icon(Icons.Filled.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit bill")
+                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(ActBtnH),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ColBlue),
+                    border = BorderStroke(1.dp, ColBlue.copy(alpha = 0.6f))) {
+                    Icon(Icons.Filled.Edit, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Edit bill", fontSize = 14.sp)
                 }
-                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(50.dp)) {
-                    Icon(Icons.Filled.AddShoppingCart, null); Spacer(Modifier.width(4.dp)); Text("Add item")
+                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(ActBtnH),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ColTeal),
+                    border = BorderStroke(1.dp, ColTeal.copy(alpha = 0.6f))) {
+                    Icon(Icons.Filled.AddShoppingCart, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Add item", fontSize = 14.sp)
                 }
             }
         }
 
         Button(
             onClick = { printBill() }, enabled = !printing,
-            colors = ButtonDefaults.buttonColors(containerColor = BrandRed),
-            modifier = Modifier.fillMaxWidth().height(54.dp)
+            colors = ButtonDefaults.buttonColors(containerColor = ColIndigo),
+            modifier = Modifier.fillMaxWidth().height(ActBtnH)
         ) {
-            Icon(Icons.Filled.Print, null); Spacer(Modifier.width(8.dp))
-            Text(if (printing) "Printing..." else "Print Bill (Bluetooth printer)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Filled.Print, null, Modifier.size(ActIcon)); Spacer(Modifier.width(8.dp))
+            Text(if (printing) "Printing..." else "Print Bill (Bluetooth)", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
         printMsg?.let {
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -878,30 +896,67 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                 if (!printOk) TextButton(onClick = { nav.go(Route.Printer) }) { Text("Printer") }
             }
         }
+        val billText = "Bill ${b.billNo} - ${Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, b.total)}. Thank you for shopping with " +
+            app.prefs.storeName + "."
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            Button(onClick = { Receipt.share(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo)) }, modifier = Modifier.weight(1f).height(50.dp)) {
-                Icon(Icons.Filled.Share, null); Spacer(Modifier.width(4.dp)); Text("Share PDF")
+            Button(onClick = { Receipt.share(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo)) },
+                colors = ButtonDefaults.buttonColors(containerColor = ColPurple),
+                modifier = Modifier.weight(1f).height(ActBtnH)) {
+                Icon(Icons.Filled.Share, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Share PDF", fontSize = 14.sp)
             }
             Button(onClick = {
-                val text = "Bill ${b.billNo} - ${Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, b.total)}. Thank you for shopping with " +
-                    app.prefs.storeName + "."
-                Receipt.shareWhatsApp(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo), text, BillMath.normMobile(b.customerMobile))
-            }, modifier = Modifier.weight(1f).height(50.dp)) { Text("WhatsApp") }
+                val mobile = BillMath.normMobile(b.customerMobile)
+                val file = Receipt.savePdf(ctx, r.bmp, b.billNo)
+                if (mobile.length == 10) {
+                    // straight to the customer's WhatsApp chat (no contact to save or search)
+                    val saved = Receipt.saveToDownloads(ctx, file)
+                    val opened = Receipt.whatsAppToCustomer(ctx, file, billText, mobile)
+                    when {
+                        !opened -> toast(ctx, "WhatsApp नहीं खुला। WhatsApp इंस्टॉल है?")
+                        saved -> toast(ctx, "चैट खुल गई। 📎 दबाकर Downloads से Receipt-${b.billNo}.pdf चुनें।")
+                        else -> toast(ctx, "चैट खुल गई, PDF Downloads में सेव नहीं हुआ।")
+                    }
+                } else {
+                    // no number on the bill: the normal share list (owner picks the chat)
+                    Receipt.shareWhatsApp(ctx, file, billText, mobile)
+                }
+            }, colors = ButtonDefaults.buttonColors(containerColor = ColWhatsApp),
+                modifier = Modifier.weight(1f).height(ActBtnH)) {
+                Icon(Icons.Filled.Chat, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("WhatsApp", fontSize = 14.sp)
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            OutlinedButton(onClick = { Receipt.print(ctx, r.bmp, "Receipt ${b.billNo}") }, modifier = Modifier.weight(1f).height(50.dp)) {
-                Icon(Icons.Filled.Print, null); Spacer(Modifier.width(4.dp)); Text("Print (other)")
+            OutlinedButton(onClick = { Receipt.print(ctx, r.bmp, "Receipt ${b.billNo}") },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ColOrange),
+                border = BorderStroke(1.dp, ColOrange.copy(alpha = 0.6f)),
+                modifier = Modifier.weight(1f).height(ActBtnH)) {
+                Icon(Icons.Filled.Print, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Print (other)", fontSize = 14.sp)
             }
             OutlinedButton(onClick = {
                 Receipt.savePdf(ctx, r.bmp, b.billNo)
                 toast(ctx, "Saved: Receipt-${b.billNo}.pdf")
-            }, modifier = Modifier.weight(1f).height(50.dp)) { Text("Save PDF") }
+            }, colors = ButtonDefaults.outlinedButtonColors(contentColor = ColTeal),
+                border = BorderStroke(1.dp, ColTeal.copy(alpha = 0.6f)),
+                modifier = Modifier.weight(1f).height(ActBtnH)) {
+                Icon(Icons.Filled.Save, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Save PDF", fontSize = 14.sp)
+            }
         }
-        OutlinedButton(onClick = { nav.replace(Route.Pos) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)) { Text("New bill") }
-        OutlinedButton(
-            onClick = { nav.go(Route.ReturnForm("BILL", b.id)) },
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)
-        ) { Text("Return / Exchange") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            OutlinedButton(onClick = { nav.replace(Route.Pos) },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ColSlate),
+                border = BorderStroke(1.dp, ColSlate.copy(alpha = 0.6f)),
+                modifier = Modifier.weight(1f).height(ActBtnH)) {
+                Icon(Icons.Filled.Add, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("New bill", fontSize = 14.sp)
+            }
+            OutlinedButton(
+                onClick = { nav.go(Route.ReturnForm("BILL", b.id)) },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ColBrown),
+                border = BorderStroke(1.dp, ColBrown.copy(alpha = 0.6f)),
+                modifier = Modifier.weight(1f).height(ActBtnH)
+            ) {
+                Icon(Icons.Filled.SwapHoriz, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Return / Exchange", fontSize = 14.sp)
+            }
+        }
     }
 }
 

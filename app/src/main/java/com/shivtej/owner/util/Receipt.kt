@@ -1,8 +1,13 @@
 package com.shivtej.owner.util
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -108,6 +113,52 @@ object Receipt {
             } catch (e: Exception) { /* not installed: try the next one */ }
         }
         share(ctx, file)
+    }
+
+    /**
+     * Copies the bill PDF to the phone's Downloads folder, so it can be picked in WhatsApp's attach (📎) menu.
+     * Returns false if it could not be saved.
+     */
+    fun saveToDownloads(ctx: Context, file: File): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = ctx.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            file.copyTo(File(dir, file.name), overwrite = true)
+        }
+        true
+    } catch (e: Exception) { false }
+
+    /**
+     * WhatsApp chat with this customer's number, opened directly (no contact saving, no search).
+     * The bill text is filled in; the PDF is saved to Downloads, to attach with 📎.
+     * Returns false if there is no 10-digit number or WhatsApp could not be opened.
+     */
+    fun whatsAppToCustomer(ctx: Context, file: File, text: String, mobile: String): Boolean {
+        val digits = mobile.filter { it.isDigit() }.takeLast(10)
+        if (digits.length != 10) return false
+        val url = "https://wa.me/91$digits?text=" + Uri.encode(text)
+        return try {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage("com.whatsapp")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: Exception) {
+            try {
+                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                true
+            } catch (e2: Exception) { false }
+        }
     }
 
     fun print(ctx: Context, bmp: Bitmap, jobName: String) {
