@@ -82,6 +82,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var heroTitle by remember { mutableStateOf("New stock.|New style.") }
     var heroText by remember { mutableStateOf("") }
     var heroAnim by remember { mutableStateOf(true) }
+    var maintOn by remember { mutableStateOf(false) }
+    var maintText by remember { mutableStateOf("") }
+    var announceOn by remember { mutableStateOf(false) }
+    var announceText by remember { mutableStateOf("") }
     var heroArticle by remember { mutableStateOf("6102") }
     var bandTitle by remember { mutableStateOf("") }
     var bandText by remember { mutableStateOf("") }
@@ -219,6 +223,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             heroTitle = s.optString("heroTitle", "New stock.|New style.")
             heroText = s.optString("heroText", "")
             heroAnim = s.optBoolean("heroAnim", true)
+            maintOn = s.optBoolean("maintenanceOn", false)
+            maintText = s.optString("maintenanceText", "")
+            announceOn = s.optBoolean("announceOn", false)
+            announceText = s.optString("announceText", "")
             heroArticle = s.optString("heroArticle", "6102")
             bandTitle = s.optString("bandTitle", "")
             bandText = s.optString("bandText", "")
@@ -282,6 +290,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("heroTitle", heroTitle.trim())
             .put("heroText", heroText.trim())
             .put("heroAnim", heroAnim)
+            .put("maintenanceOn", maintOn)
+            .put("maintenanceText", maintText.trim())
+            .put("announceOn", announceOn)
+            .put("announceText", announceText.trim())
             .put("heroArticle", heroArticle.trim())
             .put("bandTitle", bandTitle.trim())
             .put("bandText", bandText.trim())
@@ -574,6 +586,18 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         Field("Instagram link", instagram) { instagram = it }
         Field("Facebook link", facebook) { facebook = it }
         Field("WhatsApp number (with country code, without +)", whatsapp, keyboard = KeyboardType.Phone) { whatsapp = it }
+
+        SectionTitle("Website switches")
+        Text("Website closed: the whole website shows only the message below until you switch it off. Use it while you test changes.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(maintOn, { maintOn = it }); Spacer(Modifier.width(8.dp)); Text("Website closed (maintenance)")
+        }
+        Field("Message on the closed page", maintText, single = false) { maintText = it }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(announceOn, { announceOn = it }); Spacer(Modifier.width(8.dp)); Text("Top bar on the website")
+        }
+        Field("Top bar text (example: ₹999 से ऊपर फ्री डिलीवरी)", announceText) { announceText = it }
 
         Button(onClick = { saveWebsite() }, enabled = ready && uploadingSlot == null,
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
