@@ -258,12 +258,14 @@ fun Shell(app: App) {
             DrawerItem("Products", Icons.Filled.Inventory2, Route.Products(), DrawerOrange),
             DrawerItem("Add Item", Icons.Filled.AddCircle, Route.ProductEdit(null), DrawerOrange),
             DrawerItem("Stock / Inventory", Icons.Filled.Warehouse, Route.Stock(), DrawerOrange),
-            DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers, DrawerOrange)
+            DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers, DrawerOrange),
+            DrawerItem("Supplier order list", Icons.Filled.Storefront, Route.SupplierOrders, DrawerOrange)
         )),
         DrawerSection("Customers", listOf(
             DrawerItem("Offline customers", Icons.Filled.People, Route.Customers, DrawerBlue),
             DrawerItem("Online customers", Icons.Filled.Language, Route.CustomersOnline, DrawerTeal),
-            DrawerItem("Customer numbers", Icons.Filled.ContactPhone, Route.CustomerNumbers, DrawerBlue)
+            DrawerItem("Customer numbers", Icons.Filled.ContactPhone, Route.CustomerNumbers, DrawerBlue),
+            DrawerItem("Size requests", Icons.Filled.Notifications, Route.SizeRequests, DrawerRed)
         )),
         DrawerSection("Team", listOf(
             DrawerItem("Staff", Icons.Filled.Group, Route.Staff, DrawerPurple)
@@ -274,6 +276,7 @@ fun Shell(app: App) {
             DrawerItem("Shop & Bill Settings", Icons.Filled.Receipt, Route.ShopSettings, DrawerTeal),
             DrawerItem("AI Assistant", Icons.Filled.SmartToy, Route.Assistant, DrawerIndigo),
             DrawerItem("Tasks & Reminders", Icons.Filled.Checklist, Route.Tasks, DrawerSlate),
+            DrawerItem("Change log", Icons.Filled.Info, Route.ChangeLog, DrawerSlate),
             DrawerItem("Settings", Icons.Filled.Settings, Route.Settings, DrawerSlate)
         ))
     )
@@ -293,6 +296,9 @@ fun Shell(app: App) {
         is Route.OrderDetail -> "Order"
         Route.Customers -> "Offline customers"
         Route.CustomersOnline -> "Online customers"
+        Route.ChangeLog -> "Change log"
+        Route.SupplierOrders -> "Supplier order list"
+        Route.SizeRequests -> "Size requests"
         Route.CustomerNew -> "Add customer"
         is Route.CustomerDetail -> "Customer"
         Route.Staff -> "Staff & Sales"
@@ -398,6 +404,9 @@ fun Shell(app: App) {
                     is Route.OrderDetail -> OrderDetailScreen(app, nav, route.id)
                     Route.Customers -> CustomersScreen(app, nav, fixedKind = "shop")
                     Route.CustomersOnline -> OnlineCustomerNumbersScreen(app, nav)
+                    Route.ChangeLog -> ChangeLogScreen(app)
+                    Route.SupplierOrders -> SupplierOrderScreen(app)
+                    Route.SizeRequests -> SizeRequestsScreen(app)
                     Route.CustomerNew -> CustomersScreen(app, nav, openAdd = true)
                     is Route.CustomerDetail -> CustomerDetailScreen(app, nav, route.mobile)
                     Route.Staff -> StaffScreen(app, nav)

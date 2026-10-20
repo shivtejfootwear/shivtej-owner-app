@@ -197,6 +197,15 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     val posCustomers = dao.observePosCustomers()
     val suppliers = dao.observeSuppliers()
     val purchases = dao.observePurchases()
+    val changeLog = dao.observeChanges()
+    val sizeRequests = dao.observeSizeRequests()
+
+    /** Saves a customer waiting for a size. Only the last 10 digits of the mobile are kept. */
+    suspend fun addSizeRequest(mobile: String, name: String, article: String, size: String) {
+        dao.putSizeRequest(SizeRequestE(UUID.randomUUID().toString(), mobile.filter { it.isDigit() }.takeLast(10),
+            name.trim(), article.trim(), size.trim(), System.currentTimeMillis()))
+    }
+    suspend fun deleteSizeRequest(id: String) = dao.delSizeRequest(id)
     val supplierPayments = dao.observeSupplierPayments()
     val customerPayments = dao.observeCustomerPayments()
     val tasks = dao.observeTasks()
@@ -267,7 +276,10 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 "Can not remove ${o.colour} / ${o.size}: it still has ${o.qty} in stock. Save it with stock 0 first, then remove it."
             }
             val now = System.currentTimeMillis()
-            val createdAtKept = dao.product(p.id)?.createdAt?.takeIf { it > 0L } ?: now
+            val oldP = dao.product(p.id)
+            val createdAtKept = oldP?.createdAt?.takeIf { it > 0L } ?: now
+            if (oldP != null && (oldP.price != p.price || oldP.mrp != p.mrp)) dao.putChange(ChangeE(UUID.randomUUID().toString(), now, "PRICE",
+                "${p.article}: MRP ₹${oldP.mrp} → ₹${p.mrp}, price ₹${oldP.price} → ₹${p.price}"))
             dao.putProduct(ProductE(p.id, p.article.trim(), p.name.trim(), p.brand.trim(), p.category.trim(),
                 p.description.trim(), p.mrp, p.price, p.active, p.newItem, p.images.toJsonText(), now, p.videos.toJsonText(),
                 p.productType.trim(), createdAt = createdAtKept))
@@ -514,6 +526,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     after - before, after, "BILL_DELETE", now, false))
             }
             dao.markBillDeleted(billId, now)
+            dao.putChange(ChangeE(UUID.randomUUID().toString(), now, "BILL", "Bill ${b.billNo} deleted · total ₹${b.total}"))
             dao.markPaymentsDeletedOfBill(billId)
             enqueue("DELETE_POS_BILL", billId, JSONObject().put("id", billId).put("deleted_at", iso(now))
                 .put("cycle", now.toString()))

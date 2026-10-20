@@ -44,6 +44,9 @@ sealed interface Route {
     data class OrderDetail(val id: String) : Route
     object Customers : Route
     object CustomersOnline : Route
+    object ChangeLog : Route
+    object SupplierOrders : Route
+    object SizeRequests : Route
     data class ReturnForm(val refType: String, val refId: String) : Route
     object Returns : Route
     object Reports : Route

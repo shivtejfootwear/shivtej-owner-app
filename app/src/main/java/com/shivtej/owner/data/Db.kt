@@ -415,6 +415,11 @@ interface AppDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putPurchase(p: PurchaseE)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putPurchases(p: List<PurchaseE>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putChange(c: ChangeE)
+    @Query("SELECT * FROM change_log ORDER BY at DESC LIMIT 500") fun observeChanges(): Flow<List<ChangeE>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSizeRequest(r: SizeRequestE)
+    @Query("DELETE FROM size_requests WHERE id = :id") suspend fun delSizeRequest(id: String)
+    @Query("SELECT * FROM size_requests ORDER BY createdAt DESC") fun observeSizeRequests(): Flow<List<SizeRequestE>>
     @Query("SELECT * FROM purchase_bills WHERE deleted = 0 ORDER BY billDate DESC") fun observePurchases(): Flow<List<PurchaseE>>
     @Query("SELECT id FROM purchase_bills WHERE pendingSync = 1") suspend fun pendingPurchaseIds(): List<String>
     @Query("UPDATE purchase_bills SET pendingSync = 0 WHERE id = :id") suspend fun purchaseSynced(id: String)
@@ -595,6 +600,14 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
     }
 }
 
+/** Version 16 -> 17: two new tables (change log and size requests). Nothing existing is changed. */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `change_log` (`id` TEXT NOT NULL, `at` INTEGER NOT NULL, `kind` TEXT NOT NULL, `text` TEXT NOT NULL, PRIMARY KEY(`id`))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `size_requests` (`id` TEXT NOT NULL, `mobile` TEXT NOT NULL, `name` TEXT NOT NULL, `article` TEXT NOT NULL, `size` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+    }
+}
+
 /** Version 15 -> 16: products get the date they were added (for the NEW tag, 120 days). Only a new column; no data is changed. */
 val MIGRATION_15_16 = object : Migration(15, 16) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -610,14 +623,23 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
     }
 }
 
+/** Change log: every bill deletion and every price change, kept on this phone (database version 17). */
+@Entity(tableName = "change_log")
+data class ChangeE(@PrimaryKey val id: String, val at: Long, val kind: String, val text: String)
+
+/** A customer waiting for a size that is out of stock, "मेरा साइज़ आया" list (database version 17). */
+@Entity(tableName = "size_requests")
+data class SizeRequestE(@PrimaryKey val id: String, val mobile: String, val name: String, val article: String,
+    val size: String, val createdAt: Long)
+
 /** The one and only database version. DbGuard reads this too, so the two can never disagree again. */
-const val DB_VERSION = 16
+const val DB_VERSION = 17
 
 @Database(
     entities = [ProductE::class, VariantE::class, SizeE::class, OpE::class, BillE::class,
         StockLogE::class, OrderE::class, CustomerE::class, ReturnE::class,
         StaffE::class, PosCustomerE::class, SupplierE::class, PurchaseE::class, SupplierPaymentE::class,
-        CustomerPaymentE::class, TaskE::class, PieceBarcodeE::class],
+        CustomerPaymentE::class, TaskE::class, PieceBarcodeE::class, ChangeE::class, SizeRequestE::class],
     version = DB_VERSION,
     exportSchema = false
 )
@@ -628,7 +650,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }
