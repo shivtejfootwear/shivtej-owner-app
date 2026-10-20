@@ -20,7 +20,10 @@ begin
                       'bandTitle','bandText','instagram','facebook','whatsapp',
                       'heroImage','heroArtImage','bandImage','filmVideo','filmArticle','slides','offer',
                       'season',
-                      'maintenanceOn','maintenanceText','announceOn','announceText','freeDeliveryAbove']) as k
+                      'maintenanceOn','maintenanceText','announceOn','announceText','freeDeliveryAbove',
+                      'trustOn','trust1','trust2','trust3','promoOn','promoText','promoCode','promoTerms',
+                      'storeMapLink','storeTiming','featuredArticles','lowStockOn','lowStockLimit',
+                      'sliderAuto','sliderSeconds','heroBtnText','heroBtnLink','revealOn']) as k
    where p_value ? k;
   insert into site_settings (key, value, updated_at)
   values ('site', coalesce(v_old, '{}'::jsonb) || coalesce(v_pick, '{}'::jsonb), now())

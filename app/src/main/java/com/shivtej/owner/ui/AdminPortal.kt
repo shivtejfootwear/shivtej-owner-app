@@ -88,6 +88,24 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var announceOn by remember { mutableStateOf(false) }
     var announceText by remember { mutableStateOf("") }
     var freeAbove by remember { mutableStateOf("") }
+    var trustOn by remember { mutableStateOf(false) }
+    var trust1 by remember { mutableStateOf("") }
+    var trust2 by remember { mutableStateOf("") }
+    var trust3 by remember { mutableStateOf("") }
+    var promoOn by remember { mutableStateOf(false) }
+    var promoText by remember { mutableStateOf("") }
+    var promoCode by remember { mutableStateOf("") }
+    var promoTerms by remember { mutableStateOf("") }
+    var storeMapLink by remember { mutableStateOf("") }
+    var storeTiming by remember { mutableStateOf("") }
+    var featuredArticles by remember { mutableStateOf("") }
+    var lowStockOn by remember { mutableStateOf(false) }
+    var lowStockLimit by remember { mutableStateOf("3") }
+    var sliderAuto by remember { mutableStateOf(false) }
+    var sliderSeconds by remember { mutableStateOf("5") }
+    var heroBtnText by remember { mutableStateOf("Shop now") }
+    var heroBtnLink by remember { mutableStateOf("") }
+    var revealOn by remember { mutableStateOf(false) }
     val allOrders by app.repo.orders.collectAsStateWithLifecycle(emptyList())
     val shopCust by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
     val webCust by app.repo.customers.collectAsStateWithLifecycle(emptyList())
@@ -233,6 +251,19 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             announceOn = s.optBoolean("announceOn", false)
             announceText = s.optString("announceText", "")
             freeAbove = s.optString("freeDeliveryAbove", "")
+            trustOn = s.optBoolean("trustOn", false)
+            trust1 = s.optString("trust1", ""); trust2 = s.optString("trust2", ""); trust3 = s.optString("trust3", "")
+            promoOn = s.optBoolean("promoOn", false)
+            promoText = s.optString("promoText", ""); promoCode = s.optString("promoCode", "")
+            promoTerms = s.optString("promoTerms", "")
+            storeMapLink = s.optString("storeMapLink", ""); storeTiming = s.optString("storeTiming", "")
+            featuredArticles = s.optString("featuredArticles", "")
+            lowStockOn = s.optBoolean("lowStockOn", false)
+            lowStockLimit = s.optString("lowStockLimit", "3")
+            sliderAuto = s.optBoolean("sliderAuto", false)
+            sliderSeconds = s.optString("sliderSeconds", "5")
+            heroBtnText = s.optString("heroBtnText", "Shop now"); heroBtnLink = s.optString("heroBtnLink", "")
+            revealOn = s.optBoolean("revealOn", false)
             heroArticle = s.optString("heroArticle", "6102")
             bandTitle = s.optString("bandTitle", "")
             bandText = s.optString("bandText", "")
@@ -301,6 +332,15 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("announceOn", announceOn)
             .put("announceText", announceText.trim())
             .put("freeDeliveryAbove", freeAbove.filter { it.isDigit() }.toIntOrNull() ?: 0)
+            .put("trustOn", trustOn).put("trust1", trust1.trim()).put("trust2", trust2.trim()).put("trust3", trust3.trim())
+            .put("promoOn", promoOn).put("promoText", promoText.trim()).put("promoCode", promoCode.trim())
+            .put("promoTerms", promoTerms.trim())
+            .put("storeMapLink", storeMapLink.trim()).put("storeTiming", storeTiming.trim())
+            .put("featuredArticles", featuredArticles.trim())
+            .put("lowStockOn", lowStockOn).put("lowStockLimit", lowStockLimit.toIntOrNull() ?: 3)
+            .put("sliderAuto", sliderAuto).put("sliderSeconds", sliderSeconds.toIntOrNull() ?: 5)
+            .put("heroBtnText", heroBtnText.trim()).put("heroBtnLink", heroBtnLink.trim())
+            .put("revealOn", revealOn)
             .put("heroArticle", heroArticle.trim())
             .put("bandTitle", bandTitle.trim())
             .put("bandText", bandText.trim())
@@ -606,6 +646,26 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         }
         Field("Top bar text (example: ₹999 से ऊपर फ्री डिलीवरी)", announceText) { announceText = it }
 
+        SectionTitle("Website extras (saved now; shown on the website after it is applied)")
+        SwitchRow("Trust line under the top bar", trustOn) { trustOn = it }
+        Field("Trust point 1 (example: 30 दिन में वापसी)", trust1) { trust1 = it }
+        Field("Trust point 2 (example: सुरक्षित भुगतान)", trust2) { trust2 = it }
+        Field("Trust point 3 (example: ओरिजिनल प्रोडक्ट)", trust3) { trust3 = it }
+        SwitchRow("Promo banner with a coupon code", promoOn) { promoOn = it }
+        Field("Promo text (example: Extra 15% off on ₹1499 and above)", promoText, single = false) { promoText = it }
+        Field("Coupon code (must exist in Coupons)", promoCode) { promoCode = it.uppercase() }
+        Field("Short terms (optional)", promoTerms, single = false) { promoTerms = it }
+        Field("Find a store: Google Maps link", storeMapLink) { storeMapLink = it }
+        Field("Shop timings (example: 10 am to 9 pm, Mon to Sat)", storeTiming) { storeTiming = it }
+        Field("Featured products on home (article codes, comma separated)", featuredArticles, single = false) { featuredArticles = it }
+        SwitchRow("Show 'only N left' on product cards", lowStockOn) { lowStockOn = it }
+        Field("Show it when this many or fewer are left", lowStockLimit, keyboard = KeyboardType.Number) { lowStockLimit = it.filter { c -> c.isDigit() }.take(2) }
+        SwitchRow("Home slider changes by itself", sliderAuto) { sliderAuto = it }
+        Field("Seconds per screen", sliderSeconds, keyboard = KeyboardType.Number) { sliderSeconds = it.filter { c -> c.isDigit() }.take(2) }
+        Field("Top photo button text (example: Shop now)", heroBtnText) { heroBtnText = it }
+        Field("Top photo button opens (article code, optional)", heroBtnLink) { heroBtnLink = it }
+        SwitchRow("Scroll animation (sections slide in)", revealOn) { revealOn = it }
+
         Field("Free delivery above ₹ (0 = no free delivery)", freeAbove, keyboard = KeyboardType.Number) { freeAbove = it }
 
         SectionTitle("Export and sync")
@@ -656,5 +716,12 @@ private fun PhotoRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SwitchRow(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(on, onChange); Spacer(Modifier.width(8.dp)); Text(label)
     }
 }
