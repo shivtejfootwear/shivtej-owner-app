@@ -117,7 +117,6 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var trustOn by remember { mutableStateOf(false) }
     var trust1 by remember { mutableStateOf("100% ओरिजिनल प्रोडक्ट") }
     var trust2 by remember { mutableStateOf("सुरक्षित भुगतान") }
-    var trust3 by remember { mutableStateOf("Akluj में अपनी दुकान") }
     var promoOn by remember { mutableStateOf(false) }
     var promoText by remember { mutableStateOf("") }
     var promoCode by remember { mutableStateOf("") }
@@ -278,7 +277,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             announceText = s.optString("announceText", "")
             freeAbove = s.optString("freeDeliveryAbove", "")
             trustOn = s.optBoolean("trustOn", false)
-            trust1 = s.optString("trust1", "100% ओरिजिनल प्रोडक्ट"); trust2 = s.optString("trust2", "सुरक्षित भुगतान"); trust3 = s.optString("trust3", "Akluj में अपनी दुकान")
+            trust1 = s.optString("trust1", "100% ओरिजिनल प्रोडक्ट"); trust2 = s.optString("trust2", "सुरक्षित भुगतान")
             promoOn = s.optBoolean("promoOn", false)
             promoText = s.optString("promoText", ""); promoCode = s.optString("promoCode", "")
             promoTerms = s.optString("promoTerms", "")
@@ -358,7 +357,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("announceOn", announceOn)
             .put("announceText", announceText.trim())
             .put("freeDeliveryAbove", freeAbove.filter { it.isDigit() }.toIntOrNull() ?: 0)
-            .put("trustOn", trustOn).put("trust1", trust1.trim()).put("trust2", trust2.trim()).put("trust3", trust3.trim())
+            .put("trustOn", trustOn).put("trust1", trust1.trim()).put("trust2", trust2.trim()).put("trust3", "")
             .put("promoOn", promoOn).put("promoText", promoText.trim()).put("promoCode", promoCode.trim())
             .put("promoTerms", promoTerms.trim())
             .put("storeMapLink", storeMapLink.trim()).put("storeTiming", storeTiming.trim())
@@ -611,10 +610,9 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                 SaveWebsiteButton(enabled = saving) { saveWebsite() }
             }
             "trust" -> {
-                SwitchRow("Trust line under the top bar (the 4th point, भारत में डिलीवरी, is always shown)", trustOn) { trustOn = it }
+                SwitchRow("Trust line under the top bar (भारत में डिलीवरी हमेशा दिखेगा)", trustOn) { trustOn = it }
                 Field("Trust point 1 (example: 100% ओरिजिनल प्रोडक्ट)", trust1) { trust1 = it }
                 Field("Trust point 2 (example: सुरक्षित भुगतान)", trust2) { trust2 = it }
-                Field("Trust point 3 (example: Akluj में अपनी दुकान)", trust3) { trust3 = it }
                 SaveWebsiteButton(enabled = saving) { saveWebsite() }
             }
             "promo" -> {
@@ -808,7 +806,7 @@ private val ADMIN_GROUPS = listOf(
     )),
     AdminGroup("वेबसाइट की सेटिंग", listOf(
         AdminTileItem("switches", "वेबसाइट बंद करें और ऊपर की पट्टी", "बंद पेज का संदेश, टॉप बार", Icons.Filled.Warning, AdminRed),
-        AdminTileItem("trust", "भरोसे की पट्टी", "तीन छोटी बातें, जैसे 100% ओरिजिनल", Icons.Filled.Checklist, AdminTeal),
+        AdminTileItem("trust", "भरोसे की पट्टी", "दो छोटी बातें, डिलीवरी अपने-आप", Icons.Filled.Checklist, AdminTeal),
         AdminTileItem("promo", "प्रोमो बैनर", "कूपन कोड वाला बैनर", Icons.Filled.AddCircle, AdminPurple),
         AdminTileItem("offer", "आज का ऑफ़र पॉपअप", "वेबसाइट पर खुलने वाला ऑफ़र बॉक्स", Icons.Filled.Notifications, AdminIndigo),
         AdminTileItem("store", "दुकान का पता और समय", "Google Maps लिंक, दुकान का समय", Icons.Filled.Place, AdminTeal),
