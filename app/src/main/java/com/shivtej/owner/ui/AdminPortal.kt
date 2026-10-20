@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
@@ -86,6 +87,10 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var maintText by remember { mutableStateOf("") }
     var announceOn by remember { mutableStateOf(false) }
     var announceText by remember { mutableStateOf("") }
+    var freeAbove by remember { mutableStateOf("") }
+    val allOrders by app.repo.orders.collectAsStateWithLifecycle(emptyList())
+    val shopCust by app.repo.posCustomers.collectAsStateWithLifecycle(emptyList())
+    val webCust by app.repo.customers.collectAsStateWithLifecycle(emptyList())
     var heroArticle by remember { mutableStateOf("6102") }
     var bandTitle by remember { mutableStateOf("") }
     var bandText by remember { mutableStateOf("") }
@@ -227,6 +232,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             maintText = s.optString("maintenanceText", "")
             announceOn = s.optBoolean("announceOn", false)
             announceText = s.optString("announceText", "")
+            freeAbove = s.optString("freeDeliveryAbove", "")
             heroArticle = s.optString("heroArticle", "6102")
             bandTitle = s.optString("bandTitle", "")
             bandText = s.optString("bandText", "")
@@ -294,6 +300,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             .put("maintenanceText", maintText.trim())
             .put("announceOn", announceOn)
             .put("announceText", announceText.trim())
+            .put("freeDeliveryAbove", freeAbove.filter { it.isDigit() }.toIntOrNull() ?: 0)
             .put("heroArticle", heroArticle.trim())
             .put("bandTitle", bandTitle.trim())
             .put("bandText", bandText.trim())
@@ -598,6 +605,20 @@ fun AdminPortalScreen(app: App, nav: Nav) {
             Switch(announceOn, { announceOn = it }); Spacer(Modifier.width(8.dp)); Text("Top bar on the website")
         }
         Field("Top bar text (example: ₹999 से ऊपर फ्री डिलीवरी)", announceText) { announceText = it }
+
+        Field("Free delivery above ₹ (0 = no free delivery)", freeAbove, keyboard = KeyboardType.Number) { freeAbove = it }
+
+        SectionTitle("Export and sync")
+        Text("Download as a CSV file (opens in Excel or Google Sheets). Your data is not changed.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            OutlinedButton(onClick = { shareCsv(ctx, "orders.csv", ordersCsv(allOrders)) }, modifier = Modifier.weight(1f)) { Text("Orders") }
+            OutlinedButton(onClick = { shareCsv(ctx, "shop-customers.csv", shopCustomersCsv(shopCust)) }, modifier = Modifier.weight(1f)) { Text("Shop customers") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            OutlinedButton(onClick = { shareCsv(ctx, "website-customers.csv", webCustomersCsv(webCust)) }, modifier = Modifier.weight(1f)) { Text("Website customers") }
+            OutlinedButton(onClick = { app.sync.kick(); toast(ctx, "Syncing to the server...") }, modifier = Modifier.weight(1f)) { Text("Sync now") }
+        }
 
         Button(onClick = { saveWebsite() }, enabled = ready && uploadingSlot == null,
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
