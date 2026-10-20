@@ -149,9 +149,11 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
 
     val q = query.trim()
     val digits = q.filter { it.isDigit() }
-    val byKind = rows.filter { r ->
-        when (kind) { "shop" -> r.shop; "online" -> r.online; else -> true }
+    // Offline list: only shop customers who are NOT online (a customer who also orders online is shown only under Online)
+    val scoped = rows.filter { r ->
+        when (kind) { "shop" -> r.shop && !r.online; "online" -> r.online; else -> true }
     }
+    val byKind = scoped
     val byStatus = byKind.filter { r ->
         when (status) { "owes" -> r.outstanding > 0.0; "clear" -> r.outstanding <= 0.0; else -> true }
     }
@@ -172,8 +174,8 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
         }
     }
     // typing a full 10-digit mobile number brings that customer to the top
-    val exact = if (digits.length == 10) rows.firstOrNull { it.mobile == digits } else null
-    val owing = rows.filter { it.outstanding > 0.0 }
+    val exact = if (digits.length == 10) scoped.firstOrNull { it.mobile == digits } else null
+    val owing = scoped.filter { it.outstanding > 0.0 }
     val totalDue = BillMath.round2(owing.sumOf { it.outstanding })
 
     Box(Modifier.fillMaxSize()) {
@@ -204,7 +206,7 @@ fun CustomersScreen(app: App, nav: Nav, openAdd: Boolean = false, initialStatus:
                 Chip("Highest due", sort == "due") { sort = "due" }
                 Chip("Oldest due", sort == "oldest") { sort = "oldest" }
             }
-            Text("${shown.size} customer(s) · ${rows.size} saved in total", fontSize = 12.sp,
+            Text("${shown.size} customer(s) · ${scoped.size} saved in total", fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 6.dp))
             if (exact != null) {
                 Card(Modifier.fillMaxWidth().clickable { nav.go(Route.CustomerDetail(exact.mobile)) }.padding(bottom = 6.dp),
