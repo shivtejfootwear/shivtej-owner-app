@@ -1,6 +1,32 @@
 package com.shivtej.owner.ui
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -456,233 +482,267 @@ fun AdminPortalScreen(app: App, nav: Nav) {
         }
     }
 
+    // The Admin Portal opens on a menu of icon tiles. Each tile opens its own page ("" = the menu).
+    var page by remember { mutableStateOf("") }
+    BackHandler(enabled = page.isNotEmpty()) { page = "" }
+    val saving = ready && uploadingSlot == null
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
         if (loading) Text("Loading...", fontSize = 13.sp)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
 
-        SectionTitle("Online orders")
-        Text("Accept, pack, ship and add tracking. Same as the website admin Orders list.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = { nav.go(Route.Orders("all")) }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Text("Open online orders")
-        }
-
-        SectionTitle("Packing charge (website)")
-        Text("Added to every website order, on top of the courier price the customer chooses. Keep 0 for no packing charge.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Field("Packing charge (0 to 5000)", shipFee, keyboard = KeyboardType.Decimal) { shipFee = it }
-        Button(onClick = { saveShipping() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Text("Save packing charge")
-        }
-
-        SectionTitle("Coupons")
-        Text("A coupon takes rupees or percent off the items total at checkout. The customer types the code. " +
-            "Nothing is applied on its own. Turn a coupon off when you do not need it.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Field("Coupon code (3 to 20 letters or numbers, e.g. SAVE10)", cCode) { cCode = it.uppercase() }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-            FilterChip(selected = cKind == "percent", onClick = { cKind = "percent" }, label = { Text("% off") })
-            FilterChip(selected = cKind == "flat", onClick = { cKind = "flat" }, label = { Text("₹ off") })
-        }
-        Field(if (cKind == "percent") "Percent off (1 to 100)" else "Rupees off", cValue, keyboard = KeyboardType.Decimal) { cValue = it }
-        Text("Applies to", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = cCategory.isEmpty(), onClick = { cCategory = "" }, label = { Text("All categories") })
-            categories.forEach { c ->
-                FilterChip(selected = cCategory == c, onClick = { cCategory = c }, label = { Text(c) })
-            }
-        }
-        Button(onClick = { saveCoupon() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Text("Save coupon")
-        }
-        coupons.forEach { c ->
-            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(c.code, fontWeight = FontWeight.SemiBold)
-                    Text(couponLine(c), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedButton(onClick = { setCouponActive(c, !c.active) }, enabled = ready) {
-                        Text(if (c.active) "Turn off" else "Turn on")
-                    }
+        if (page.isEmpty()) {
+            AdminMenu { key ->
+                if (key == "orders") {
+                    nav.go(Route.Orders("all"))
+                } else {
+                    page = key
                 }
             }
-        }
-
-        SectionTitle("Today's offer popup (website)")
-        Text("A box that opens on the website with a coupon code. It opens once per browser, and a new offer opens again. " +
-            "Turn it off when you do not need it.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(offerOn, { offerOn = it }); Spacer(Modifier.width(8.dp)); Text("Show the offer popup on the website")
-        }
-        Field("Heading (e.g. Today's offer)", offerTitle) { offerTitle = it }
-        Field("Short text (optional)", offerText, single = false) { offerText = it }
-        Field("Coupon code (3 to 20 letters or numbers, e.g. TODAY10)", offerCode) { offerCode = it.uppercase() }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-            FilterChip(selected = offerKind == "percent", onClick = { offerKind = "percent" }, label = { Text("% off") })
-            FilterChip(selected = offerKind == "flat", onClick = { offerKind = "flat" }, label = { Text("₹ off") })
-        }
-        Field(if (offerKind == "percent") "Percent off (1 to 100)" else "Rupees off", offerValue, keyboard = KeyboardType.Decimal) { offerValue = it }
-        Text("Applies to", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = offerCategory.isEmpty(), onClick = { offerCategory = "" }, label = { Text("All categories") })
-            categories.forEach { c ->
-                FilterChip(selected = offerCategory == c, onClick = { offerCategory = c }, label = { Text(c) })
-            }
-        }
-        Button(onClick = { saveOffer() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Text("Save offer")
-        }
-
-        SectionTitle("Season animation (website)")
-        Text("The season that is on plays for about 8 seconds when the website opens, with a soft sound. " +
-            "Turn one on and the others go off by themselves. It saves as soon as you tap the switch.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        SEASONS.forEachIndexed { i, s ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Text("${i + 1}.", fontWeight = FontWeight.Bold, modifier = Modifier.width(30.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("${s.hi}  (${s.en})", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(s.what, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { page = "" }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to the Admin Portal menu")
                 }
-                Switch(checked = season == s.key, enabled = ready,
-                    onCheckedChange = { on -> saveSeason(if (on) s.key else "") })
+                Text(adminPageTitle(page), fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
         }
 
-        SectionTitle("Edit website")
-        Text("Use | to split the heading into two lines. Example: New stock.|New style.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Field("Main heading", heroTitle) { heroTitle = it }
-        Field("Short text", heroText, single = false) { heroText = it }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(heroAnim, { heroAnim = it }); Spacer(Modifier.width(8.dp)); Text("Animate the top text")
-        }
-        Field("Product article code (opens when the top photo is clicked)", heroArticle) { heroArticle = it }
-
-        SectionTitle("Website photos")
-        PhotoRow("1. Top photo or video", heroImage, uploadingSlot == "hero", ready,
-            onPick = { pickPhoto("hero") }, onRemove = { heroImage = "" }, removeLabel = "Remove")
-        PhotoRow("2. Top sandal photo (floating)", heroArtImage, uploadingSlot == "heroart", ready,
-            onPick = { pickPhoto("heroart") }, onRemove = { heroArtImage = "" }, removeLabel = "Use default photo",
-            emptyText = "Default photo is used")
-        PhotoRow("3. Middle band photo or video", bandImage, uploadingSlot == "band", ready,
-            onPick = { pickPhoto("band") }, onRemove = { bandImage = "" }, removeLabel = "Remove")
-        PhotoRow("4. Brand film video (box above the shop)", filmVideo, uploadingSlot == "film", ready,
-            onPick = { pickPhoto("film") }, onRemove = { filmVideo = "" }, removeLabel = "Remove",
-            emptyText = "No video. The box says Brand film coming soon")
-        Field("Product article code (click on the film opens this product, optional)", filmArticle) { filmArticle = it }
-
-        SectionTitle("Home slider (swap screens)")
-        Text("The first screen is the red top screen (it stays as it is). Add up to $MAX_SLIDES more screens below. " +
-            "Each screen can have a photo or video, a heading, a short text and one product (type its article code). " +
-            "The screens change by themselves and can be swiped.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        slides.forEachIndexed { i, s ->
-            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Extra screen ${i + 1}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Text("Show", fontSize = 12.sp)
-                        Switch(s.active, { slides[i] = slides[i].copy(active = it) })
-                    }
-                    Text(
-                        when {
-                            s.url.isBlank() -> "No photo or video (red background)"
-                            s.isVideo -> "Video uploaded"
-                            else -> "Photo uploaded"
-                        },
-                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { pickPhoto("slide", i) },
-                            enabled = ready && uploadingSlot == null) {
-                            Text(if (uploadingSlot == "slide$i") "Uploading..." else "Choose photo or video")
-                        }
-                        if (s.url.isNotBlank()) {
-                            TextButton(onClick = { slides[i] = slides[i].copy(url = "", isVideo = false) },
-                                enabled = ready && uploadingSlot == null) { Text("Remove") }
-                        }
-                    }
-                    Field("Heading", s.title) { slides[i] = slides[i].copy(title = it) }
-                    Field("Short text", s.text, single = false) { slides[i] = slides[i].copy(text = it) }
-                    Field("Product article code (optional)", s.article) { slides[i] = slides[i].copy(article = it) }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { slides.add(i - 1, slides.removeAt(i)) }, enabled = i > 0) { Text("Move up") }
-                        TextButton(onClick = { slides.add(i + 1, slides.removeAt(i)) },
-                            enabled = i < slides.size - 1) { Text("Move down") }
-                        TextButton(onClick = { slides.removeAt(i) }) {
-                            Text("Delete", color = MaterialTheme.colorScheme.error)
+        when (page) {
+            "text" -> {
+                Text("Use | to split the heading into two lines. Example: New stock.|New style.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Field("Main heading", heroTitle) { heroTitle = it }
+                Field("Short text", heroText, single = false) { heroText = it }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(heroAnim, { heroAnim = it }); Spacer(Modifier.width(8.dp)); Text("Animate the top text")
+                }
+                Field("Product article code (opens when the top photo is clicked)", heroArticle) { heroArticle = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "photos" -> {
+                PhotoRow("1. Top photo or video", heroImage, uploadingSlot == "hero", ready,
+                    onPick = { pickPhoto("hero") }, onRemove = { heroImage = "" }, removeLabel = "Remove")
+                PhotoRow("2. Top sandal photo (floating)", heroArtImage, uploadingSlot == "heroart", ready,
+                    onPick = { pickPhoto("heroart") }, onRemove = { heroArtImage = "" }, removeLabel = "Use default photo",
+                    emptyText = "Default photo is used")
+                PhotoRow("3. Middle band photo or video", bandImage, uploadingSlot == "band", ready,
+                    onPick = { pickPhoto("band") }, onRemove = { bandImage = "" }, removeLabel = "Remove")
+                PhotoRow("4. Brand film video (box above the shop)", filmVideo, uploadingSlot == "film", ready,
+                    onPick = { pickPhoto("film") }, onRemove = { filmVideo = "" }, removeLabel = "Remove",
+                    emptyText = "No video. The box says Brand film coming soon")
+                Field("Product article code (click on the film opens this product, optional)", filmArticle) { filmArticle = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "slider" -> {
+                Text("The first screen is the red top screen (it stays as it is). Add up to $MAX_SLIDES more screens below. " +
+                    "Each screen can have a photo or video, a heading, a short text and one product (type its article code). " +
+                    "The screens change by themselves and can be swiped.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                slides.forEachIndexed { i, s ->
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Extra screen ${i + 1}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Text("Show", fontSize = 12.sp)
+                                Switch(s.active, { slides[i] = slides[i].copy(active = it) })
+                            }
+                            Text(
+                                when {
+                                    s.url.isBlank() -> "No photo or video (red background)"
+                                    s.isVideo -> "Video uploaded"
+                                    else -> "Photo uploaded"
+                                },
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { pickPhoto("slide", i) },
+                                    enabled = ready && uploadingSlot == null) {
+                                    Text(if (uploadingSlot == "slide$i") "Uploading..." else "Choose photo or video")
+                                }
+                                if (s.url.isNotBlank()) {
+                                    TextButton(onClick = { slides[i] = slides[i].copy(url = "", isVideo = false) },
+                                        enabled = ready && uploadingSlot == null) { Text("Remove") }
+                                }
+                            }
+                            Field("Heading", s.title) { slides[i] = slides[i].copy(title = it) }
+                            Field("Short text", s.text, single = false) { slides[i] = slides[i].copy(text = it) }
+                            Field("Product article code (optional)", s.article) { slides[i] = slides[i].copy(article = it) }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(onClick = { slides.add(i - 1, slides.removeAt(i)) }, enabled = i > 0) { Text("Move up") }
+                                TextButton(onClick = { slides.add(i + 1, slides.removeAt(i)) },
+                                    enabled = i < slides.size - 1) { Text("Move down") }
+                                TextButton(onClick = { slides.removeAt(i) }) {
+                                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
                         }
                     }
                 }
+                if (slides.size < MAX_SLIDES) {
+                    OutlinedButton(onClick = { slides.add(SlideDraft()) }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                        Text("Add a screen")
+                    }
+                }
+                SwitchRow("Home slider changes by itself", sliderAuto) { sliderAuto = it }
+                Field("Seconds per screen", sliderSeconds, keyboard = KeyboardType.Number) { sliderSeconds = it.filter { c -> c.isDigit() }.take(2) }
+                SectionTitle("Middle band")
+                Field("Band heading", bandTitle) { bandTitle = it }
+                Field("Band text", bandText, single = false) { bandText = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
             }
-        }
-        if (slides.size < MAX_SLIDES) {
-            OutlinedButton(onClick = { slides.add(SlideDraft()) }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                Text("Add a screen")
+            "social" -> {
+                Field("Instagram link", instagram) { instagram = it }
+                Field("Facebook link", facebook) { facebook = it }
+                Field("WhatsApp number (with country code, without +)", whatsapp, keyboard = KeyboardType.Phone) { whatsapp = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
             }
-        }
-
-        SectionTitle("Middle band")
-        Field("Band heading", bandTitle) { bandTitle = it }
-        Field("Band text", bandText, single = false) { bandText = it }
-
-        SectionTitle("Social and WhatsApp")
-        Field("Instagram link", instagram) { instagram = it }
-        Field("Facebook link", facebook) { facebook = it }
-        Field("WhatsApp number (with country code, without +)", whatsapp, keyboard = KeyboardType.Phone) { whatsapp = it }
-
-        SectionTitle("Website switches")
-        Text("Website closed: the whole website shows only the message below until you switch it off. Use it while you test changes.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(maintOn, { maintOn = it }); Spacer(Modifier.width(8.dp)); Text("Website closed (maintenance)")
-        }
-        Field("Message on the closed page", maintText, single = false) { maintText = it }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(announceOn, { announceOn = it }); Spacer(Modifier.width(8.dp)); Text("Top bar on the website")
-        }
-        Field("Top bar text (example: ₹999 से ऊपर फ्री डिलीवरी)", announceText) { announceText = it }
-
-        SectionTitle("Website extras (saved now; shown on the website after it is applied)")
-        SwitchRow("Trust line under the top bar", trustOn) { trustOn = it }
-        Field("Trust point 1 (example: 100% ओरिजिनल प्रोडक्ट)", trust1) { trust1 = it }
-        Field("Trust point 2 (example: सुरक्षित भुगतान)", trust2) { trust2 = it }
-        Field("Trust point 3 (example: ओरिजिनल प्रोडक्ट)", trust3) { trust3 = it }
-        SwitchRow("Promo banner with a coupon code", promoOn) { promoOn = it }
-        Field("Promo text (example: Extra 15% off on ₹1499 and above)", promoText, single = false) { promoText = it }
-        Field("Coupon code (must exist in Coupons)", promoCode) { promoCode = it.uppercase() }
-        Field("Short terms (optional)", promoTerms, single = false) { promoTerms = it }
-        Field("Find a store: Google Maps link", storeMapLink) { storeMapLink = it }
-        Field("Shop timings (example: 10 am to 9 pm, Mon to Sat)", storeTiming) { storeTiming = it }
-        Field("Featured products on home (article codes, comma separated)", featuredArticles, single = false) { featuredArticles = it }
-        SwitchRow("Show 'only N left' on product cards", lowStockOn) { lowStockOn = it }
-        Field("Show it when this many or fewer are left", lowStockLimit, keyboard = KeyboardType.Number) { lowStockLimit = it.filter { c -> c.isDigit() }.take(2) }
-        SwitchRow("Home slider changes by itself", sliderAuto) { sliderAuto = it }
-        Field("Seconds per screen", sliderSeconds, keyboard = KeyboardType.Number) { sliderSeconds = it.filter { c -> c.isDigit() }.take(2) }
-        Field("Top photo button text (example: Shop now)", heroBtnText) { heroBtnText = it }
-        Field("Top photo button opens (article code, optional)", heroBtnLink) { heroBtnLink = it }
-        SwitchRow("Scroll animation (sections slide in)", revealOn) { revealOn = it }
-
-        Field("Free delivery above ₹ (0 = no free delivery)", freeAbove, keyboard = KeyboardType.Number) { freeAbove = it }
-
-        SectionTitle("Export and sync")
-        Text("Download as a CSV file (opens in Excel or Google Sheets). Your data is not changed.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            OutlinedButton(onClick = { shareCsv(ctx, "orders.csv", ordersCsv(allOrders)) }, modifier = Modifier.weight(1f)) { Text("Orders") }
-            OutlinedButton(onClick = { shareCsv(ctx, "shop-customers.csv", shopCustomersCsv(shopCust)) }, modifier = Modifier.weight(1f)) { Text("Shop customers") }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            OutlinedButton(onClick = { shareCsv(ctx, "website-customers.csv", webCustomersCsv(webCust)) }, modifier = Modifier.weight(1f)) { Text("Website customers") }
-            OutlinedButton(onClick = { app.sync.kick(); toast(ctx, "Syncing to the server...") }, modifier = Modifier.weight(1f)) { Text("Sync now") }
-        }
-
-        Button(onClick = { saveWebsite() }, enabled = ready && uploadingSlot == null,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text("Save website")
+            "switches" -> {
+                Text("Website closed: the whole website shows only the message below until you switch it off. Use it while you test changes.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(maintOn, { maintOn = it }); Spacer(Modifier.width(8.dp)); Text("Website closed (maintenance)")
+                }
+                Field("Message on the closed page", maintText, single = false) { maintText = it }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(announceOn, { announceOn = it }); Spacer(Modifier.width(8.dp)); Text("Top bar on the website")
+                }
+                Field("Top bar text (example: ₹999 से ऊपर फ्री डिलीवरी)", announceText) { announceText = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "trust" -> {
+                SwitchRow("Trust line under the top bar", trustOn) { trustOn = it }
+                Field("Trust point 1 (example: 100% ओरिजिनल प्रोडक्ट)", trust1) { trust1 = it }
+                Field("Trust point 2 (example: सुरक्षित भुगतान)", trust2) { trust2 = it }
+                Field("Trust point 3 (example: ओरिजिनल प्रोडक्ट)", trust3) { trust3 = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "promo" -> {
+                SwitchRow("Promo banner with a coupon code", promoOn) { promoOn = it }
+                Field("Promo text (example: Extra 15% off on ₹1499 and above)", promoText, single = false) { promoText = it }
+                Field("Coupon code (must exist in Coupons)", promoCode) { promoCode = it.uppercase() }
+                Field("Short terms (optional)", promoTerms, single = false) { promoTerms = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "offer" -> {
+                Text("A box that opens on the website with a coupon code. It opens once per browser, and a new offer opens again. " +
+                    "Turn it off when you do not need it.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(offerOn, { offerOn = it }); Spacer(Modifier.width(8.dp)); Text("Show the offer popup on the website")
+                }
+                Field("Heading (e.g. Today's offer)", offerTitle) { offerTitle = it }
+                Field("Short text (optional)", offerText, single = false) { offerText = it }
+                Field("Coupon code (3 to 20 letters or numbers, e.g. TODAY10)", offerCode) { offerCode = it.uppercase() }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                    FilterChip(selected = offerKind == "percent", onClick = { offerKind = "percent" }, label = { Text("% off") })
+                    FilterChip(selected = offerKind == "flat", onClick = { offerKind = "flat" }, label = { Text("₹ off") })
+                }
+                Field(if (offerKind == "percent") "Percent off (1 to 100)" else "Rupees off", offerValue, keyboard = KeyboardType.Decimal) { offerValue = it }
+                Text("Applies to", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = offerCategory.isEmpty(), onClick = { offerCategory = "" }, label = { Text("All categories") })
+                    categories.forEach { c ->
+                        FilterChip(selected = offerCategory == c, onClick = { offerCategory = c }, label = { Text(c) })
+                    }
+                }
+                Button(onClick = { saveOffer() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Text("Save offer")
+                }
+            }
+            "store" -> {
+                Field("Find a store: Google Maps link", storeMapLink) { storeMapLink = it }
+                Field("Shop timings (example: 10 am to 9 pm, Mon to Sat)", storeTiming) { storeTiming = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "featured" -> {
+                Field("Featured products on home (article codes, comma separated)", featuredArticles, single = false) { featuredArticles = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "lowstock" -> {
+                SwitchRow("Show 'only N left' on product cards", lowStockOn) { lowStockOn = it }
+                Field("Show it when this many or fewer are left", lowStockLimit, keyboard = KeyboardType.Number) { lowStockLimit = it.filter { c -> c.isDigit() }.take(2) }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "motion" -> {
+                Field("Top photo button text (example: Shop now)", heroBtnText) { heroBtnText = it }
+                Field("Top photo button opens (article code, optional)", heroBtnLink) { heroBtnLink = it }
+                SwitchRow("Scroll animation (sections slide in)", revealOn) { revealOn = it }
+                SaveWebsiteButton(enabled = saving) { saveWebsite() }
+            }
+            "season" -> {
+                Text("The season that is on plays for about 8 seconds when the website opens, with a soft sound. " +
+                    "Turn one on and the others go off by themselves. It saves as soon as you tap the switch.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SEASONS.forEachIndexed { i, s ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text("${i + 1}.", fontWeight = FontWeight.Bold, modifier = Modifier.width(30.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("${s.hi}  (${s.en})", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text(s.what, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = season == s.key, enabled = ready,
+                            onCheckedChange = { on -> saveSeason(if (on) s.key else "") })
+                    }
+                }
+            }
+            "packing" -> {
+                Text("Added to every website order, on top of the courier price the customer chooses. Keep 0 for no packing charge.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Field("Packing charge (0 to 5000)", shipFee, keyboard = KeyboardType.Decimal) { shipFee = it }
+                Button(onClick = { saveShipping() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Text("Save packing charge")
+                }
+                SectionTitle("Free delivery")
+                Field("Free delivery above ₹ (0 = no free delivery)", freeAbove, keyboard = KeyboardType.Number) { freeAbove = it }
+                SaveWebsiteButton(label = "Save free delivery limit", enabled = saving) { saveWebsite() }
+            }
+            "coupons" -> {
+                Text("A coupon takes rupees or percent off the items total at checkout. The customer types the code. " +
+                    "Nothing is applied on its own. Turn a coupon off when you do not need it.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Field("Coupon code (3 to 20 letters or numbers, e.g. SAVE10)", cCode) { cCode = it.uppercase() }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                    FilterChip(selected = cKind == "percent", onClick = { cKind = "percent" }, label = { Text("% off") })
+                    FilterChip(selected = cKind == "flat", onClick = { cKind = "flat" }, label = { Text("₹ off") })
+                }
+                Field(if (cKind == "percent") "Percent off (1 to 100)" else "Rupees off", cValue, keyboard = KeyboardType.Decimal) { cValue = it }
+                Text("Applies to", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = cCategory.isEmpty(), onClick = { cCategory = "" }, label = { Text("All categories") })
+                    categories.forEach { c ->
+                        FilterChip(selected = cCategory == c, onClick = { cCategory = c }, label = { Text(c) })
+                    }
+                }
+                Button(onClick = { saveCoupon() }, enabled = ready, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Text("Save coupon")
+                }
+                coupons.forEach { c ->
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(c.code, fontWeight = FontWeight.SemiBold)
+                            Text(couponLine(c), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedButton(onClick = { setCouponActive(c, !c.active) }, enabled = ready) {
+                                Text(if (c.active) "Turn off" else "Turn on")
+                            }
+                        }
+                    }
+                }
+            }
+            "export" -> {
+                Text("Download as a CSV file (opens in Excel or Google Sheets). Your data is not changed.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    OutlinedButton(onClick = { shareCsv(ctx, "orders.csv", ordersCsv(allOrders)) }, modifier = Modifier.weight(1f)) { Text("Orders") }
+                    OutlinedButton(onClick = { shareCsv(ctx, "shop-customers.csv", shopCustomersCsv(shopCust)) }, modifier = Modifier.weight(1f)) { Text("Shop customers") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    OutlinedButton(onClick = { shareCsv(ctx, "website-customers.csv", webCustomersCsv(webCust)) }, modifier = Modifier.weight(1f)) { Text("Website customers") }
+                    OutlinedButton(onClick = { app.sync.kick(); toast(ctx, "Syncing to the server...") }, modifier = Modifier.weight(1f)) { Text("Sync now") }
+                }
+            }
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -723,5 +783,85 @@ private fun PhotoRow(
 private fun SwitchRow(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(on, onChange); Spacer(Modifier.width(8.dp)); Text(label)
+    }
+}
+
+// ---------------------------------------------------------------- Admin Portal menu: icon tiles, one page per tile
+
+private data class AdminTileItem(val key: String, val title: String, val sub: String, val icon: ImageVector, val color: Color)
+private data class AdminGroup(val title: String, val items: List<AdminTileItem>)
+
+private val AdminRed = Color(0xFFD91E18)
+private val AdminOrange = Color(0xFFEF6C00)
+private val AdminBlue = Color(0xFF1E63C8)
+private val AdminTeal = Color(0xFF00897B)
+private val AdminPurple = Color(0xFF7B3FA0)
+private val AdminIndigo = Color(0xFF3949AB)
+private val AdminSlate = Color(0xFF546E7A)
+
+private val ADMIN_GROUPS = listOf(
+    AdminGroup("वेबसाइट के टेक्स्ट और फ़ोटो", listOf(
+        AdminTileItem("text", "मुख्य हेडिंग और टेक्स्ट", "हेडिंग, छोटा टेक्स्ट, टेक्स्ट एनिमेशन", Icons.Filled.Edit, AdminRed),
+        AdminTileItem("photos", "फ़ोटो और वीडियो", "ऊपर का फ़ोटो, फ़्लोटिंग सैंडल, बैंड, फ़िल्म", Icons.Filled.PhotoLibrary, AdminOrange),
+        AdminTileItem("slider", "होम स्लाइडर और बीच का बैंड", "स्लाइड, दिखाएँ या छिपाएँ, क्रम", Icons.Filled.PlayCircle, AdminOrange),
+        AdminTileItem("social", "Instagram, Facebook, WhatsApp", "सोशल लिंक और WhatsApp नंबर", Icons.Filled.Share, AdminBlue)
+    )),
+    AdminGroup("वेबसाइट की सेटिंग", listOf(
+        AdminTileItem("switches", "वेबसाइट बंद करें और ऊपर की पट्टी", "बंद पेज का संदेश, टॉप बार", Icons.Filled.Warning, AdminRed),
+        AdminTileItem("trust", "भरोसे की पट्टी", "तीन छोटी बातें, जैसे 100% ओरिजिनल", Icons.Filled.Checklist, AdminTeal),
+        AdminTileItem("promo", "प्रोमो बैनर", "कूपन कोड वाला बैनर", Icons.Filled.AddCircle, AdminPurple),
+        AdminTileItem("offer", "आज का ऑफ़र पॉपअप", "वेबसाइट पर खुलने वाला ऑफ़र बॉक्स", Icons.Filled.Notifications, AdminIndigo),
+        AdminTileItem("store", "दुकान का पता और समय", "Google Maps लिंक, दुकान का समय", Icons.Filled.Place, AdminTeal),
+        AdminTileItem("featured", "चुने हुए प्रोडक्ट", "होम पर दिखने वाले article codes", Icons.Filled.Storefront, AdminBlue),
+        AdminTileItem("lowstock", "स्टॉक कम होने का संदेश", "\"सिर्फ़ N बचे\" दिखाना", Icons.Filled.Inventory, AdminOrange),
+        AdminTileItem("motion", "ऊपर का बटन और स्क्रॉल", "बटन का नाम और लिंक, स्क्रॉल एनिमेशन", Icons.Filled.Sync, AdminIndigo),
+        AdminTileItem("season", "मौसम का एनिमेशन", "13 मौसम, एक समय पर एक", Icons.Filled.Dashboard, AdminPurple)
+    )),
+    AdminGroup("ऑर्डर, पैकिंग और कूपन", listOf(
+        AdminTileItem("orders", "ऑनलाइन ऑर्डर", "ऑर्डर खोलें, पैक करें, शिप करें", Icons.Filled.ShoppingCart, AdminRed),
+        AdminTileItem("packing", "पैकिंग चार्ज और मुफ़्त डिलीवरी", "हर वेबसाइट ऑर्डर पर चार्ज", Icons.Filled.LocalShipping, AdminOrange),
+        AdminTileItem("coupons", "कूपन", "कूपन बनाएँ, चालू या बंद करें", Icons.Filled.Receipt, AdminBlue)
+    )),
+    AdminGroup("डेटा", listOf(
+        AdminTileItem("export", "CSV एक्सपोर्ट और सिंक", "ऑर्डर और ग्राहक की फ़ाइल, Sync now", Icons.Filled.Storage, AdminSlate)
+    ))
+)
+
+private fun adminPageTitle(key: String): String =
+    ADMIN_GROUPS.flatMap { it.items }.firstOrNull { it.key == key }?.title ?: ""
+
+@Composable
+private fun AdminMenu(onOpen: (String) -> Unit) {
+    Text("नीचे किसी विकल्प पर टैप करें। हर विकल्प अपने अलग पेज पर खुलेगा।",
+        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    ADMIN_GROUPS.forEach { group ->
+        Text(group.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 4.dp, top = 14.dp, bottom = 2.dp))
+        group.items.forEach { item ->
+            AdminTile(item) { onOpen(item.key) }
+        }
+    }
+}
+
+@Composable
+private fun AdminTile(item: AdminTileItem, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable(onClick = onClick)) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).background(item.color, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                Icon(item.icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(item.title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(item.sub, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun SaveWebsiteButton(label: String = "Save website", enabled: Boolean, onClick: () -> Unit) {
+    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(label)
     }
 }
