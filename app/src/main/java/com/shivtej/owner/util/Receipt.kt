@@ -119,26 +119,35 @@ object Receipt {
      * Copies the bill PDF to the phone's Downloads folder, so it can be picked in WhatsApp's attach (📎) menu.
      * Returns false if it could not be saved.
      */
-    fun saveToDownloads(ctx: Context, file: File): Boolean = try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, file.name)
-                put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
-                put(MediaStore.Downloads.IS_PENDING, 1)
+    fun saveToDownloads(ctx: Context, file: File): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = ctx.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri == null) {
+                    false
+                } else {
+                    resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    true
+                }
+            } else {
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                dir.mkdirs()
+                file.copyTo(File(dir, file.name), overwrite = true)
+                true
             }
-            val resolver = ctx.contentResolver
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        } else {
-            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            dir.mkdirs()
-            file.copyTo(File(dir, file.name), overwrite = true)
+        } catch (e: Exception) {
+            false
         }
-        true
-    } catch (e: Exception) { false }
+    }
 
     /**
      * WhatsApp chat with this customer's number, opened directly (no contact saving, no search).
