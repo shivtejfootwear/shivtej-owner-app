@@ -60,12 +60,15 @@ class SyncManager(
     private var update8Missing = false
     /** Set while a sync run finds that the update-10 SQL (purchase bill change and delete) is not installed yet. */
     private var update10Missing = false
+    /** Set while a sync run finds that the update-21 SQL (custom and extra size groups) is not installed yet. */
+    private var update21Missing = false
 
     private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
     private val UPDATE4_OPS = setOf("ADD_CUSTOMER_PAYMENT", "SET_CUSTOMER_PHOTO", "SET_SUPPLIER_PHOTO")
     private val UPDATE6_OPS = setOf("DELETE_POS_BILL", "RESTORE_POS_BILL")
     private val UPDATE8_OPS = setOf("SAVE_SUPPLIER_PAYMENT", "SAVE_SHOP")
     private val UPDATE10_OPS = setOf("SAVE_PURCHASE")
+    private val UPDATE21_OPS = setOf("SAVE_SIZE_PRESETS")
 
     init {
         scope.launch {
@@ -89,10 +92,12 @@ class SyncManager(
         update6Missing = false
         update8Missing = false
         update10Missing = false
+        update21Missing = false
         try {
             withContext(Dispatchers.IO) {
                 // first: a new phone gets the saved shop details before anything is sent, so blank details never overwrite them
                 pullShopSettings()
+                pullSizePresets()
                 queueShopBackupIfDue()
                 push()
                 pull()
@@ -105,6 +110,7 @@ class SyncManager(
                 update6Missing -> "Bill deletions are saved on this phone. Run owner_update_6_bill_delete.sql and owner_update_6b_bill_restore.sql in Supabase to share them with the server."
                 update8Missing -> "Supplier payment changes, returns and shop details are saved on this phone. Run owner_update_8_shop_and_supplier_edit.sql in Supabase to share them with the server."
                 update10Missing -> "Purchase bill changes and deletions are saved on this phone. Run owner_update_10_purchase_edit.sql in Supabase to share them with the server."
+                update21Missing -> "Custom and extra size groups are saved on this phone. Run owner_update_21_size_presets.sql in Supabase to share them with the server."
                 else -> null
             }
             state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
@@ -173,6 +179,11 @@ class SyncManager(
                 if (e.code == "PGRST202" && op.type in UPDATE8_OPS) {
                     // the update-8 SQL (supplier payment changes, shop details) is not installed yet: same as above
                     update8Missing = true
+                    continue
+                }
+                if (e.code == "PGRST202" && op.type in UPDATE21_OPS) {
+                    // the update-21 SQL (custom and extra size groups) is not installed yet: same as above
+                    update21Missing = true
                     continue
                 }
                 if (e.code == "PGRST202" && op.type in UPDATE10_OPS) {
@@ -261,6 +272,7 @@ class SyncManager(
             "ADD_SUPPLIER_PAYMENT" -> Api.rpc("owner_add_supplier_payment", a(code).put("p", JSONObject(op.payload)))
             "SAVE_SUPPLIER_PAYMENT" -> Api.rpc("owner_save_supplier_payment", a(code).put("p", JSONObject(op.payload)))
             "SAVE_SHOP" -> Api.rpc("owner_save_shop_settings", a(code).put("p", JSONObject(op.payload)))
+            "SAVE_SIZE_PRESETS" -> Api.rpc("owner_save_size_presets", a(code).put("p", JSONObject(op.payload)))
             "SAVE_PURCHASE" -> Api.rpc("owner_save_purchase", a(code).put("p", JSONObject(op.payload)))
             "UPDATE_ORDER" -> {
                 val p = JSONObject(op.payload)
@@ -380,6 +392,22 @@ class SyncManager(
         repo.queueShopSettings(ShopSync.payload(prefs))
         prefs.shopBackupDay = today
         prefs.shopBackupVersion = BuildConfig.VERSION_CODE
+    }
+
+    /** Restores the custom and extra size groups from the server, but only when the server copy is newer than this phone's. */
+    private suspend fun pullSizePresets() {
+        try {
+            val r = Api.rpc("owner_get_size_presets", a(prefs.ownerCode)) as? JSONObject ?: return
+            if (!r.optBoolean("exists", false)) return
+            val data = r.optJSONObject("data") ?: return
+            val at = r.optLong("updated_at_ms", 0L)
+            if (at > prefs.sizePresetsEditedAt) {
+                prefs.sizePresetsJson = data.toString()
+                prefs.sizePresetsEditedAt = at
+            }
+        } catch (e: ApiError) {
+            if (e.code == "PGRST202") update21Missing = true else throw e
+        }
     }
 
     /** Restores the shop and bill details from the server, but only when the server copy is newer than this phone's. */

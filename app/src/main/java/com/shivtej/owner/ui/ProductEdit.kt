@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
 import com.shivtej.owner.data.PRODUCT_TYPE_START
 import com.shivtej.owner.data.Product
+import com.shivtej.owner.data.SizePresets
 import com.shivtej.owner.data.SizeStock
 import com.shivtej.owner.data.Variant
 import com.shivtej.owner.util.Images
@@ -45,9 +46,10 @@ import java.io.File
 import java.util.UUID
 
 /** One size of one colour. Every piece has its own barcode: qty 3 means 3 barcodes in [codes]. */
-class SizeDraft(size: String = "", qty: String = "0", initial: List<String> = emptyList()) {
+class SizeDraft(size: String = "", qty: String = "0", initial: List<String> = emptyList(), mrp: String = "") {
     var size by mutableStateOf(size)
     var qty by mutableStateOf(qty)
+    var mrp by mutableStateOf(mrp)              // the MRP of this size (update 21); empty = the product MRP
     val codes = mutableStateListOf<String>().apply { addAll(initial.map { it.trim() }.filter { it.isNotEmpty() }) }
     var scanText by mutableStateOf("")          // what the scanner typed into this size's scan box
     var scanJob: Job? = null                    // waits a moment so the whole code is in before it is added
@@ -87,7 +89,7 @@ class ProductDraft(val id: String) {
         variants.clear()
         p.variants.forEach { v ->
             variants.add(VariantDraft(v.colour, v.images, v.sizes.map {
-                SizeDraft(it.size, it.qty.toString(), it.barcodes.ifEmpty { listOfNotNull(it.barcode.takeIf { b -> b.isNotBlank() }) })
+                SizeDraft(it.size, it.qty.toString(), it.barcodes.ifEmpty { listOfNotNull(it.barcode.takeIf { b -> b.isNotBlank() }) }, mrpText(it.mrp))
             }))
         }
     }
@@ -101,19 +103,13 @@ class ProductDraft(val id: String) {
         mrp.toDoubleOrNull() ?: 0.0, price.toDoubleOrNull() ?: 0.0, active, newItem, images.toList(),
         variants.map { v ->
             Variant(v.colour.trim(), v.images.toList(),
-                v.sizes.map { SizeStock(it.size.trim(), it.qty.toIntOrNull() ?: 0, it.codes.firstOrNull() ?: "", it.codes.toList()) })
+                v.sizes.map { SizeStock(it.size.trim(), it.qty.toIntOrNull() ?: 0, it.codes.firstOrNull() ?: "", it.codes.toList(),
+                    it.mrp.toDoubleOrNull()?.takeIf { m -> m > 0 } ?: 0.0) })
         },
         videos.toList(),
         productType.trim()
     )
 }
-
-private val SIZE_PRESETS = listOf(
-    "Men 6-10" to listOf("6", "7", "8", "9", "10"),
-    "Ladies 36-40" to listOf("36", "37", "38", "39", "40"),
-    "Kids 11-3" to listOf("11", "12", "13", "1", "2", "3"),
-    "Small kids 15-20" to listOf("15", "16", "17", "18", "19", "20")
-)
 
 @Composable
 fun ProductEditScreen(app: App, nav: Nav, id: String?) {
@@ -132,6 +128,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     var colourList by remember { mutableStateOf<List<String>>(COLOUR_START) }
     var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
     var reorderingCategories by remember { mutableStateOf(false) }
+    // update 21: the saved size groups ("+ Custom" / "+ Extra size") and the dialogs that use them
+    var presets by remember { mutableStateOf(app.repo.sizePresets()) }
+    var groupFor by remember { mutableStateOf<Pair<VariantDraft, String>?>(null) }   // colour + kind of the group dialog
+    var extraFor by remember { mutableStateOf<VariantDraft?>(null) }                 // colour for the Small / Big chooser
 
     LaunchedEffect(id) {
         if (id != null) { app.repo.load(id)?.let { draft.fill(it) }; loaded = true }
@@ -299,7 +299,8 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                                     else v.sizes.remove(s)
                                 }) { Icon(Icons.Filled.Close, "Remove size") }
                             }
-                            // the scanner types here; a full code is added to this size after a short pause (or Enter)
+                            // the scanner types here (left) and this size's MRP is on the right. A full code is added after a short pause (or Enter)
+                            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
                                 s.scanText,
                                 { typed ->
@@ -309,15 +310,25 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                                     if (isScannedCode(code))
                                         s.scanJob = scope.launch { delay(500); acceptScan(s, code) }
                                 },
-                                label = { Text("Scan barcode for this size") },
+                                label = { Text("Scan barcode") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                                 keyboardActions = KeyboardActions(onDone = {
                                     s.scanJob?.cancel()
                                     acceptScan(s, s.scanText.trim())
                                 }),
-                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).focusRequester(s.scanFocus)
+                                modifier = Modifier.weight(1f).focusRequester(s.scanFocus)
                             )
+                            Spacer(Modifier.width(6.dp))
+                            OutlinedTextField(
+                                s.mrp,
+                                { s.mrp = it.filter { c -> c.isDigit() || c == '.' } },
+                                label = { Text("MRP") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.width(110.dp)
+                            )
+                            }
                             // one barcode per piece: qty 3 = 3 barcodes, each scanned or made separately
                             val want = s.qty.toIntOrNull() ?: 0
                             Text("Barcodes: ${s.codes.size} of $want pieces", fontSize = 12.sp,
@@ -332,11 +343,8 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                     }
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         AssistChip(onClick = { v.sizes.add(SizeDraft()) }, label = { Text("+ Size") })
-                        SIZE_PRESETS.forEach { (label, list) ->
-                            AssistChip(onClick = {
-                                list.forEach { sz -> if (v.sizes.none { it.size == sz }) v.sizes.add(SizeDraft(sz, "0")) }
-                            }, label = { Text("+ $label") })
-                        }
+                        AssistChip(onClick = { groupFor = v to SizePresets.NORMAL }, label = { Text("+ Custom") })
+                        AssistChip(onClick = { extraFor = v }, label = { Text("+ Extra size") })
                     }
                 }
             }
@@ -378,6 +386,15 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     )
     pendingRemove?.let { (msg, action) ->
         ConfirmDialog("Remove?", msg, "Remove", { action() }, { pendingRemove = null })
+    }
+    groupFor?.let { (v, kind) ->
+        SizeGroupsDialog(kind, presets,
+            onPick = { p -> applySizeGroup(v, p); groupFor = null },
+            onSaveAll = { list -> presets = list; scope.launch { app.repo.saveSizePresets(list) } },
+            onDismiss = { groupFor = null })
+    }
+    extraFor?.let { v ->
+        SizeKindDialog(onPick = { kind -> extraFor = null; groupFor = v to kind }, onDismiss = { extraFor = null })
     }
     scanTarget?.let { s ->
         ScannerDialog(onResult = { code ->

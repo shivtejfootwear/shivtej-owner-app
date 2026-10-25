@@ -22,7 +22,7 @@ import com.shivtej.owner.util.SupplierMath
 
 // ------------------------------------------------------------------ models
 /** barcode = the size's first barcode (kept for older code); barcodes = every piece barcode of this size. */
-data class SizeStock(val size: String, val qty: Int, val barcode: String, val barcodes: List<String> = emptyList())
+data class SizeStock(val size: String, val qty: Int, val barcode: String, val barcodes: List<String> = emptyList(), val mrp: Double = 0.0)
 data class Variant(val colour: String, val images: List<String>, val sizes: List<SizeStock>)
 /** The name shown for a product is brand + article (the separate product name is no longer used). */
 fun titleOf(brand: String, article: String, fallback: String): String =
@@ -179,7 +179,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     Variant(
                         v.colour, v.images.toStrList(),
                         sizes.filter { it.colour == v.colour }.sortedBy { sizeKey(it.size) }
-                            .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pmap[p.id] ?: emptyList(), it.colour, it.size, it.barcode)) }
+                            .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pmap[p.id] ?: emptyList(), it.colour, it.size, it.barcode), it.mrp) }
                     )
                 }.sortedBy { it.colour.lowercase() }
                 Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
@@ -225,7 +225,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         val vars = dao.variantsOf(id).map { v ->
             Variant(v.colour, v.images.toStrList(),
                 sizes.filter { it.colour == v.colour }.sortedBy { sizeKey(it.size) }
-                    .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pieces, it.colour, it.size, it.barcode)) })
+                    .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pieces, it.colour, it.size, it.barcode), it.mrp) })
         }.sortedBy { it.colour.lowercase() }
         return Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
             p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt)
@@ -236,7 +236,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         for (v in p.variants) {
             val sizes = JSONArray()
             for (s in v.sizes) sizes.put(JSONObject().put("size", s.size).put("qty", s.qty).put("barcode", s.barcode)
-                .put("barcodes", JSONArray(s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) })))
+                .put("barcodes", JSONArray(s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }))
+                .put("mrp", s.mrp))
             cols.put(JSONObject().put("name", v.colour).put("images", JSONArray(v.images)).put("sizes", sizes))
         }
         return JSONObject()
@@ -259,6 +260,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             require(v.sizes.map { it.size.trim() }.toSet().size == v.sizes.size) { "Duplicate size in ${v.colour}" }
             for (s in v.sizes) {
                 require(s.size.isNotBlank()) { "Size is required in ${v.colour}" }
+                require(s.mrp >= 0) { "MRP can not be negative (${v.colour} / ${s.size})" }
                 for (code in s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }) {
                     require(seen.add(code)) { "Barcode $code is used twice in this product" }
                     val taken = dao.pieceByBarcode(code)
@@ -292,7 +294,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             dao.delPieces(p.id)
             dao.putPieces(codesBySize.flatMap { (colour, size, codes) -> codes.map { PieceBarcodeE(it, p.id, colour, size) } })
             dao.putSizes(p.variants.flatMap { v ->
-                v.sizes.map { SizeE(p.id, v.colour, it.size, it.qty.coerceAtLeast(0), it.barcodes.firstOrNull() ?: it.barcode) }
+                v.sizes.map { SizeE(p.id, v.colour, it.size, it.qty.coerceAtLeast(0), it.barcodes.firstOrNull() ?: it.barcode, it.mrp.coerceAtLeast(0.0)) }
             })
             enqueue(if (isNew) "ADD_PRODUCT" else "UPDATE_PRODUCT", p.id, productJson(p))
             for (v in p.variants) for (s in v.sizes) {
@@ -1148,6 +1150,20 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return saved!!
     }
 
+    // ---------------------------------------------------------- size groups (update 21)
+    /** The saved size groups ("+ Custom" and "+ Extra size"). Until the owner changes them, the built-in groups are listed. */
+    fun sizePresets(): List<SizePreset> =
+        if (prefs.sizePresetsJson.isBlank()) SizePresets.defaults() else SizePresets.parse(prefs.sizePresetsJson)
+
+    /** Saves the size groups on this phone and queues them for the server (SAVE_SIZE_PRESETS). Every save sends the whole list. */
+    suspend fun saveSizePresets(list: List<SizePreset>) {
+        val json = SizePresets.toJson(list)
+        prefs.sizePresetsJson = json
+        prefs.sizePresetsEditedAt = System.currentTimeMillis()
+        enqueue("SAVE_SIZE_PRESETS", "size_presets", JSONObject(json))
+        onChanged()
+    }
+
     /** Shop and bill details to the server (SAVE_SHOP). Every save sends the whole set, so the last one always wins. */
     suspend fun queueShopSettings(payload: JSONObject) {
         enqueue("SAVE_SHOP", "shop", payload)
@@ -1354,7 +1370,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     val s = sa.opt(j)
                     if (s is JSONObject) {
                         val sz = s.str("size")
-                        if (sz.isNotBlank()) ss.add(SizeE(id, name, sz, s.optInt("qty", 0).coerceAtLeast(0), s.str("barcode")))
+                        if (sz.isNotBlank()) ss.add(SizeE(id, name, sz, s.optInt("qty", 0).coerceAtLeast(0), s.str("barcode"),
+                            s.optDouble("mrp", 0.0).let { if (it.isNaN()) 0.0 else it.coerceAtLeast(0.0) }))
                     } else if (s != null && s != JSONObject.NULL) {
                         ss.add(SizeE(id, name, s.toString().removeSuffix(".0"), 0, ""))
                     }

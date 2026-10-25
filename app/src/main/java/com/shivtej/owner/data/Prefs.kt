@@ -207,6 +207,14 @@ class Prefs(ctx: Context) {
         get() = sp.getLong("b2_used_bytes", 0L)
         set(v) = sp.edit().putLong("b2_used_bytes", v).apply()
 
+    // ---- size groups (update 21): the "+ Custom" and "+ Extra size" groups, as JSON. "" = never changed (the built-in groups are listed).
+    var sizePresetsJson: String
+        get() = sp.getString("size_presets", "") ?: ""
+        set(v) = sp.edit().putString("size_presets", v).apply()
+    var sizePresetsEditedAt: Long       // when the groups were last changed here (or taken from the server)
+        get() = sp.getLong("size_presets_edited_at", 0L)
+        set(v) = sp.edit().putLong("size_presets_edited_at", v).apply()
+
     // local image path -> uploaded public URL
     fun uploadedUrl(path: String): String? =
         try { JSONObject(sp.getString("uploaded", "{}") ?: "{}").optString(path).ifBlank { null } }
