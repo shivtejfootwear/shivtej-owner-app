@@ -6,11 +6,18 @@ import java.util.UUID
 
 /**
  * A group of sizes the owner keeps for re-use (update 21).
- * kind: "normal" = a "+ Custom" group, "small" / "big" = a "+ Extra size" group.
- * mrp: the MRP for these sizes (0 = not set, the product MRP is used).
- * Kept on this phone and on the server (table owner_size_presets), so a new phone gets them back.
+ * kind: "normal" = a "+ Custom" group (sizes only, the product MRP and price are used),
+ *       "small" / "big" = a "+ Extra size" group, with its own MRP and selling price for the sizes in it.
+ * mrp / price: 0 = not set. Kept on this phone and on the server (table owner_size_presets).
  */
-data class SizePreset(val id: String, val kind: String, val label: String, val sizes: List<String>, val mrp: Double = 0.0)
+data class SizePreset(
+    val id: String,
+    val kind: String,
+    val label: String,
+    val sizes: List<String>,
+    val mrp: Double = 0.0,
+    val price: Double = 0.0
+)
 
 object SizePresets {
     const val NORMAL = "normal"
@@ -25,6 +32,11 @@ object SizePresets {
         SizePreset("default-small-kids", NORMAL, "Small kids 15-20", listOf("15", "16", "17", "18", "19", "20"))
     )
 
+    private fun money(o: JSONObject, key: String): Double {
+        val v = o.optDouble(key, 0.0)
+        return if (v.isNaN() || v < 0) 0.0 else v
+    }
+
     fun parse(json: String): List<SizePreset> = try {
         val a = JSONObject(json).optJSONArray("presets") ?: JSONArray()
         (0 until a.length()).mapNotNull { i ->
@@ -32,16 +44,14 @@ object SizePresets {
             val sa = o.optJSONArray("sizes") ?: JSONArray()
             val sizes = (0 until sa.length()).map { sa.optString(it).trim() }.filter { it.isNotEmpty() }
             if (sizes.isEmpty()) null
-            else {
-                val m = o.optDouble("mrp", 0.0)
-                SizePreset(
-                    o.optString("id").ifBlank { UUID.randomUUID().toString() },
-                    o.optString("kind", NORMAL).ifBlank { NORMAL },
-                    o.optString("label"),
-                    sizes,
-                    if (m.isNaN() || m < 0) 0.0 else m
-                )
-            }
+            else SizePreset(
+                o.optString("id").ifBlank { UUID.randomUUID().toString() },
+                o.optString("kind", NORMAL).ifBlank { NORMAL },
+                o.optString("label"),
+                sizes,
+                money(o, "mrp"),
+                money(o, "price")
+            )
         }
     } catch (e: Exception) {
         emptyList()
@@ -51,7 +61,7 @@ object SizePresets {
         val arr = JSONArray()
         list.forEach { p ->
             arr.put(JSONObject().put("id", p.id).put("kind", p.kind).put("label", p.label)
-                .put("sizes", JSONArray(p.sizes)).put("mrp", p.mrp))
+                .put("sizes", JSONArray(p.sizes)).put("mrp", p.mrp).put("price", p.price))
         }
         return JSONObject().put("presets", arr).toString()
     }
