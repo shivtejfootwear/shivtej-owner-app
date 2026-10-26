@@ -40,7 +40,8 @@ import org.json.JSONObject
 /** One line in a manager's bill (no rate - the owner sets that). */
 private data class MBItem(
     val productId: String, val article: String, val name: String, val colour: String, val size: String,
-    val barcode: String, val qty: Int, val mrp: Double
+    val barcode: String, val qty: Int, val mrp: Double,
+    val stock: Int = -1 // stock of this colour and size on the server; -1 = not known here (checked when sent)
 )
 
 private fun MBItem.key() = "$productId|$colour|$size"
@@ -92,9 +93,13 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
     }
     LaunchedEffect(Unit) { refresh() }
 
+    // never add more than the stock of that colour and size
     fun addItem(it: MBItem) {
         val i = cart.indexOfFirst { c -> c.key() == it.key() }
-        if (i >= 0) cart[i] = cart[i].copy(qty = cart[i].qty + it.qty) else cart.add(it)
+        val have = if (i >= 0) cart[i].qty else 0
+        if (it.stock >= 0 && have + it.qty > it.stock) { toast(ctx, "स्टॉक में सिर्फ ${it.stock} है"); return }
+        if (i >= 0) cart[i] = cart[i].copy(qty = have + it.qty, stock = if (it.stock >= 0) it.stock else cart[i].stock)
+        else cart.add(it)
     }
 
     // resolve a barcode on the server and add it to the bill
@@ -107,7 +112,8 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
                 val r = withContext(Dispatchers.IO) { Api.lookup(tok, store.deviceId, t) }
                 if (r.optBoolean("found")) {
                     addItem(MBItem(r.optString("productId"), r.optString("article"), r.optString("name"),
-                        r.optString("colour"), r.optString("size"), r.optString("barcode"), 1, r.optDouble("mrp", 0.0)))
+                        r.optString("colour"), r.optString("size"), r.optString("barcode"), 1, r.optDouble("mrp", 0.0),
+                        r.optInt("stock", -1)))
                     query = ""; toast(ctx, "जोड़ा: ${r.optString("article")} ${r.optString("size")}")
                 } else if (!quiet) toast(ctx, "यह बारकोड नहीं मिला")
             } catch (e: NotAllowed) { onClosed() } catch (_: Exception) { if (!quiet) toast(ctx, "फिर कोशिश करें") }
@@ -136,6 +142,10 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
                 cart.clear(); editingId = null; query = ""
                 refresh()
             } catch (e: NotAllowed) { onClosed() }
+            catch (e: ApiFail) {
+                val m = e.message.orEmpty()
+                toast(ctx, if (m.contains("OVER_STOCK")) m.substringAfter("OVER_STOCK: ") else "Could not send. Check internet.")
+            }
             catch (e: Exception) { toast(ctx, "Could not send. Check internet.") }
             finally { busy = false }
         }
@@ -203,12 +213,13 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(it.name.ifBlank { it.article }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${it.article} · ${it.colour} / ${it.size} · MRP ${money(it.mrp)}", fontSize = 12.sp,
+                            Text("${it.article} · ${it.colour} / ${it.size} · MRP ${money(it.mrp)}${if (it.stock >= 0) " · स्टॉक ${it.stock}" else ""}", fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { if (i >= 0) cart[i] = it.copy(qty = (it.qty - 1).coerceAtLeast(1)) }) { Icon(Icons.Filled.Remove, "Less") }
                         Text("${it.qty}", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                        IconButton(onClick = { if (i >= 0) cart[i] = it.copy(qty = it.qty + 1) }) { Icon(Icons.Filled.Add, "More") }
+                        IconButton(onClick = { if (i >= 0) cart[i] = it.copy(qty = it.qty + 1) },
+                            enabled = it.stock < 0 || it.qty < it.stock) { Icon(Icons.Filled.Add, "More") }
                         IconButton(onClick = { if (i >= 0) cart.removeAt(i) }) { Icon(Icons.Filled.Delete, "Remove", tint = BrandRed) }
                     }
                 }
