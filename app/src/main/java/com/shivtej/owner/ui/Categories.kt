@@ -2,13 +2,15 @@
 
 package com.shivtej.owner.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -16,6 +18,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -124,15 +128,32 @@ fun CategoryDialog(app: App, products: List<Product>, onDismiss: () -> Unit) {
                     if (notIn.isEmpty()) item {
                         Text("सभी प्रोडक्ट की कैटेगरी सेट है।", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    itemsIndexed(notIn, key = { _, p -> p.id }) { _, p ->
-                        val on = p.id in selected
-                        Row(Modifier.fillMaxWidth().clickable { if (on) selected.remove(p.id) else selected.add(p.id) }
-                            .padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = on, onCheckedChange = { if (it) selected.add(p.id) else selected.remove(p.id) })
-                            Column(Modifier.weight(1f)) {
-                                Text(p.article.ifBlank { p.name }, fontWeight = FontWeight.SemiBold)
-                                Text(p.productType.ifBlank { "TYPE NOT SET" }, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // only the photos, three in a row: tap a photo to tick it (no article text)
+                    items(notIn.chunked(3), key = { row -> row.joinToString(",") { it.id } }) { row ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { p ->
+                                val on = p.id in selected
+                                Box(
+                                    Modifier.weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .border(
+                                            if (on) 3.dp else 1.dp,
+                                            if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { if (on) selected.remove(p.id) else selected.add(p.id) }
+                                        .padding(3.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Thumb(p.allImages.firstOrNull(), 96.dp)
+                                    if (on) Icon(
+                                        Icons.Filled.Check, null, tint = Color.White,
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(22.dp)
+                                            .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                    )
+                                }
                             }
+                            repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
                 }
