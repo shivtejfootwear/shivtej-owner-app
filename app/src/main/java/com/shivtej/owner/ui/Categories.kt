@@ -74,7 +74,7 @@ fun CategoryDialog(app: App, products: List<Product>, onDismiss: () -> Unit) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Category, null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Filled.List, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
                     Text("CATEGORY", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, modifier = Modifier.weight(1f))
                     IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, "Close") }
@@ -138,7 +138,7 @@ fun CategoryDialog(app: App, products: List<Product>, onDismiss: () -> Unit) {
                 }
                 Button(onClick = { dlg = CatDlg.SetCategory }, enabled = picked.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp)) {
-                    Icon(Icons.Filled.Label, null); Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Filled.Done, null); Spacer(Modifier.width(8.dp))
                     Text("SET CATEGORY (${picked.size})", fontWeight = FontWeight.Bold)
                 }
             }

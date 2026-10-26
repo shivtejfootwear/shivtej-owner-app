@@ -74,7 +74,7 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
                 Spacer(Modifier.width(8.dp))
                 // product type > category: the category box (ProductTypes / CATEGORY)
                 FilledTonalButton(onClick = { showCategories = true }, shape = RoundedCornerShape(12.dp)) {
-                    Icon(Icons.Filled.Category, null, Modifier.size(18.dp))
+                    Icon(Icons.Filled.List, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("CATEGORY", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
