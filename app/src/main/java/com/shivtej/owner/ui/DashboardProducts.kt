@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -74,7 +75,7 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
                 Spacer(Modifier.width(8.dp))
                 // product type > category: the category box (ProductTypes / CATEGORY)
                 FilledTonalButton(onClick = { showCategories = true }, shape = RoundedCornerShape(12.dp)) {
-                    Icon(Icons.Filled.List, null, Modifier.size(18.dp))
+                    Icon(Icons.Filled.Checklist, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("CATEGORY", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
