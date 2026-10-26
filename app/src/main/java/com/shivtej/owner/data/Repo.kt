@@ -49,7 +49,8 @@ data class Product(
     val variants: List<Variant>,
     val videos: List<String> = emptyList(),    // product videos (local file or https URL), added in update 4
     val productType: String = "",              // चप्पल, सैंडल, शूज़ ... (database version 14)
-    val createdAt: Long = 0L                   // date the product was added (database version 16); 0 = not known yet
+    val createdAt: Long = 0L,                  // date the product was added (database version 16); 0 = not known yet
+    val subCategory: String = ""               // category under the product type, e.g. V BELT (database version 20)
 ) {
     val totalStock: Int get() = variants.sumOf { v -> v.sizes.sumOf { it.qty } }
     val allImages: List<String> get() = images + variants.flatMap { it.images }
@@ -184,7 +185,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     )
                 }.sortedBy { it.colour.lowercase() }
                 Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
-                    p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt)
+                    p.active, p.newItem, p.images.toStrList(), variants, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt, subCategory = p.subCategory)
             }
         }
 
@@ -229,7 +230,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     .map { SizeStock(it.size, it.qty, it.barcode, codesOf(pieces, it.colour, it.size, it.barcode), it.mrp, it.price) })
         }.sortedBy { it.colour.lowercase() }
         return Product(p.id, p.article, titleOf(p.brand, p.article, p.name), p.brand, p.category, p.description, p.mrp, p.price,
-            p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt)
+            p.active, p.newItem, p.images.toStrList(), vars, p.videos.toStrList(), productType = p.productType, createdAt = p.createdAt, subCategory = p.subCategory)
     }
 
     fun productJson(p: Product): JSONObject {
@@ -243,14 +244,17 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         }
         return JSONObject()
             .put("id", p.id).put("article", p.article).put("name", p.name)
-            .put("description", p.description).put("brand", p.brand).put("category", p.category).put("product_type", p.productType)
+            .put("description", p.description).put("brand", p.brand).put("category", p.category).put("product_type", p.productType).put("sub_category", p.subCategory)
             .put("price", p.price).put("mrp", p.mrp).put("active", p.active).put("new_item", p.newItem)
             .put("images", JSONArray(p.images)).put("colours", cols)
             .put("videos", JSONArray(p.videos))
     }
 
     suspend fun saveProduct(p0: Product, isNew: Boolean) {
-        val p = p0.copy(name = titleOf(p0.brand, p0.article, p0.name))
+        // all English names are saved in CAPITAL letters (Hindi stays as it is); the Men / Ladies category is not changed
+        val p = p0.copy(article = capName(p0.article), brand = capName(p0.brand), productType = capName(p0.productType),
+            subCategory = capName(p0.subCategory), variants = p0.variants.map { it.copy(colour = capName(it.colour)) })
+            .let { it.copy(name = titleOf(it.brand, it.article, capName(p0.name))) }
         require(p.article.isNotBlank()) { "Article is required" }
         require(p.price > 0) { "Selling price must be more than 0" }
         require(p.variants.isNotEmpty()) { "Add at least one colour" }
@@ -286,7 +290,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 "${p.article}: MRP ₹${oldP.mrp} → ₹${p.mrp}, price ₹${oldP.price} → ₹${p.price}"))
             dao.putProduct(ProductE(p.id, p.article.trim(), p.name.trim(), p.brand.trim(), p.category.trim(),
                 p.description.trim(), p.mrp, p.price, p.active, p.newItem, p.images.toJsonText(), now, p.videos.toJsonText(),
-                p.productType.trim(), createdAt = createdAtKept))
+                p.productType.trim(), createdAt = createdAtKept, subCategory = p.subCategory.trim()))
             dao.delVariants(p.id)
             dao.delSizes(p.id)
             dao.putVariants(p.variants.map { VariantE(p.id, it.colour, it.images.toJsonText()) })
@@ -1166,6 +1170,19 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         onChanged()
     }
 
+    // ---------------------------------------------------------- categories under product types (update 24)
+    fun categoryTree(): List<CatType> =
+        if (prefs.categoryTreeJson.isBlank()) CategoryTree.defaults() else CategoryTree.parse(prefs.categoryTreeJson)
+
+    /** Saves the product types with their categories on this phone and queues them for the server (SAVE_CATEGORY_TREE). */
+    suspend fun saveCategoryTree(list: List<CatType>) {
+        val json = CategoryTree.toJson(list)
+        prefs.categoryTreeJson = json
+        prefs.categoryTreeEditedAt = System.currentTimeMillis()
+        enqueue("SAVE_CATEGORY_TREE", "category_tree", JSONObject(json))
+        onChanged()
+    }
+
     /** Shop and bill details to the server (SAVE_SHOP). Every save sends the whole set, so the last one always wins. */
     suspend fun queueShopSettings(payload: JSONObject) {
         enqueue("SAVE_SHOP", "shop", payload)
@@ -1355,7 +1372,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             parseTime(o.str("updated_at")),
             (o.optJSONArray("videos") ?: JSONArray()).strings().toJsonText(),
             if (o.has("product_type")) o.str("product_type").trim() else "",   // not sent yet by the server: kept locally
-            if (o.has("created_at") && !o.isNull("created_at")) parseTime(o.str("created_at")) else 0L
+            if (o.has("created_at") && !o.isNull("created_at")) parseTime(o.str("created_at")) else 0L,
+            subCategory = if (o.has("sub_category")) o.str("sub_category").trim() else ""   // older server: kept locally
         )
         val topSizes = (o.optJSONArray("sizes") ?: JSONArray()).strings()
         val vs = ArrayList<VariantE>()
@@ -1444,7 +1462,9 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 val (pe, vs, ss) = parseProduct(o)
                 // upserts only: a size or colour missing from the server is kept here, never deleted (its stock is not lost)
                 // a server copy without product_type keeps the type already saved on this phone
-                dao.putProduct(if (o.has("product_type")) pe else pe.copy(productType = dao.product(id)?.productType ?: ""))
+                val keep = dao.product(id)
+                val withType = if (o.has("product_type")) pe else pe.copy(productType = keep?.productType ?: "")
+                dao.putProduct(if (o.has("sub_category")) withType else withType.copy(subCategory = keep?.subCategory ?: ""))
                 dao.putVariants(vs); dao.putSizes(ss)
                 // upsert only: pieces this phone already has stay; the server's list adds the rest
                 val pieces = parsePieces(o)

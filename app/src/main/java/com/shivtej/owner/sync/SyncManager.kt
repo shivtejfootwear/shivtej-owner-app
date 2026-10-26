@@ -62,6 +62,8 @@ class SyncManager(
     private var update10Missing = false
     /** Set while a sync run finds that the update-21 SQL (custom and extra size groups) is not installed yet. */
     private var update21Missing = false
+    /** Set while a sync run finds that the update-24 SQL (categories under product types, capital letters) is not installed yet. */
+    private var update24Missing = false
 
     private val UPDATE2_OPS = setOf("UPSERT_STAFF", "UPSERT_CUSTOMER", "UPSERT_SUPPLIER", "CREATE_PURCHASE", "ADD_SUPPLIER_PAYMENT")
     private val UPDATE4_OPS = setOf("ADD_CUSTOMER_PAYMENT", "SET_CUSTOMER_PHOTO", "SET_SUPPLIER_PHOTO")
@@ -69,6 +71,7 @@ class SyncManager(
     private val UPDATE8_OPS = setOf("SAVE_SUPPLIER_PAYMENT", "SAVE_SHOP")
     private val UPDATE10_OPS = setOf("SAVE_PURCHASE")
     private val UPDATE21_OPS = setOf("SAVE_SIZE_PRESETS")
+    private val UPDATE24_OPS = setOf("SAVE_CATEGORY_TREE")
 
     init {
         scope.launch {
@@ -93,11 +96,13 @@ class SyncManager(
         update8Missing = false
         update10Missing = false
         update21Missing = false
+        update24Missing = false
         try {
             withContext(Dispatchers.IO) {
                 // first: a new phone gets the saved shop details before anything is sent, so blank details never overwrite them
                 pullShopSettings()
                 pullSizePresets()
+                pullCategoryTree()
                 queueShopBackupIfDue()
                 push()
                 pull()
@@ -111,6 +116,7 @@ class SyncManager(
                 update8Missing -> "Supplier payment changes, returns and shop details are saved on this phone. Run owner_update_8_shop_and_supplier_edit.sql in Supabase to share them with the server."
                 update10Missing -> "Purchase bill changes and deletions are saved on this phone. Run owner_update_10_purchase_edit.sql in Supabase to share them with the server."
                 update21Missing -> "Custom and extra size groups are saved on this phone. Run owner_update_21_size_presets.sql in Supabase to share them with the server."
+                update24Missing -> "Categories and capital letters are saved on this phone. Run owner_update_24_categories.sql in Supabase to share them with the server."
                 else -> null
             }
             state.update { it.copy(running = false, lastSync = now, authError = false, lastError = null, notice = note) }
@@ -184,6 +190,11 @@ class SyncManager(
                 if (e.code == "PGRST202" && op.type in UPDATE21_OPS) {
                     // the update-21 SQL (custom and extra size groups) is not installed yet: same as above
                     update21Missing = true
+                    continue
+                }
+                if (e.code == "PGRST202" && op.type in UPDATE24_OPS) {
+                    // the update-24 SQL (categories) is not installed yet: same as above
+                    update24Missing = true
                     continue
                 }
                 if (e.code == "PGRST202" && op.type in UPDATE10_OPS) {
@@ -273,6 +284,7 @@ class SyncManager(
             "SAVE_SUPPLIER_PAYMENT" -> Api.rpc("owner_save_supplier_payment", a(code).put("p", JSONObject(op.payload)))
             "SAVE_SHOP" -> Api.rpc("owner_save_shop_settings", a(code).put("p", JSONObject(op.payload)))
             "SAVE_SIZE_PRESETS" -> Api.rpc("owner_save_size_presets", a(code).put("p", JSONObject(op.payload)))
+            "SAVE_CATEGORY_TREE" -> Api.rpc("owner_save_category_tree", a(code).put("p", JSONObject(op.payload)))
             "SAVE_PURCHASE" -> Api.rpc("owner_save_purchase", a(code).put("p", JSONObject(op.payload)))
             "UPDATE_ORDER" -> {
                 val p = JSONObject(op.payload)
@@ -407,6 +419,22 @@ class SyncManager(
             }
         } catch (e: ApiError) {
             if (e.code == "PGRST202") update21Missing = true else throw e
+        }
+    }
+
+    /** Restores the categories under product types from the server, but only when the server copy is newer than this phone's. */
+    private suspend fun pullCategoryTree() {
+        try {
+            val r = Api.rpc("owner_get_category_tree", a(prefs.ownerCode)) as? JSONObject ?: return
+            if (!r.optBoolean("exists", false)) return
+            val data = r.optJSONObject("data") ?: return
+            val at = r.optLong("updated_at_ms", 0L)
+            if (at > prefs.categoryTreeEditedAt) {
+                prefs.categoryTreeJson = data.toString()
+                prefs.categoryTreeEditedAt = at
+            }
+        } catch (e: ApiError) {
+            if (e.code == "PGRST202") update24Missing = true else throw e
         }
     }
 

@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
+import com.shivtej.owner.data.CatType
 import com.shivtej.owner.data.PRODUCT_TYPE_START
 import com.shivtej.owner.data.Product
 import com.shivtej.owner.data.SizePreset
@@ -71,6 +72,7 @@ class ProductDraft(val id: String) {
     var brand by mutableStateOf("")
     var category by mutableStateOf("")
     var productType by mutableStateOf("")
+    var subCategory by mutableStateOf("")   // category under the product type (e.g. V BELT under चप्पल)
     var description by mutableStateOf("")
     var mrp by mutableStateOf("")
     var price by mutableStateOf("")
@@ -83,6 +85,7 @@ class ProductDraft(val id: String) {
     fun fill(p: Product) {
         article = p.article; name = p.name; brand = p.brand; category = p.category; description = p.description
         productType = p.productType
+        subCategory = p.subCategory
         mrp = p.mrp.toBigDecimal().stripTrailingZeros().toPlainString()
         price = p.price.toBigDecimal().stripTrailingZeros().toPlainString()
         active = p.active; newItem = p.newItem
@@ -111,7 +114,8 @@ class ProductDraft(val id: String) {
                     it.price.toDoubleOrNull()?.takeIf { p -> p > 0 } ?: 0.0) })
         },
         videos.toList(),
-        productType.trim()
+        productType.trim(),
+        subCategory = subCategory.trim()
     )
 }
 
@@ -128,6 +132,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     val withCamera = rememberWithCamera()
     var brandList by remember { mutableStateOf<List<String>>(emptyList()) }
     var typeList by remember { mutableStateOf<List<String>>(PRODUCT_TYPE_START) }
+    val categoryTree = remember { app.repo.categoryTree() }
     var articleList by remember { mutableStateOf<List<String>>(emptyList()) }
     var colourList by remember { mutableStateOf<List<String>>(COLOUR_START) }
     var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
@@ -222,6 +227,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
         ArticleField(draft.article, articleList) { draft.article = it }
         BrandField(draft.brand, brandList) { draft.brand = it }
         TypeField(draft.productType, typeList) { draft.productType = it }
+        SubCategoryField(draft.productType, draft.subCategory, categoryTree) { draft.subCategory = it }
         CategoryField(draft.category, categories,
             onChange = { draft.category = it },
             onChangeOrder = { reorderingCategories = true })
@@ -483,6 +489,15 @@ private fun TypeField(value: String, known: List<String>, onChange: (String) -> 
     }
     val matches = (suggestionsFor(value, known) + viaAlias).distinct().filter { it.lowercase() != q }.take(8)
     SuggestField("Product type (चप्पल / सैंडल / शूज़ ...)", value, matches, onChange)
+}
+
+/** Category under the product type: the suggestions are the categories saved for that type (CATEGORY button on the Products screen). */
+@Composable
+private fun SubCategoryField(type: String, value: String, tree: List<CatType>, onChange: (String) -> Unit) {
+    val cats = tree.firstOrNull { it.name == type.trim() }?.cats ?: emptyList()
+    val q = value.trim().lowercase()
+    val matches = cats.filter { it.lowercase() != q && (q.isEmpty() || it.lowercase().contains(q)) }.take(8)
+    SuggestField("Category (under the product type)", value, matches) { onChange(it.uppercase()) }
 }
 
 /**

@@ -215,6 +215,14 @@ class Prefs(ctx: Context) {
         get() = sp.getLong("size_presets_edited_at", 0L)
         set(v) = sp.edit().putLong("size_presets_edited_at", v).apply()
 
+    // ---- categories under product types (update 24): the product types with their categories, as JSON. "" = never changed (built-in list).
+    var categoryTreeJson: String
+        get() = sp.getString("category_tree", "") ?: ""
+        set(v) = sp.edit().putString("category_tree", v).apply()
+    var categoryTreeEditedAt: Long
+        get() = sp.getLong("category_tree_edited_at", 0L)
+        set(v) = sp.edit().putLong("category_tree_edited_at", v).apply()
+
     // local image path -> uploaded public URL
     fun uploadedUrl(path: String): String? =
         try { JSONObject(sp.getString("uploaded", "{}") ?: "{}").optString(path).ifBlank { null } }

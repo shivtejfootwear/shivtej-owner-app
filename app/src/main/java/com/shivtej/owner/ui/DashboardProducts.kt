@@ -5,6 +5,7 @@ package com.shivtej.owner.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -46,6 +47,7 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(initialFilter) }
     var sizeFilter by remember { mutableStateOf("all") }
+    var showCategories by remember { mutableStateOf(false) }
     val low = app.prefs.lowThreshold
     val allSizes = remember(products) { products.flatMap { p -> p.variants.flatMap { v -> v.sizes.map { it.size } } }
         .distinct().sortedBy { it.toDoubleOrNull() ?: 9999.0 } }
@@ -67,7 +69,16 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-            SearchField(query, { query = it }, "Search name, article, brand, colour, barcode", Modifier.padding(top = 8.dp))
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SearchField(query, { query = it }, "Search name, article, brand, colour, barcode", Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                // product type > category: the category box (ProductTypes / CATEGORY)
+                FilledTonalButton(onClick = { showCategories = true }, shape = RoundedCornerShape(12.dp)) {
+                    Icon(Icons.Filled.Category, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("CATEGORY", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("all" to "All", "active" to "Active", "inactive" to "Inactive", "low" to "Low stock", "out" to "Out of stock")
                     .forEach { (k, l) -> Chip(l, filter == k) { filter = k } }
@@ -101,4 +112,5 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
         ) { Icon(Icons.Filled.Add, "Add item") }
     }
+    if (showCategories) CategoryDialog(app, products) { showCategories = false }
 }

@@ -25,7 +25,9 @@ data class ProductE(
     // ---- added in database version 14 (product type: चप्पल, सैंडल, शूज़ ... ; empty = not set)
     @androidx.room.ColumnInfo(defaultValue = "''") val productType: String = "",
     // ---- added in database version 16 (date the product was added: the NEW tag stays on for 120 days; 0 = not known yet)
-    @androidx.room.ColumnInfo(defaultValue = "0") val createdAt: Long = 0L
+    @androidx.room.ColumnInfo(defaultValue = "0") val createdAt: Long = 0L,
+    // ---- added in database version 20 (category under the product type, e.g. चप्पल -> V BELT; empty = not set)
+    @androidx.room.ColumnInfo(defaultValue = "''") val subCategory: String = ""
 )
 
 @Entity(tableName = "variants", primaryKeys = ["productId", "colour"])
@@ -650,8 +652,15 @@ data class ChangeE(@PrimaryKey val id: String, val at: Long, val kind: String, v
 data class SizeRequestE(@PrimaryKey val id: String, val mobile: String, val name: String, val article: String,
     val size: String, val createdAt: Long)
 
+/** Version 19 -> 20: the category under the product type. Only a new column; existing products keep "". */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `products` ADD COLUMN `subCategory` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
 /** The one and only database version. DbGuard reads this too, so the two can never disagree again. */
-const val DB_VERSION = 19
+const val DB_VERSION = 20
 
 @Database(
     entities = [ProductE::class, VariantE::class, SizeE::class, OpE::class, BillE::class,
@@ -668,7 +677,7 @@ abstract class AppDb : RoomDatabase() {
         const val FILE = "shivtej_owner.db"
         fun build(ctx: Context): AppDb =
             Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, FILE)
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)   // additive steps only; data is kept
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)   // additive steps only; data is kept
                 // No destructive fallback: an unsupported version is refused by DbGuard before Room opens the file.
                 .build()
     }
