@@ -18,7 +18,8 @@
 name: Build Shivtej Owner APK
 
 on:
-  push:
+  # no automatic build on every push (saves GitHub Actions minutes).
+  # Build only when you start it: Actions > Build Shivtej Owner APK > Run workflow
   workflow_dispatch:
 
 permissions:
