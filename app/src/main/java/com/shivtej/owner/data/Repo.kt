@@ -742,7 +742,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 gender in listOf("M", "F") -> gender
                 else -> ""
             }
-            val c = PosCustomerE(m, name.trim(), address.trim(), old?.createdAt ?: System.currentTimeMillis(), true,
+            val c = PosCustomerE(m, capName(name), capName(address), old?.createdAt ?: System.currentTimeMillis(), true,
                 photoPath = photo, photoUrl = if (photo.isBlank()) "" else old?.photoUrl ?: "",
                 openingBalance = openingBalance?.let { BillMath.round2(it) } ?: old?.openingBalance ?: 0.0,
                 onlineContact = online, gender = gen)
@@ -881,7 +881,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     // ---------------------------------------------------------- suppliers, purchase bills, payments
     suspend fun saveSupplier(id: String?, name: String, mobile: String, address: String, notes: String, active: Boolean, photoPath: String? = null): SupplierE {
-        val n = name.trim()
+        val n = capName(name)   // company names in CAPITAL letters
         require(n.isNotEmpty()) { "Supplier name is required" }
         val m = BillMath.normMobile(mobile)
         require(mobile.isBlank() || m.length == 10) { "Mobile number must be 10 digits" }
@@ -891,7 +891,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             require(all.none { it.id != id && it.name.trim().equals(n, true) }) { "A supplier named $n already exists" }
             val old = if (id == null) null else dao.supplier(id)
             val s = SupplierE(old?.id ?: UUID.randomUUID().toString(), n, if (mobile.isBlank()) "" else m,
-                address.trim(), notes.trim(), active, old?.createdAt ?: System.currentTimeMillis(), true,
+                capName(address), notes.trim(), active, old?.createdAt ?: System.currentTimeMillis(), true,
                 photoPath = photoPath ?: old?.photoPath ?: "", photoUrl = if (photoPath == "") "" else old?.photoUrl ?: "")
             dao.putSupplier(s)
             enqueue("UPSERT_SUPPLIER", s.id, JSONObject().put("id", s.id).put("name", s.name).put("mobile", s.mobile)

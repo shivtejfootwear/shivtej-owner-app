@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -150,10 +151,12 @@ fun SupplierDialog(app: App, s: SupplierE?, onDone: () -> Unit) {
                 PhotoField("Supplier photo (optional)",
                     localPath = (photoChange ?: s?.photoPath).orEmpty(),
                     remoteUrl = if (photoChange == "") "" else s?.photoUrl.orEmpty()) { photoChange = it }
-                OutlinedTextField(name, { name = it }, label = { Text("Supplier / company name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(name, { name = it }, label = { Text("Supplier / company name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters))
                 OutlinedTextField(mobile, { mobile = it.filter(Char::isDigit).take(10) }, label = { Text("Mobile (optional)") },
                     singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
-                OutlinedTextField(address, { address = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                OutlinedTextField(address, { address = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth(), minLines = 2,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters))
                 OutlinedTextField(notes, { notes = it }, label = { Text("Notes (terms, GST no. ...)") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
                 if (s != null) Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Active", modifier = Modifier.weight(1f)); Switch(checked = active, onCheckedChange = { active = it })

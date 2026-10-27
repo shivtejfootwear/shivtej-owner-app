@@ -25,6 +25,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -419,11 +420,12 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
 @Composable
 internal fun Field(
     label: String, value: String, modifier: Modifier = Modifier,
-    keyboard: KeyboardType = KeyboardType.Text, single: Boolean = true, onChange: (String) -> Unit
+    keyboard: KeyboardType = KeyboardType.Text, single: Boolean = true, caps: Boolean = false, onChange: (String) -> Unit
 ) {
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) }, singleLine = single,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboard,
+            capitalization = if (caps) KeyboardCapitalization.Characters else KeyboardCapitalization.Unspecified),
         modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)
     )
 }
@@ -449,7 +451,7 @@ internal fun suggestionsFor(typed: String, known: List<String>): List<String> {
 @Composable
 private fun SuggestField(label: String, value: String, matches: List<String>, onChange: (String) -> Unit) {
     Column {
-        Field(label, value, onChange = onChange)
+        Field(label, value, caps = true, onChange = onChange)
         if (matches.isNotEmpty()) {
             Card(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
                 Column {
