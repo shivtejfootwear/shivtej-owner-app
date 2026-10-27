@@ -32,6 +32,7 @@ import com.shivtej.owner.App
 import com.shivtej.owner.data.CatType
 import com.shivtej.owner.data.PRODUCT_TYPE_START
 import com.shivtej.owner.data.Product
+import com.shivtej.owner.data.capName
 import com.shivtej.owner.data.SizePreset
 import com.shivtej.owner.data.SizePresets
 import com.shivtej.owner.data.SizeStock
@@ -551,8 +552,12 @@ private fun CategoryOrderDialog(initial: List<String>, onSave: (List<String>) ->
     )
 }
 
-private fun categoriesFrom(csv: String): List<String> =
-    csv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+/** Dropdown categories in CAPITAL letters; KIDS is added for phones that were set up before it existed (before BOY). */
+private fun categoriesFrom(csv: String): List<String> {
+    val list = csv.split(",").map { capName(it) }.filter { it.isNotEmpty() }.distinct().toMutableList()
+    if ("KIDS" !in list) { val at = list.indexOf("BOY"); if (at >= 0) list.add(at, "KIDS") else list.add("KIDS") }
+    return list
+}
 
 private fun moveCategory(list: List<String>, i: Int, j: Int): List<String> {
     if (i !in list.indices || j !in list.indices) return list

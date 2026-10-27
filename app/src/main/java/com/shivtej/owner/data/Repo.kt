@@ -252,7 +252,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun saveProduct(p0: Product, isNew: Boolean) {
         // all English names are saved in CAPITAL letters (Hindi stays as it is); the Men / Ladies category is not changed
-        val p = p0.copy(article = capName(p0.article), brand = capName(p0.brand), productType = capName(p0.productType),
+        val p = p0.copy(article = capName(p0.article), brand = capName(p0.brand), productType = capName(p0.productType), category = capName(p0.category),
             subCategory = capName(p0.subCategory), variants = p0.variants.map { it.copy(colour = capName(it.colour)) })
             .let { it.copy(name = titleOf(it.brand, it.article, capName(p0.name))) }
         require(p.article.isNotBlank()) { "Article is required" }
