@@ -38,3 +38,6 @@ object CategoryTree {
 
 /** Names are saved in capitals (Hindi letters stay as they are). */
 fun capName(s: String): String = s.trim().uppercase()
+/** First letter of every English word in CAPITAL, the rest small ("rahul kumar" -> "Rahul Kumar"). Hindi is not changed. */
+fun titleCase(s: String): String =
+    Regex("(^|\\s)(\\p{Ll})").replace(s.trim().lowercase()) { it.groupValues[1] + it.groupValues[2].uppercase() }

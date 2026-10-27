@@ -742,7 +742,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 gender in listOf("M", "F") -> gender
                 else -> ""
             }
-            val c = PosCustomerE(m, capName(name), capName(address), old?.createdAt ?: System.currentTimeMillis(), true,
+            val c = PosCustomerE(m, titleCase(name), titleCase(address), old?.createdAt ?: System.currentTimeMillis(), true,
                 photoPath = photo, photoUrl = if (photo.isBlank()) "" else old?.photoUrl ?: "",
                 openingBalance = openingBalance?.let { BillMath.round2(it) } ?: old?.openingBalance ?: 0.0,
                 onlineContact = online, gender = gen)
