@@ -5,6 +5,20 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.layout.heightIn
+import kotlin.math.roundToInt
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -29,12 +43,6 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-/** A piece that is low on stock, with the supplier it was last bought from ("" = no purchase bill has it). */
-private data class OrderRow(val supplierId: String, val article: String, val colour: String, val size: String, val qty: Int) {
-    /** same key for the same piece every time (used for the "do not order" list) */
-    val key: String get() = "$supplierId|${article.trim().lowercase()}|${colour.trim().lowercase()}|$size"
-}
 
 /** Pieces with this many or fewer left are put on the supplier order list. */
 private const val LOW_STOCK_LIMIT = 1
@@ -71,7 +79,34 @@ fun ChangeLogScreen(app: App) {
     }
 }
 
-// ------------------------------------------------------------------ 2. supplier order list
+// ------------------------------------------------------------------ 2. supplier order list (brand wise) + order pad
+/** A piece that is low on stock. supplierId is only part of the key ("" = no purchase bill has it). */
+private data class OrderRow(val supplierId: String, val brand: String, val category: String, val article: String,
+                            val colour: String, val size: String, val qty: Int) {
+    /** same key for the same piece every time (used for the "do not order" list and the pad) */
+    val key: String get() = "$supplierId|${article.trim().lowercase()}|${colour.trim().lowercase()}|$size"
+}
+
+/** One line on the order pad: a piece the owner has decided to order, with the quantity to order. */
+private data class PadRow(val key: String, val brand: String, val category: String, val article: String,
+                          val colour: String, val size: String, val qty: Int)
+
+private const val PAD_SEP = "\u001F"
+
+private fun padEncode(list: List<PadRow>): String = list.joinToString("\n") {
+    listOf(it.key, it.brand, it.category, it.article, it.colour, it.size, it.qty.toString()).joinToString(PAD_SEP)
+}
+
+private fun padDecode(s: String): List<PadRow> = s.lines().filter { it.isNotBlank() }.mapNotNull { line ->
+    val f = line.split(PAD_SEP)
+    if (f.size < 7) null else PadRow(f[0], f[1], f[2], f[3], f[4], f[5], f[6].toIntOrNull()?.coerceAtLeast(1) ?: 1)
+}
+
+/** Short label on screen only: SENIOR MEN shows as SR MEN. The data name stays the same. */
+private fun srLabel(cat: String): String = cat.replaceFirst("SENIOR ", "SR ")
+
+private fun brandOf(s: String): String = s.trim().ifBlank { "BRAND NOT SET" }
+
 @Composable
 fun SupplierOrderScreen(app: App) {
     val ctx = LocalContext.current
@@ -79,7 +114,7 @@ fun SupplierOrderScreen(app: App) {
     val purchases by app.repo.purchases.collectAsStateWithLifecycle(emptyList())
     val suppliers by app.repo.suppliers.collectAsStateWithLifecycle(emptyList())
     val names = suppliers.associateBy { it.id }
-    // every low-stock piece, with the supplier of its newest purchase bill
+    // every low-stock piece, with its brand, category and the supplier of its newest purchase bill
     val allRows = remember(products, purchases) {
         val lastSupplier = HashMap<String, String>()
         purchases.sortedByDescending { it.billDate }.forEach { b ->
@@ -93,7 +128,7 @@ fun SupplierOrderScreen(app: App) {
             val sid = lastSupplier[p.article.trim().lowercase()] ?: ""
             p.variants.forEach { v ->
                 v.sizes.filter { it.qty <= LOW_STOCK_LIMIT }.forEach { s ->
-                    rows.add(OrderRow(sid, p.article.ifBlank { p.name }, v.colour, s.size, s.qty))
+                    rows.add(OrderRow(sid, p.brand, p.category, p.article.ifBlank { p.name }, v.colour, s.size, s.qty))
                 }
             }
         }
@@ -101,57 +136,96 @@ fun SupplierOrderScreen(app: App) {
     }
     // pieces the owner chose NOT to order (kept on this phone)
     var notOrder by remember { mutableStateOf(app.repo.prefs.notOrderKeys) }
-    val toOrder = allRows.filter { it.key !in notOrder }
+    // the order pad: pieces the owner has dragged in to order
+    var pad by remember { mutableStateOf(padDecode(app.repo.prefs.orderPad)) }
+    var padRect by remember { mutableStateOf(Rect.Zero) }
+    val padKeys = pad.map { it.key }.toSet()
+    val toOrder = allRows.filter { it.key !in notOrder && it.key !in padKeys }
     val skipped = allRows.filter { it.key in notOrder }
-    val groups = toOrder.groupBy { it.supplierId }
+    val byBrand = toOrder.groupBy { brandOf(it.brand) }.toSortedMap()
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-        Text("Pieces with $LOW_STOCK_LIMIT or less left, company wise. Open a company to see its articles and the sizes to order. \"नहीं मंगवाना\" removes a piece from the order list.",
+    fun savePad(v: List<PadRow>) {
+        pad = v
+        app.repo.prefs.orderPad = padEncode(v)
+    }
+    fun addToPad(r: OrderRow) {
+        if (r.key in padKeys) return
+        savePad(pad + PadRow(r.key, brandOf(r.brand), r.category.ifBlank { "NO CATEGORY" }, r.article, r.colour, r.size, 1))
+    }
+    fun skip(r: OrderRow) {
+        notOrder = notOrder + r.key
+        app.repo.prefs.notOrderKeys = notOrder
+    }
+    fun unskip(r: OrderRow) {
+        notOrder = notOrder - r.key
+        app.repo.prefs.notOrderKeys = notOrder
+    }
+
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Text("ब्रांड → कैटेगरी → आर्टिकल → साइज़। माल को लंबा दबाकर नीचे ऑर्डर पैड में खींचें, या \"पैड में\" दबाएँ। \"नहीं मंगवाना\" से वह साइज़ लिस्ट से हट जाएगा।",
             fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (groups.isEmpty()) EmptyState("No item is low on stock right now.")
-        groups.toList().sortedBy { (sid, _) -> names[sid]?.name ?: "~" }.forEach { (sid, list) ->
-            val sup = names[sid]
-            val title = sup?.name ?: "Supplier not set (no purchase bill has these items)"
-            var expanded by remember(sid) { mutableStateOf(false) }
-            Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
-                        Text(title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        Text("${list.map { it.article }.distinct().size} articles", fontSize = 12.sp)
-                    }
-                    if (expanded) {
-                        if (sup != null && sup.mobile.isNotBlank()) Text("Mobile: " + sup.mobile, fontSize = 12.sp,
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
+            if (byBrand.isEmpty()) item { EmptyState("कोई माल कम स्टॉक में नहीं है।") }
+            byBrand.forEach { (brand, rows) ->
+                item(key = "brand_$brand") {
+                    BrandOrderCard(brand, rows,
+                        onPad = { addToPad(it) },
+                        onDrop = { r, c -> if (padRect.contains(c)) addToPad(r) },
+                        onSkip = { skip(it) })
+                }
+            }
+            item {
+                Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("नहीं मंगवाने की लिस्ट (${skipped.size})", fontWeight = FontWeight.Bold)
+                        Text("यह ऑर्डर में नहीं जाएगी। वापस लाने पर फिर से लिस्ट में आएगी।", fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        list.groupBy { it.article }.toSortedMap().forEach { (article, rows) ->
-                            Text(article, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-                            rows.forEach { r ->
-                                Row(Modifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("${r.colour} · size ${r.size} · left ${r.qty}", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                                    TextButton(onClick = {
-                                        notOrder = notOrder + r.key
-                                        app.repo.prefs.notOrderKeys = notOrder
-                                    }) { Text("नहीं मंगवाना", fontSize = 12.sp) }
-                                }
+                        skipped.forEach { r ->
+                            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("${brandOf(r.brand)} · ${r.article} · ${r.colour} · size ${r.size}", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                                TextButton(onClick = { unskip(r) }) { Text("वापस मंगवाना", fontSize = 12.sp) }
                             }
                         }
-                        Button(onClick = { shareOrder(ctx, sup?.mobile ?: "", title, list) },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Send order list") }
                     }
                 }
             }
         }
-        Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Column(Modifier.padding(12.dp)) {
-                Text("नहीं मंगवाने की लिस्ट (${skipped.size})", fontWeight = FontWeight.Bold)
-                Text("यह सप्लायर को नहीं जाएगी। वापस लाने पर फिर से मंगवाने की लिस्ट में आएगी।", fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                skipped.forEach { r ->
-                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${r.article} · ${r.colour} · size ${r.size}", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                        TextButton(onClick = {
-                            notOrder = notOrder - r.key
-                            app.repo.prefs.notOrderKeys = notOrder
-                        }) { Text("वापस मंगवाना", fontSize = 12.sp) }
+        OrderPadCard(
+            pad = pad,
+            onRect = { padRect = it },
+            onChange = { savePad(it) },
+            onSend = { brand, rows ->
+                val sid = rows.first().key.substringBefore('|')
+                sharePad(ctx, names[sid]?.mobile ?: "", brand, rows)
+            })
+    }
+}
+
+@Composable
+private fun BrandOrderCard(brand: String, rows: List<OrderRow>, onPad: (OrderRow) -> Unit,
+                           onDrop: (OrderRow, Offset) -> Unit, onSkip: (OrderRow) -> Unit) {
+    var open by remember(brand) { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically) {
+                Text(brand, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("${rows.map { it.article }.distinct().size} आर्टिकल · ${rows.size} साइज़", fontSize = 12.sp)
+            }
+            if (open) {
+                rows.groupBy { srLabel(it.category.ifBlank { "NO CATEGORY" }) }.toSortedMap().forEach { (cat, catRows) ->
+                    Text(cat, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 10.dp))
+                    catRows.groupBy { "${it.article} · ${it.colour}" }.toSortedMap().forEach { (title, aRows) ->
+                        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                        aRows.forEach { r ->
+                            DraggableRow(r.key, onDrop = { onDrop(r, it) }) {
+                                Row(Modifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("size ${r.size} · left ${r.qty}", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = { onPad(r) }) { Text("पैड में", fontSize = 12.sp) }
+                                    TextButton(onClick = { onSkip(r) }) { Text("नहीं मंगवाना", fontSize = 12.sp) }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -159,10 +233,69 @@ fun SupplierOrderScreen(app: App) {
     }
 }
 
-private fun shareOrder(ctx: Context, mobile: String, title: String, rows: List<OrderRow>) {
+/** A row that can be pressed long and dragged. When it is let go, onDrop gets the row's centre on screen. */
+@Composable
+private fun DraggableRow(key: String, onDrop: (Offset) -> Unit, content: @Composable () -> Unit) {
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    var drag by remember { mutableStateOf(Offset.Zero) }
+    var dragging by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { origin = it.positionInRoot(); box = it.size }
+            .offset { IntOffset(drag.x.roundToInt(), drag.y.roundToInt()) }
+            .zIndex(if (dragging) 1f else 0f)
+            .background(if (dragging) Color(0xFFFFE0B2) else Color.Transparent)
+            .pointerInput(key) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { dragging = true; drag = Offset.Zero },
+                    onDrag = { change, amount -> change.consume(); drag += amount },
+                    onDragEnd = {
+                        dragging = false
+                        onDrop(origin + drag + Offset(box.width / 2f, box.height / 2f))
+                        drag = Offset.Zero
+                    },
+                    onDragCancel = { dragging = false; drag = Offset.Zero })
+            }
+    ) { content() }
+}
+
+@Composable
+private fun OrderPadCard(pad: List<PadRow>, onRect: (Rect) -> Unit, onChange: (List<PadRow>) -> Unit,
+                         onSend: (String, List<PadRow>) -> Unit) {
+    Card(
+        Modifier.fillMaxWidth().padding(top = 6.dp).onGloballyPositioned { onRect(it.boundsInRoot()) },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Column(Modifier.padding(10.dp).heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+            Text("ऑर्डर पैड (${pad.size}) · माल यहाँ खींचकर छोड़ें", fontWeight = FontWeight.Bold)
+            if (pad.isEmpty()) Text("अभी खाली है। लिस्ट का माल खींचकर यहाँ छोड़ें।", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            pad.groupBy { it.brand }.toSortedMap().forEach { (brand, rows) ->
+                Text(brand, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                rows.forEach { p ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${srLabel(p.category)} · ${p.article} · ${p.colour} · size ${p.size}", fontSize = 12.sp,
+                            modifier = Modifier.weight(1f))
+                        TextButton(onClick = { onChange(pad.map { if (it.key == p.key) it.copy(qty = (it.qty - 1).coerceAtLeast(1)) else it }) }) { Text("−") }
+                        Text("${p.qty}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        TextButton(onClick = { onChange(pad.map { if (it.key == p.key) it.copy(qty = it.qty + 1) else it }) }) { Text("+") }
+                        TextButton(onClick = { onChange(pad.filter { it.key != p.key }) }) { Text("हटाओ", fontSize = 12.sp) }
+                    }
+                }
+                Button(onClick = { onSend(brand, rows) }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Text("$brand का ऑर्डर भेजो")
+                }
+            }
+        }
+    }
+}
+
+private fun sharePad(ctx: Context, mobile: String, title: String, rows: List<PadRow>) {
     val text = buildString {
-        append("Order list for ").append(title).append("\n")
-        rows.forEach { append("- ${it.article} · ${it.colour} · size ${it.size} (left ${it.qty})\n") }
+        append("Order for ").append(title).append("\n")
+        rows.forEach { append("- ${srLabel(it.category)} · ${it.article} · ${it.colour} · size ${it.size} · qty ${it.qty}\n") }
         append("Shivtej Footwear, Akluj")
     }
     val digits = mobile.filter { it.isDigit() }.takeLast(10)
@@ -170,7 +303,7 @@ private fun shareOrder(ctx: Context, mobile: String, title: String, rows: List<O
         openWhatsApp(ctx, digits, text)
     } else {
         val share = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-        ctx.startActivity(Intent.createChooser(share, "Send order list").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        ctx.startActivity(Intent.createChooser(share, "Send order").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
 

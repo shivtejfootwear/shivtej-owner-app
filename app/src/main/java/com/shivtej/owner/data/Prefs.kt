@@ -171,6 +171,9 @@ class Prefs(ctx: Context) {
     var notOrderKeys: Set<String>       // supplier order list: pieces the owner chose NOT to order (supplier|article|colour|size)
         get() = sp.getStringSet("supplier_not_order", emptySet())?.toSet() ?: emptySet()
         set(v) = sp.edit().putStringSet("supplier_not_order", v).apply()
+    var orderPad: String                // supplier order pad: lines of key, brand, category, article, colour, size, qty (separated by \u001F)
+        get() = sp.getString("supplier_order_pad", "") ?: ""
+        set(v) = sp.edit().putString("supplier_order_pad", v).apply()
     var categoryList: String            // product categories in the dropdown order, as comma separated names (permanent)
         get() = sp.getString("category_list", DEFAULT_CATEGORIES) ?: DEFAULT_CATEGORIES
         set(v) = sp.edit().putString("category_list", v).apply()
