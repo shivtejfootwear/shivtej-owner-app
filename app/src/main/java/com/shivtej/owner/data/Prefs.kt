@@ -168,6 +168,9 @@ class Prefs(ctx: Context) {
     var customBgArgb: Int               // background colour of the "custom" theme (white by default)
         get() = sp.getInt("custom_bg", -1)
         set(v) = sp.edit().putInt("custom_bg", v).apply()
+    var qtyFromBarcodesFixed: Boolean   // one-time repair done: sizes with barcodes but qty 0 got qty from their barcodes
+        get() = sp.getBoolean("qty_barcode_fix_v1", false)
+        set(v) = sp.edit().putBoolean("qty_barcode_fix_v1", v).apply()
     var notOrderKeys: Set<String>       // supplier order list: pieces the owner chose NOT to order (supplier|article|colour|size)
         get() = sp.getStringSet("supplier_not_order", emptySet())?.toSet() ?: emptySet()
         set(v) = sp.edit().putStringSet("supplier_not_order", v).apply()

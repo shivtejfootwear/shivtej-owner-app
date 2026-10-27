@@ -67,6 +67,11 @@ class App : Application() {
         repo.onChanged = { sync.kick() }
         if (dbRefusal == null) {
             SyncWorker.schedule(this)
+            // one-time repair of old stock: scanned barcodes count as pieces when the qty was never typed
+            if (!prefs.qtyFromBarcodesFixed) scope.launch {
+                runCatching { repo.fixQtyFromBarcodes() }
+                prefs.qtyFromBarcodesFixed = true
+            }
             scope.launch { net.online.collect { if (it) sync.kick() } }
             // task reminders: make sure every open task with a future time still has its reminder (also after a restore)
             Reminders.ensureChannel(this)

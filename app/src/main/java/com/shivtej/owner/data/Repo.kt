@@ -250,6 +250,22 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             .put("videos", JSONArray(p.videos))
     }
 
+    /** One-time repair: a size that has scanned barcodes but qty 0 (or less) gets qty = number of its barcodes. Returns sizes fixed. */
+    suspend fun fixQtyFromBarcodes(): Int {
+        var fixed = 0
+        for (p in products.first()) {
+            var changed = false
+            val variants = p.variants.map { v ->
+                v.copy(sizes = v.sizes.map { s ->
+                    val codes = s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }
+                    if (codes.size > s.qty) { changed = true; fixed++; s.copy(qty = codes.size) } else s
+                })
+            }
+            if (changed) runCatching { saveProduct(p.copy(variants = variants), isNew = false) }
+        }
+        return fixed
+    }
+
     suspend fun saveProduct(p0: Product, isNew: Boolean) {
         // all English names are saved in CAPITAL letters (Hindi stays as it is); the Men / Ladies category is not changed
         val p = p0.copy(article = capName(p0.article), brand = capName(p0.brand), productType = capName(p0.productType), category = capName(p0.category),
