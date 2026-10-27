@@ -56,6 +56,7 @@ fun CategoryDialog(app: App, products: List<Product>, onDismiss: () -> Unit) {
     val expanded = remember { mutableStateListOf<String>() }
     val selected = remember { mutableStateListOf<String>() }
     var dlg by remember { mutableStateOf<CatDlg?>(null) }
+    var openCat by remember { mutableStateOf<Pair<String, String>?>(null) }   // type + category whose products are shown
 
     fun saveTree() { scope.launch { app.repo.saveCategoryTree(tree.toList()) } }
 
@@ -73,6 +74,39 @@ fun CategoryDialog(app: App, products: List<Product>, onDismiss: () -> Unit) {
 
     val notIn = products.filter { it.subCategory.isBlank() }.sortedBy { it.article }
     val picked = products.filter { it.id in selected }
+
+    // the products of one category (tap a category row)
+    openCat?.let { (type, cat) ->
+        val list = products.filter { it.productType == type && it.subCategory == cat }.sortedBy { it.article }
+        Dialog(onDismissRequest = { openCat = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { openCat = null }) { Icon(Icons.Filled.ArrowBack, "Back") }
+                        Column(Modifier.weight(1f)) {
+                            Text(cat, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+                            Text("$type · ${list.size} प्रोडक्ट", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (list.isEmpty()) Text("इस कैटेगरी में अभी कोई प्रोडक्ट नहीं है।", fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
+                    LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(list.chunked(3), key = { row -> row.joinToString(",") { it.id } }) { row ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { p ->
+                                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Thumb(p.allImages.firstOrNull(), 100.dp)
+                                        Text(p.article, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                    }
+                                }
+                                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -104,7 +138,7 @@ fun CategoryDialog(app: App, products: List<Product>, onDismiss: () -> Unit) {
                                 if (open) {
                                     t.cats.forEach { c ->
                                         val n = products.count { it.productType == t.name && it.subCategory == c }
-                                        Row(Modifier.fillMaxWidth().padding(start = 30.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Row(Modifier.fillMaxWidth().padding(start = 30.dp).clickable { openCat = t.name to c }, verticalAlignment = Alignment.CenterVertically) {
                                             Text(c, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                                             Text("$n", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             IconButton(onClick = { dlg = CatDlg.RenameCat(t.name, c) }) { Icon(Icons.Filled.Edit, "Rename category") }

@@ -259,6 +259,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         require(p.price > 0) { "Selling price must be more than 0" }
         require(p.variants.isNotEmpty()) { "Add at least one colour" }
         require(p.variants.map { it.colour.trim().lowercase() }.toSet().size == p.variants.size) { "Duplicate colour names" }
+        rememberCategories(listOf(p.productType to p.subCategory))
         val seen = HashSet<String>()
         for (v in p.variants) {
             require(v.colour.isNotBlank()) { "Colour name is required" }
@@ -1173,6 +1174,33 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     // ---------------------------------------------------------- categories under product types (update 24)
     fun categoryTree(): List<CatType> =
         if (prefs.categoryTreeJson.isBlank()) CategoryTree.defaults() else CategoryTree.parse(prefs.categoryTreeJson)
+
+    /** A product type / category typed on a product is added to the list (CATEGORY box and suggestions). */
+    suspend fun rememberCategories(pairs: List<Pair<String, String>>) {
+        val list = categoryTree().toMutableList()
+        var changed = false
+        for ((t0, c0) in pairs) {
+            val t = capName(t0)
+            val c = capName(c0)
+            if (t.isEmpty()) continue
+            val i = list.indexOfFirst { it.name.equals(t, ignoreCase = true) }
+            if (i < 0) {
+                list.add(CatType(t, if (c.isEmpty()) emptyList() else listOf(c)))
+                changed = true
+            } else if (c.isNotEmpty() && list[i].cats.none { it.equals(c, ignoreCase = true) }) {
+                list[i] = list[i].copy(cats = list[i].cats + c)
+                changed = true
+            }
+        }
+        if (changed) saveCategoryTree(list)
+    }
+
+    /** Once: the types and categories of products saved before this update are added to the list. */
+    suspend fun mergeCategoriesOnce() {
+        if (prefs.categoryMergedV1) return
+        rememberCategories(dao.allProducts().map { it.productType to it.subCategory })
+        prefs.categoryMergedV1 = true
+    }
 
     /** Saves the product types with their categories on this phone and queues them for the server (SAVE_CATEGORY_TREE). */
     suspend fun saveCategoryTree(list: List<CatType>) {

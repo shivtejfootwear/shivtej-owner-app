@@ -219,6 +219,9 @@ class Prefs(ctx: Context) {
     var categoryTreeJson: String
         get() = sp.getString("category_tree", "") ?: ""
         set(v) = sp.edit().putString("category_tree", v).apply()
+    var categoryMergedV1: Boolean
+        get() = sp.getBoolean("category_merged_v1", false)
+        set(v) = sp.edit().putBoolean("category_merged_v1", v).apply()
     var categoryTreeEditedAt: Long
         get() = sp.getLong("category_tree_edited_at", 0L)
         set(v) = sp.edit().putLong("category_tree_edited_at", v).apply()

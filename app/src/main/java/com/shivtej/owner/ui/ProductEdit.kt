@@ -132,7 +132,7 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     val withCamera = rememberWithCamera()
     var brandList by remember { mutableStateOf<List<String>>(emptyList()) }
     var typeList by remember { mutableStateOf<List<String>>(PRODUCT_TYPE_START) }
-    val categoryTree = remember { app.repo.categoryTree() }
+    val categoryTree = app.repo.categoryTree()   // read again on every change, so a new category shows at once
     var articleList by remember { mutableStateOf<List<String>>(emptyList()) }
     var colourList by remember { mutableStateOf<List<String>>(COLOUR_START) }
     var categories by remember { mutableStateOf(categoriesFrom(app.repo.prefs.categoryList)) }
@@ -147,10 +147,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
     }
     LaunchedEffect(Unit) {
         brandList = app.repo.knownBrands()
-        typeList = app.repo.knownProductTypes()
+        typeList = (app.repo.knownProductTypes() + app.repo.categoryTree().map { it.name }).distinctBy { it.lowercase() }
         articleList = app.repo.knownArticles()
         colourList = (COLOUR_START + app.repo.products.first().flatMap { p -> p.variants.map { it.colour.trim() } })
-            .filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+            .map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct()
     }
 
     // ---- image pickers
@@ -432,14 +432,17 @@ internal fun Field(
 internal fun isScannedCode(t: String): Boolean = t.length >= 8 && t.none { it.isWhitespace() } && t.any { it.isDigit() }
 
 /** Colours offered while typing; the colours already saved on products are added to these. */
-private val COLOUR_START = listOf("Black", "Brown", "Tan", "Olive", "White", "Navy", "Blue", "Red", "Maroon", "Grey", "Beige", "Green", "Cream", "Mustard", "Pink", "Orange", "Yellow", "Purple")
+private val COLOUR_START = listOf("BLACK", "BROWN", "TAN", "OLIVE", "WHITE", "NAVY", "BLUE", "RED", "MAROON", "GREY", "BEIGE", "GREEN", "CREAM", "MUSTARD", "PINK", "ORANGE", "YELLOW", "PURPLE", "LAVENDER", "WINE", "D.BRN", "W.CREAM")
 
 /** Suggestions while typing: saved values that start with what is typed (then those that contain it). Tap one to fill the field. */
 internal fun suggestionsFor(typed: String, known: List<String>): List<String> {
     val q = typed.trim().lowercase()
     if (q.isEmpty()) return emptyList()
-    return (known.filter { it.lowercase().startsWith(q) } + known.filter { it.lowercase().contains(q) && !it.lowercase().startsWith(q) })
-        .filter { it.lowercase() != q }.distinct().take(8)
+    fun words(s: String) = s.lowercase().split(' ', '-', '/', '(', ')', '.').filter { it.isNotEmpty() }
+    val start = known.filter { it.lowercase().startsWith(q) }
+    val word = known.filter { k -> !k.lowercase().startsWith(q) && words(k).any { it.startsWith(q) } }
+    val contains = known.filter { k -> !k.lowercase().startsWith(q) && words(k).none { it.startsWith(q) } && k.lowercase().contains(q) }
+    return (start + word + contains).filter { it.lowercase() != q }.distinct().take(8)
 }
 
 /** A text field with its suggestion list under it. Nothing is forced: after a tap the text can still be changed (2001 to 2002). */
@@ -470,24 +473,12 @@ private fun BrandField(value: String, known: List<String>, onChange: (String) ->
 private fun ArticleField(value: String, known: List<String>, onChange: (String) -> Unit) =
     SuggestField("Article *", value, suggestionsFor(value, known), onChange)
 
-/** Latin spellings that also find the Hindi starter types (typing "chappal" suggests चप्पल). The Hindi name is what gets saved. */
-private val TYPE_ALIASES = mapOf(
-    "चप्पल" to "chappal chapal slipper",
-    "सैंडल" to "sandal sandle",
-    "शूज़" to "shoe shoes",
-    "लोफर" to "loafer loafers",
-    "फ्लिप फ्लॉप" to "flip flop flipflop",
-    "क्रॉप्स" to "crocs croc"
-)
-
 /** Product type (चप्पल, सैंडल, शूज़ ...): saved types and the starter types, also found by their Latin spelling. */
 @Composable
 private fun TypeField(value: String, known: List<String>, onChange: (String) -> Unit) {
-    val q = value.trim().lowercase()
-    val viaAlias = if (q.isEmpty()) emptyList() else known.filter { t ->
-        TYPE_ALIASES[t]?.let { alias -> alias.startsWith(q) || alias.split(" ").any { it.startsWith(q) } } == true
-    }
-    val matches = (suggestionsFor(value, known) + viaAlias).distinct().filter { it.lowercase() != q }.take(8)
+    // suggestions are English only (the Hindi / Marathi starter names are not offered)
+    val english = known.filter { t -> t.none { it in '\u0900'..'\u097F' } }
+    val matches = suggestionsFor(value, english)
     SuggestField("Product type (चप्पल / सैंडल / शूज़ ...)", value, matches, onChange)
 }
 
@@ -496,7 +487,7 @@ private fun TypeField(value: String, known: List<String>, onChange: (String) -> 
 private fun SubCategoryField(type: String, value: String, tree: List<CatType>, onChange: (String) -> Unit) {
     val cats = tree.firstOrNull { it.name == type.trim() }?.cats ?: emptyList()
     val q = value.trim().lowercase()
-    val matches = cats.filter { it.lowercase() != q && (q.isEmpty() || it.lowercase().contains(q)) }.take(8)
+    val matches = if (q.isEmpty()) cats.take(8) else suggestionsFor(value, cats)
     SuggestField("Category (under the product type)", value, matches) { onChange(it.uppercase()) }
 }
 

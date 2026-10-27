@@ -49,6 +49,7 @@ fun ProductsScreen(app: App, nav: Nav, initialFilter: String) {
     var filter by remember { mutableStateOf(initialFilter) }
     var sizeFilter by remember { mutableStateOf("all") }
     var showCategories by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { app.repo.mergeCategoriesOnce() }
     val low = app.prefs.lowThreshold
     val allSizes = remember(products) { products.flatMap { p -> p.variants.flatMap { v -> v.sizes.map { it.size } } }
         .distinct().sortedBy { it.toDoubleOrNull() ?: 9999.0 } }
