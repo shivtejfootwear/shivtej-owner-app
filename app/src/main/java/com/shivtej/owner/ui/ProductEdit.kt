@@ -264,34 +264,17 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                     Spacer(Modifier.height(8.dp))
                     Text("Sizes", fontWeight = FontWeight.SemiBold)
                     // a scanned piece is added to the size whose scan box has the focus; no button press needed
-                    /** The size after this one (wrapping around) that still needs pieces, or null when every size is full. */
-                    fun nextOpenSize(after: SizeDraft): SizeDraft? {
-                        val rest = v.sizes.dropWhile { it !== after }.drop(1) + v.sizes.takeWhile { it !== after }
-                        return rest.firstOrNull { (it.qty.toIntOrNull() ?: 0) > it.codes.size }
-                    }
                     // puts the cursor back on this size's scan box, so the next piece goes to the same size
                     fun keepHere(size: SizeDraft) { runCatching { size.scanFocus.requestFocus() } }
                     fun acceptScan(size: SizeDraft, code: String) {
                         size.scanText = ""
                         if (code.isEmpty()) return
-                        val want = size.qty.toIntOrNull() ?: 0
-                        if (want > 0 && size.codes.size >= want) {
-                            // this size already has all its pieces: the code goes to the next size that still needs one
-                            val next = nextOpenSize(size)
-                            if (next == null) toast(ctx, "All pieces are already scanned")
-                            else acceptScan(next, code)
-                            return
-                        }
                         if (size.codes.contains(code)) { toast(ctx, "This barcode is already on this size"); keepHere(size); return }
                         if (draft.takenCodes().contains(code)) { toast(ctx, "This barcode is already used on this product"); keepHere(size); return }
                         size.codes.add(code)
-                        if (want > 0 && size.codes.size >= want) {
-                            // all pieces of this size are in: the scanner moves on to the next size (in list order) by itself
-                            nextOpenSize(size)?.let { next -> runCatching { next.scanFocus.requestFocus() } }
-                        } else {
-                            // not full yet: stay on this size until all its pieces are scanned
-                            keepHere(size)
-                        }
+                        // every scan adds one piece to this size's quantity by itself
+                        size.qty = ((size.qty.toIntOrNull() ?: 0) + 1).toString()
+                        keepHere(size)
                     }
                     v.sizes.forEach { s ->
                         Column(Modifier.padding(top = 6.dp)) {
@@ -410,7 +393,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
             when {
                 c.isEmpty() -> Unit
                 s.codes.contains(c) -> toast(ctx, "This barcode is already on this size")
-                else -> s.codes.add(c)
+                else -> {
+                    s.codes.add(c)
+                    s.qty = ((s.qty.toIntOrNull() ?: 0) + 1).toString()
+                }
             }
             scanTarget = null
         }, onDismiss = { scanTarget = null })
