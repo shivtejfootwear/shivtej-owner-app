@@ -77,24 +77,40 @@ private fun colourOf(name: String): Color = Color(COLOUR_HEX[name.trim().lowerca
 @Composable
 fun CatalogScreen(store: Store, staffName: String, onMakeBill: () -> Unit, onClosed: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var products by remember { mutableStateOf<List<SProduct>?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    // the saved catalog shows at once (no waiting); the server copy replaces it when it arrives
+    var products by remember { mutableStateOf<List<SProduct>?>(Offline.loadCatalog(ctx)) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
 
-    fun load() {
+    /** silent = the automatic update every minute: no progress bar, and no error over a shown catalog. */
+    fun load(silent: Boolean = false) {
         val t = store.token ?: return onClosed()
-        loading = true; loadError = null
+        if (busy) return
+        busy = true; loading = !silent; loadError = null
         scope.launch {
             try {
-                products = withContext(Dispatchers.IO) { parseCatalog(Api.catalog(t, store.deviceId)) }
+                val list = Offline.refresh(ctx, t, store.deviceId)
+                products = list
+                launch { Offline.syncPhotos(ctx, list) } // new photos download in the background
             } catch (e: NotAllowed) {
                 onClosed()
             } catch (e: Exception) {
-                loadError = "Catalog नहीं खुला। ऊपर ⟳ दबाएँ।\n(${(e.message ?: "unknown").take(140)})"
-            } finally { loading = false }
+                if (products == null) loadError = "Catalog नहीं खुला। ऊपर ⟳ दबाएँ।\n(${(e.message ?: "unknown").take(140)})"
+            } finally { loading = false; busy = false }
         }
     }
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(Unit) {
+        Offline.schedule(ctx) // background update while the app is closed
+        products?.let { launch { Offline.syncPhotos(ctx, it) } }
+        load()
+        // new products and photos come in by themselves while the catalog is open
+        while (true) {
+            kotlinx.coroutines.delay(60_000)
+            load(silent = true)
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(PanelBg)) {
         var menu by remember { mutableStateOf(false) }
@@ -338,13 +354,17 @@ private fun ColourDot(name: String, sizeDp: Int) {
     Box(Modifier.size(sizeDp.dp).clip(CircleShape).background(colourOf(name)).border(1.dp, Color(0x33000000), CircleShape))
 }
 
-/** A product photo. Photos in the private B2 bucket get a signed link first. */
+/** A product photo. A photo saved on the phone shows at once; otherwise a signed link is used (and it downloads in the background). */
 @Composable
 private fun Photo(productId: String, src: String?, modifier: Modifier) {
-    val model by produceState<String?>(null, src) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val version by Offline.photosVersion.collectAsState()
+    val model by produceState<Any?>(null, src, version) {
         value = when {
             src == null -> null
-            src.startsWith("products/") -> withContext(Dispatchers.IO) { Api.photoUrl(productId, src) }
+            src.startsWith("products/") -> withContext(Dispatchers.IO) {
+                Offline.photoFile(ctx, src) ?: value ?: Api.photoUrl(productId, src)
+            }
             src.startsWith("http") -> src
             else -> null
         }

@@ -11,6 +11,11 @@
 //     in the products table. Otherwise nothing is signed.
 //   - No owner code: the website shows product photos to customers. Each URL works for one file
 //     and expires after one hour.
+//   - Daily cap fix (2026-10-28): the link is now signed HERE with the S3-compatible signature
+//     (no Backblaze call per photo). Backblaze is asked only once per server start
+//     (b2_authorize_account, to learn the S3 address and check the key). Before this, every photo
+//     link used 2 "Class C" calls and the free daily cap (2,500) ran out.
+//     If the S3 address is not available, the old way (b2_get_download_authorization) is used.
 //
 // Secrets (Supabase Dashboard > Edge Functions > Secrets, never in code):
 //   B2_KEY_ID            - Backblaze Application Key ID (keyId)
@@ -56,7 +61,9 @@ async function productLinksFile(productId: string, file: string): Promise<boolea
   return JSON.stringify(rows[0]).includes(`"${file}"`);
 }
 
-async function b2Authorize(): Promise<{ authorizationToken: string; apiUrl: string; downloadUrl: string }> {
+type B2Auth = { authorizationToken: string; apiUrl: string; downloadUrl: string; s3ApiUrl: string };
+
+async function b2Authorize(): Promise<B2Auth> {
   const basic = btoa(`${B2_KEY_ID}:${B2_APPLICATION_KEY}`);
   const r = await fetch("https://api.backblazeb2.com/b2api/v4/b2_authorize_account", {
     headers: { Authorization: `Basic ${basic}` },
@@ -79,11 +86,66 @@ async function b2Authorize(): Promise<{ authorizationToken: string; apiUrl: stri
     authorizationToken: data.authorizationToken,
     apiUrl: storage.apiUrl,
     downloadUrl: storage.downloadUrl,
+    s3ApiUrl: typeof storage.s3ApiUrl === "string" ? storage.s3ApiUrl : "",
   };
 }
 
+// The authorization is kept in memory while this server copy runs (B2 tokens last 24 hours;
+// it is renewed after 20 hours). So Backblaze is not asked again for every photo.
+let cachedAuth: { auth: B2Auth; until: number } | null = null;
+async function getAuth(): Promise<B2Auth> {
+  const now = Date.now();
+  if (cachedAuth && now < cachedAuth.until) return cachedAuth.auth;
+  const auth = await b2Authorize();
+  cachedAuth = { auth, until: now + 20 * 3600 * 1000 };
+  return auth;
+}
+
+// ---- S3-compatible signed GET link (AWS Signature V4, query string). Made here, no call to Backblaze. ----
+const enc = new TextEncoder();
+const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+async function sha256Hex(s: string): Promise<string> {
+  return hex(await crypto.subtle.digest("SHA-256", enc.encode(s)));
+}
+async function hmac(key: string | Uint8Array, s: string): Promise<Uint8Array> {
+  const k = await crypto.subtle.importKey(
+    "raw", typeof key === "string" ? enc.encode(key) : key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, enc.encode(s)));
+}
+const rfc3986 = (s: string) =>
+  encodeURIComponent(s).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+
+// s3ApiUrl looks like https://s3.us-west-004.backblazeb2.com ; the region is the part after "s3.".
+async function s3SignedUrl(s3ApiUrl: string, file: string): Promise<string | null> {
+  const host = s3ApiUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const m = host.match(/^s3\.([a-z0-9-]+)\.backblazeb2\.com$/);
+  if (!m) return null;
+  const region = m[1];
+  const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const day = amzDate.slice(0, 8);
+  const scope = `${day}/${region}/s3/aws4_request`;
+  const q: Record<string, string> = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${B2_KEY_ID}/${scope}`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(URL_SECONDS),
+    "X-Amz-SignedHeaders": "host",
+  };
+  const query = Object.keys(q).sort().map((k) => `${rfc3986(k)}=${rfc3986(q[k])}`).join("&");
+  const path = "/" + [B2_BUCKET_NAME, ...file.split("/")].map(rfc3986).join("/");
+  const canon = `GET\n${path}\n${query}\nhost:${host}\n\nhost\nUNSIGNED-PAYLOAD`;
+  const toSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256Hex(canon)}`;
+  let k = await hmac("AWS4" + B2_APPLICATION_KEY, day);
+  k = await hmac(k, region);
+  k = await hmac(k, "s3");
+  k = await hmac(k, "aws4_request");
+  const sig = hex((await hmac(k, toSign)).buffer as ArrayBuffer);
+  return `https://${host}${path}?${query}&X-Amz-Signature=${sig}`;
+}
+
 // Download token that works for exactly one file name (the prefix is the full name) for URL_SECONDS.
-async function b2DownloadToken(auth: { authorizationToken: string; apiUrl: string }, file: string): Promise<string> {
+async function b2DownloadToken(auth: B2Auth, file: string): Promise<string> {
   const r = await fetch(`${auth.apiUrl}/b2api/v4/b2_get_download_authorization`, {
     method: "POST",
     headers: { Authorization: auth.authorizationToken, "Content-Type": "application/json" },
@@ -120,16 +182,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // Verify BEFORE signing: the file must belong to this product.
     if (!(await productLinksFile(productId, file))) return json(404, { error: "NOT_FOUND" });
 
-    const auth = await b2Authorize();
-    const token = await b2DownloadToken(auth, file);
+    const auth = await getAuth();
 
-    const path = file.split("/").map(encodeURIComponent).join("/");
-    const url = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${path}?Authorization=${encodeURIComponent(token)}`;
+    // New way: signed here, no Backblaze call. Old way only if the S3 address is missing.
+    let url = auth.s3ApiUrl ? await s3SignedUrl(auth.s3ApiUrl, file) : null;
+    if (!url) {
+      const token = await b2DownloadToken(auth, file);
+      const path = file.split("/").map(encodeURIComponent).join("/");
+      url = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${path}?Authorization=${encodeURIComponent(token)}`;
+    }
 
     return json(200, { url, expires_in: URL_SECONDS }, { "Cache-Control": "private, max-age=1800" });
   } catch (e) {
     // Never return B2 or database internals to the browser; log them on the server only.
     console.error("b2-media-url error:", (e as Error).message);
+    cachedAuth = null; // a bad or expired token is not kept
     return json(502, { error: "MEDIA_URL_FAILED" });
   }
 });

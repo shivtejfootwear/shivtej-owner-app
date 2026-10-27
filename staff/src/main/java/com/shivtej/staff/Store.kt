@@ -71,6 +71,7 @@ class Store(ctx: Context) {
         sp.edit().remove("token").remove("name").apply()
         if (closedByOwner) closedNote = true
         runCatching { File(app.cacheDir, "image_cache").deleteRecursively() }
+        Offline.clear(app) // the saved catalog and photos are deleted too
     }
 
     companion object {
