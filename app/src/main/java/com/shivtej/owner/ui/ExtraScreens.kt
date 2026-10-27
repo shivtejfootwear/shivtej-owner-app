@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -30,7 +31,10 @@ import java.util.Date
 import java.util.Locale
 
 /** A piece that is low on stock, with the supplier it was last bought from ("" = no purchase bill has it). */
-private data class OrderRow(val supplierId: String, val article: String, val colour: String, val size: String, val qty: Int)
+private data class OrderRow(val supplierId: String, val article: String, val colour: String, val size: String, val qty: Int) {
+    /** same key for the same piece every time (used for the "do not order" list) */
+    val key: String get() = "$supplierId|${article.trim().lowercase()}|${colour.trim().lowercase()}|$size"
+}
 
 /** Pieces with this many or fewer left are put on the supplier order list. */
 private const val LOW_STOCK_LIMIT = 1
@@ -75,8 +79,8 @@ fun SupplierOrderScreen(app: App) {
     val purchases by app.repo.purchases.collectAsStateWithLifecycle(emptyList())
     val suppliers by app.repo.suppliers.collectAsStateWithLifecycle(emptyList())
     val names = suppliers.associateBy { it.id }
-    val groups = remember(products, purchases) {
-        // the supplier of an article = the supplier on its newest purchase bill
+    // every low-stock piece, with the supplier of its newest purchase bill
+    val allRows = remember(products, purchases) {
         val lastSupplier = HashMap<String, String>()
         purchases.sortedByDescending { it.billDate }.forEach { b ->
             parsePurchaseLines(b.itemsJson).forEach { l ->
@@ -93,27 +97,62 @@ fun SupplierOrderScreen(app: App) {
                 }
             }
         }
-        rows.groupBy { it.supplierId }
+        rows
     }
+    // pieces the owner chose NOT to order (kept on this phone)
+    var notOrder by remember { mutableStateOf(app.repo.prefs.notOrderKeys) }
+    val toOrder = allRows.filter { it.key !in notOrder }
+    val skipped = allRows.filter { it.key in notOrder }
+    val groups = toOrder.groupBy { it.supplierId }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-        Text("Pieces with $LOW_STOCK_LIMIT or less left, grouped by the supplier of their newest purchase bill. Send each list to the supplier in one tap.",
+        Text("Pieces with $LOW_STOCK_LIMIT or less left, company wise. Open a company to see its articles and the sizes to order. \"नहीं मंगवाना\" removes a piece from the order list.",
             fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (groups.isEmpty()) EmptyState("No item is low on stock right now.")
         groups.toList().sortedBy { (sid, _) -> names[sid]?.name ?: "~" }.forEach { (sid, list) ->
             val sup = names[sid]
             val title = sup?.name ?: "Supplier not set (no purchase bill has these items)"
+            var expanded by remember(sid) { mutableStateOf(false) }
             Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 Column(Modifier.padding(12.dp)) {
-                    Text(title, fontWeight = FontWeight.Bold)
-                    if (sup != null && sup.mobile.isNotBlank()) Text("Mobile: " + sup.mobile, fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    list.forEach { r ->
-                        Text("${r.article} · ${r.colour} · size ${r.size} · left ${r.qty}", fontSize = 13.sp,
-                            modifier = Modifier.padding(top = 3.dp))
+                    Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+                        Text(title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text("${list.map { it.article }.distinct().size} articles", fontSize = 12.sp)
                     }
-                    Button(onClick = { shareOrder(ctx, sup?.mobile ?: "", title, list) },
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Send order list") }
+                    if (expanded) {
+                        if (sup != null && sup.mobile.isNotBlank()) Text("Mobile: " + sup.mobile, fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        list.groupBy { it.article }.toSortedMap().forEach { (article, rows) ->
+                            Text(article, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+                            rows.forEach { r ->
+                                Row(Modifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${r.colour} · size ${r.size} · left ${r.qty}", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = {
+                                        notOrder = notOrder + r.key
+                                        app.repo.prefs.notOrderKeys = notOrder
+                                    }) { Text("नहीं मंगवाना", fontSize = 12.sp) }
+                                }
+                            }
+                        }
+                        Button(onClick = { shareOrder(ctx, sup?.mobile ?: "", title, list) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Send order list") }
+                    }
+                }
+            }
+        }
+        Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            Column(Modifier.padding(12.dp)) {
+                Text("नहीं मंगवाने की लिस्ट (${skipped.size})", fontWeight = FontWeight.Bold)
+                Text("यह सप्लायर को नहीं जाएगी। वापस लाने पर फिर से मंगवाने की लिस्ट में आएगी।", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                skipped.forEach { r ->
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${r.article} · ${r.colour} · size ${r.size}", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = {
+                            notOrder = notOrder - r.key
+                            app.repo.prefs.notOrderKeys = notOrder
+                        }) { Text("वापस मंगवाना", fontSize = 12.sp) }
+                    }
                 }
             }
         }
