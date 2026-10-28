@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -109,6 +111,18 @@ object Offline {
     }
 
     private const val WORK = "catalog-sync"
+
+    /** Downloads the full catalog and all photos now, in the background (after login, install update or phone restart). */
+    fun syncNow(ctx: Context) {
+        schedule(ctx)
+        runCatching {
+            val req = OneTimeWorkRequestBuilder<CatalogSyncWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build()
+            WorkManager.getInstance(ctx.applicationContext)
+                .enqueueUniqueWork("$WORK-now", ExistingWorkPolicy.REPLACE, req)
+        }
+    }
 
     /** Starts the background update (about every 15 minutes, only with internet). Safe to call many times. */
     fun schedule(ctx: Context) {

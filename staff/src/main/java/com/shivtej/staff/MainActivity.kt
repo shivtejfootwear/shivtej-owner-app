@@ -115,7 +115,7 @@ fun StaffApp() {
 
     when {
         // no consent / warning screen: the app opens straight to the mobile-number + code login
-        token == null -> LoginScreen(store) { t, n -> store.token = t; store.name = n; name = n; token = t; LocationService.start(ctx) }
+        token == null -> LoginScreen(store) { t, n -> store.token = t; store.name = n; name = n; token = t; LocationService.start(ctx); Offline.syncNow(ctx) }
         !perm -> PermissionScreen { perm = LocationService.hasPrecise(ctx); LocationService.start(ctx) }
         !gps -> GpsOffScreen()
         else -> {
