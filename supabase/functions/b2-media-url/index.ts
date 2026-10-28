@@ -125,14 +125,18 @@ async function s3SignedUrl(s3ApiUrl: string, file: string): Promise<string | nul
   const m = host.match(/^s3\.([a-z0-9-]+)\.backblazeb2\.com$/);
   if (!m) return null;
   const region = m[1];
-  const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  // The sign time is rounded down to the hour and the link lasts 2 hours, so for one hour every
+  // visitor gets the SAME link for a photo. The browser then keeps the photo in its cache and shows it
+  // at once on the next visit (faster, and fewer downloads from Backblaze). At least 1 hour is always left.
+  const hourStart = new Date(Math.floor(Date.now() / 3600000) * 3600000);
+  const amzDate = hourStart.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const day = amzDate.slice(0, 8);
   const scope = `${day}/${region}/s3/aws4_request`;
   const q: Record<string, string> = {
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
     "X-Amz-Credential": `${B2_KEY_ID}/${scope}`,
     "X-Amz-Date": amzDate,
-    "X-Amz-Expires": String(URL_SECONDS),
+    "X-Amz-Expires": String(URL_SECONDS * 2),
     "X-Amz-SignedHeaders": "host",
   };
   const query = Object.keys(q).sort().map((k) => `${rfc3986(k)}=${rfc3986(q[k])}`).join("&");
