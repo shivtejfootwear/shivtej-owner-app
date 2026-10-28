@@ -29,6 +29,9 @@ const B2_KEY_ID = Deno.env.get("B2_KEY_ID") ?? "";
 const B2_APPLICATION_KEY = Deno.env.get("B2_APPLICATION_KEY") ?? "";
 const B2_BUCKET_ID = Deno.env.get("B2_BUCKET_ID") ?? "";
 const B2_BUCKET_NAME = "shivtej-footwear-media"; // not a secret; used in the download path
+// Optional (not secret): the bucket's S3 Endpoint from the Backblaze Buckets page,
+// e.g. s3.us-east-005.backblazeb2.com . When it is set, NO Backblaze API call is made at all.
+const B2_S3_ENDPOINT = (Deno.env.get("B2_S3_ENDPOINT") ?? "").trim();
 
 const URL_SECONDS = 3600;
 const PRODUCT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -182,10 +185,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // Verify BEFORE signing: the file must belong to this product.
     if (!(await productLinksFile(productId, file))) return json(404, { error: "NOT_FOUND" });
 
-    const auth = await getAuth();
+    // Best way: endpoint secret set -> signed here with zero Backblaze calls.
+    let url = B2_S3_ENDPOINT ? await s3SignedUrl(B2_S3_ENDPOINT, file) : null;
+    if (url) return json(200, { url, expires_in: URL_SECONDS }, { "Cache-Control": "private, max-age=1800" });
 
-    // New way: signed here, no Backblaze call. Old way only if the S3 address is missing.
-    let url = auth.s3ApiUrl ? await s3SignedUrl(auth.s3ApiUrl, file) : null;
+    const auth = await getAuth();
+    // Next: signed here after one authorize per server copy. Old way only if the S3 address is missing.
+    url = auth.s3ApiUrl ? await s3SignedUrl(auth.s3ApiUrl, file) : null;
     if (!url) {
       const token = await b2DownloadToken(auth, file);
       const path = file.split("/").map(encodeURIComponent).join("/");
