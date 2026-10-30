@@ -202,6 +202,8 @@ fun ReportsScreen(app: App, nav: Nav) {
     val products by app.repo.products.collectAsStateWithLifecycle(emptyList())
     val returns by app.repo.returns.collectAsStateWithLifecycle(emptyList())
     var period by remember { mutableStateOf("today") }
+    // which report is open: (kind, value). null = the summary.
+    var detail by remember { mutableStateOf<Pair<String, String>?>(null) }
     val fmt = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
 
     val from = when (period) {
@@ -217,13 +219,92 @@ fun ReportsScreen(app: App, nav: Nav) {
     val rets = returns.filter { it.createdAt >= from && it.status != "REJECTED" }
     val refunds = rets.sumOf { it.refund }
     val byMethod = b.groupBy { it.method }.mapValues { e -> e.value.sumOf { it.total } }
-    val sold = b.flatMap { parseBillItems(it.itemsJson) }
-        .groupBy { it.article + "|" + it.name }
-        .map { (k, v) -> Triple(k.substringAfter("|") + " (" + k.substringBefore("|") + ")", v.sumOf { it.qty }, v.sumOf { it.qty * it.price }) }
+    // best sellers: key = "article|name"
+    val soldGroups = b.flatMap { bl -> parseBillItems(bl.itemsJson).map { bl to it } }
+        .groupBy { it.second.article + "|" + it.second.name }
+    val sold = soldGroups.map { (k, v) -> Triple(k, v.sumOf { it.second.qty }, v.sumOf { it.second.qty * it.second.price }) }
         .sortedByDescending { it.second }.take(10)
     val low = app.prefs.lowThreshold
     val lowList = products.flatMap { p -> p.variants.flatMap { v -> v.sizes.filter { it.qty <= low }.map { Triple(p, v, it) } } }
         .sortedBy { it.third.qty }.take(20)
+
+    val d = detail
+    if (d != null) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+            TextButton(onClick = { detail = null }) { Text("← रिपोर्ट पर वापस") }
+            val (kind, value) = d
+            when (kind) {
+                "pos", "avg" -> {
+                    SectionTitle("POS बिल (${b.size}) · कुल ${money(app, posTotal)}")
+                    BillRowsList(app, b, nav, fmt)
+                }
+                "revenue" -> {
+                    SectionTitle("POS बिल (${b.size}) · ${money(app, posTotal)}")
+                    BillRowsList(app, b, nav, fmt)
+                    SectionTitle("ऑनलाइन ऑर्डर (${o.size}) · ${money(app, onlineTotal)}")
+                    OrderRowsList(app, o, nav, fmt)
+                }
+                "online" -> {
+                    SectionTitle("ऑनलाइन ऑर्डर (${o.size}) · ${money(app, onlineTotal)}")
+                    OrderRowsList(app, o, nav, fmt)
+                }
+                "refund", "net" -> {
+                    SectionTitle("वापसी / एक्सचेंज (${rets.size}) · ${money(app, refunds)}")
+                    ReturnRowsList(app, rets, fmt)
+                    if (kind == "net") {
+                        SectionTitle("POS बिल (${b.size}) · ${money(app, posTotal)}")
+                        BillRowsList(app, b, nav, fmt)
+                        SectionTitle("ऑनलाइन ऑर्डर (${o.size}) · ${money(app, onlineTotal)}")
+                        OrderRowsList(app, o, nav, fmt)
+                    }
+                }
+                "method" -> {
+                    val list = b.filter { it.method == value }
+                    SectionTitle("$value · ${list.size} बिल · ${money(app, list.sumOf { it.total })}")
+                    BillRowsList(app, list, nav, fmt)
+                }
+                "item" -> {
+                    // every POS bill that sold this article+name, with the pieces in it
+                    val lines = soldGroups[value].orEmpty()
+                    val qty = lines.sumOf { it.second.qty }
+                    val amt = lines.sumOf { it.second.qty * it.second.price }
+                    SectionTitle(value.substringAfter("|") + " (" + value.substringBefore("|") + ") · $qty pcs · ${money(app, amt)}")
+                    lines.sortedByDescending { it.first.createdAt }.forEach { (bl, it) ->
+                        Row(Modifier.fillMaxWidth().clickable { nav.go(Route.Receipt(bl.id)) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("${bl.billNo} · ${it.colour} · साइज़ ${it.size}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                Text(fmt.format(Date(bl.createdAt)) + " · " + bl.method, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("${it.qty} pcs", fontSize = 13.sp)
+                                Text(money(app, it.qty * it.price), fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                    if (lines.isEmpty()) Text("इस अवधि में कोई बिक्री नहीं।", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                "stock" -> {
+                    val p = products.firstOrNull { it.id == value }
+                    if (p == null) Text("यह आइटम नहीं मिला।") else {
+                        SectionTitle("${p.article} · ${p.name}".trim(' ', '·'))
+                        p.variants.forEach { v ->
+                            Text(v.colour, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+                            v.sizes.forEach { s ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("साइज़ ${s.size}", Modifier.weight(1f))
+                                    StockBadge(s.qty, low)
+                                }
+                            }
+                        }
+                        OutlinedButton(onClick = { nav.go(Route.ProductEdit(p.id)) }, modifier = Modifier.padding(top = 12.dp)) { Text("आइटम खोलें / बदलें") }
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+        return
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -233,30 +314,30 @@ fun ReportsScreen(app: App, nav: Nav) {
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ReportCard("POS sales", money(app, posTotal), "${b.size} bills", Modifier.weight(1f))
-            ReportCard("Online orders", money(app, onlineTotal), "${o.size} orders", Modifier.weight(1f))
+            ReportCard("POS sales", money(app, posTotal), "${b.size} bills", Modifier.weight(1f)) { detail = "pos" to "" }
+            ReportCard("Online orders", money(app, onlineTotal), "${o.size} orders", Modifier.weight(1f)) { detail = "online" to "" }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-            ReportCard("Total revenue", money(app, posTotal + onlineTotal), "POS + online", Modifier.weight(1f))
-            ReportCard("Average bill", money(app, if (b.isEmpty()) 0.0 else posTotal / b.size), "POS", Modifier.weight(1f))
+            ReportCard("Total revenue", money(app, posTotal + onlineTotal), "POS + online", Modifier.weight(1f)) { detail = "revenue" to "" }
+            ReportCard("Average bill", money(app, if (b.isEmpty()) 0.0 else posTotal / b.size), "POS", Modifier.weight(1f)) { detail = "avg" to "" }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-            ReportCard("Refunds", money(app, refunds), "${rets.size} return / exchange", Modifier.weight(1f))
-            ReportCard("Net revenue", money(app, posTotal + onlineTotal - refunds), "after refunds", Modifier.weight(1f))
+            ReportCard("Refunds", money(app, refunds), "${rets.size} return / exchange", Modifier.weight(1f)) { detail = "refund" to "" }
+            ReportCard("Net revenue", money(app, posTotal + onlineTotal - refunds), "after refunds", Modifier.weight(1f)) { detail = "net" to "" }
         }
 
         SectionTitle("POS sales by payment method")
         if (byMethod.isEmpty()) Text("No sales in this period.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         byMethod.entries.sortedByDescending { it.value }.forEach { (m, v) ->
-            Row { Text(m, Modifier.weight(1f)); Text(money(app, v), fontWeight = FontWeight.SemiBold) }
+            Row(Modifier.fillMaxWidth().clickable { detail = "method" to m }.padding(vertical = 4.dp)) { Text(m, Modifier.weight(1f)); Text(money(app, v), fontWeight = FontWeight.SemiBold) }
             LinearProgressIndicator(progress = { if (posTotal > 0) (v / posTotal).toFloat() else 0f }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
         }
 
         SectionTitle("Best sellers (POS)")
         if (sold.isEmpty()) Text("No sales in this period.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        sold.forEach { (name, qty, rev) ->
-            Row(Modifier.padding(vertical = 2.dp)) {
-                Text(name, Modifier.weight(1f), maxLines = 1)
+        sold.forEach { (key, qty, rev) ->
+            Row(Modifier.fillMaxWidth().clickable { detail = "item" to key }.padding(vertical = 6.dp)) {
+                Text(key.substringAfter("|") + " (" + key.substringBefore("|") + ")", Modifier.weight(1f), maxLines = 1)
                 Text("$qty pcs · ${money(app, rev)}", fontSize = 13.sp)
             }
         }
@@ -264,7 +345,7 @@ fun ReportsScreen(app: App, nav: Nav) {
         SectionTitle("Needs restocking (stock $low or less)")
         if (lowList.isEmpty()) Text("All good - nothing low.", color = GreenOk)
         lowList.forEach { (p, v, s) ->
-            Row(Modifier.padding(vertical = 2.dp)) {
+            Row(Modifier.fillMaxWidth().clickable { detail = "stock" to p.id }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${p.article} · ${v.colour} / ${s.size}", Modifier.weight(1f), maxLines = 1)
                 StockBadge(s.qty, low)
             }
@@ -272,26 +353,62 @@ fun ReportsScreen(app: App, nav: Nav) {
 
         SectionTitle("Bills")
         if (b.isEmpty()) Text("No bills in this period.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        b.take(50).forEach { bill ->
-            Row(Modifier.fillMaxWidth().clickable { nav.go(Route.Receipt(bill.id)) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(bill.billNo, fontWeight = FontWeight.SemiBold)
-                    Text("${fmt.format(Date(bill.createdAt))} · ${bill.method}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(money(app, bill.total), fontWeight = FontWeight.Bold)
-                    if (!bill.synced) Text("waiting to sync", fontSize = 10.sp, color = AmberLow)
-                }
-            }
-            HorizontalDivider()
-        }
+        BillRowsList(app, b.take(50), nav, fmt)
         Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun ReportCard(title: String, value: String, sub: String, modifier: Modifier) {
-    Card(modifier) {
+private fun BillRowsList(app: App, list: List<BillE>, nav: Nav, fmt: SimpleDateFormat) {
+    list.forEach { bill ->
+        Row(Modifier.fillMaxWidth().clickable { nav.go(Route.Receipt(bill.id)) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(bill.billNo, fontWeight = FontWeight.SemiBold)
+                Text("${fmt.format(Date(bill.createdAt))} · ${bill.method}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(money(app, bill.total), fontWeight = FontWeight.Bold)
+                if (!bill.synced) Text("waiting to sync", fontSize = 10.sp, color = AmberLow)
+            }
+        }
+        HorizontalDivider()
+    }
+    if (list.isEmpty()) Text("कोई बिल नहीं।", color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun OrderRowsList(app: App, list: List<OrderE>, nav: Nav, fmt: SimpleDateFormat) {
+    list.forEach { order ->
+        Row(Modifier.fillMaxWidth().clickable { nav.go(Route.OrderDetail(order.id)) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("ऑर्डर ${order.id.takeLast(6).uppercase()}", fontWeight = FontWeight.SemiBold)
+                Text("${fmt.format(Date(order.createdAt))} · ${order.orderStatus}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(money(app, order.total), fontWeight = FontWeight.Bold)
+        }
+        HorizontalDivider()
+    }
+    if (list.isEmpty()) Text("कोई ऑर्डर नहीं।", color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun ReturnRowsList(app: App, list: List<ReturnE>, fmt: SimpleDateFormat) {
+    list.forEach { r ->
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("${if (r.kind == "EXCHANGE") "एक्सचेंज" else "वापसी"} · ${r.refType} ${r.refId.takeLast(6).uppercase()}", fontWeight = FontWeight.SemiBold)
+                Text("${fmt.format(Date(r.createdAt))} · ${r.reason}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(money(app, r.refund), fontWeight = FontWeight.Bold)
+        }
+        HorizontalDivider()
+    }
+    if (list.isEmpty()) Text("कोई वापसी नहीं।", color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun ReportCard(title: String, value: String, sub: String, modifier: Modifier, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = modifier) {
         Column(Modifier.padding(12.dp)) {
             Text(title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)

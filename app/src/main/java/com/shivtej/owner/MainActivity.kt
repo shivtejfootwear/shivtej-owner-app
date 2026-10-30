@@ -378,7 +378,6 @@ fun Shell(app: App) {
                         }
                     },
                     actions = {
-                        PhotoDownloadButton(app)
                         StatusChip(app)
                         IconButton(onClick = { app.sync.kick(); toast(ctx, "Syncing...") }) {
                             Icon(Icons.Filled.Sync, "Sync")

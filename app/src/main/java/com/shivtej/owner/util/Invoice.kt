@@ -416,7 +416,9 @@ object Invoice {
         card(c, m, y, payW, blockH, "Payment Details", ICON_CARD, t)
         fun payRow(yy: Float, icon: String, key: String, value: String, color: Int) {
             drawIcon(c, icon, m + 14f, yy - 24f, 26f, t.accent2)
-            c.drawText(key, m + 52f, yy, paint(25f, ink, true))
+            val kp = paint(25f, ink, true)
+            if (kp.measureText(key) > 170f) kp.textSize = 25f * 170f / kp.measureText(key)   // label stays inside its column
+            c.drawText(key, m + 52f, yy, kp)
             c.drawText(":", m + 232f, yy, paint(25f, ink))
             val vp = paint(26f, color, color != ink)
             val vx = m + 252f
