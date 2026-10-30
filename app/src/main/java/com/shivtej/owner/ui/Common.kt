@@ -76,6 +76,8 @@ sealed interface Route {
     object Catalog : Route
     // ---- staff bills (pending bills the managers sent from the Shivtej Managers app)
     object StaffBills : Route
+    // ---- stock check (scan all stock pieces; unscanned = sold / missing)
+    object StockCheck : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

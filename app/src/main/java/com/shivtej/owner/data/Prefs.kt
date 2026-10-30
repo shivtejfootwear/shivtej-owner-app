@@ -199,6 +199,10 @@ class Prefs(ctx: Context) {
                 v2 = if (v2.split(",").any { it.trim() == "staff_bills" }) v2 else if (v2.isBlank()) "staff_bills" else "$v2,staff_bills"
                 sp.edit().putString("quick_actions", v2).putBoolean("qa_staffbills_added", true).apply()
             }
+            if (!sp.getBoolean("qa_stockcheck_added", false)) {
+                v2 = if (v2.split(",").any { it.trim() == "stock_check" }) v2 else if (v2.isBlank()) "stock_check" else "$v2,stock_check"
+                sp.edit().putString("quick_actions", v2).putBoolean("qa_stockcheck_added", true).apply()
+            }
             return v2
         }
         set(v) = sp.edit().putString("quick_actions", v).apply()

@@ -145,6 +145,18 @@ private fun ContinuousScanner(onCode: (String) -> Unit) {
     AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(190.dp))
 }
 
+/** The "Stock check" screen (dashboard button / menu): opens the check at once, and the button reopens it. */
+@Composable
+fun StockCheckPage(app: App) {
+    var open by remember { mutableStateOf(true) }
+    Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text("स्टॉक चेक", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Text("स्कैनर खुला रहेगा। हर स्कैन पर वाइब्रेशन होगा।", fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp))
+        Button(onClick = { open = true }) { Text("स्टॉक चेक खोलें") }
+    }
+    if (open) StockCheckDialog(app) { open = false }
+}
+
 @Composable
 fun StockCheckDialog(app: App, onClose: () -> Unit) {
     val ctx = LocalContext.current
