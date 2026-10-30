@@ -270,11 +270,13 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
      * Stock check (applied): for each size of these products, qty = pieces scanned (kept barcodes) + pieces
      * counted by hand without barcode. Barcodes that were not scanned leave the size. Returns sizes changed.
      */
-    suspend fun applyStockCheck(products: List<Product>, scanned: Set<String>, manual: Map<String, Int>): Int {
+    suspend fun applyStockCheck(products: List<Product>, scanned: Set<String>, manual: Map<String, Int>, onlyColour: String = ""): Int {
         var changed = 0
         for (p in products) {
             var productChanged = false
             val variants = p.variants.map { v ->
+                // a colour filter: the other colours of the product are left as they are
+                if (onlyColour.isNotEmpty() && v.colour.trim().uppercase() != onlyColour) v else
                 v.copy(sizes = v.sizes.map { s ->
                     val key = "${p.id}|${v.colour}|${s.size}"
                     val codes = s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }

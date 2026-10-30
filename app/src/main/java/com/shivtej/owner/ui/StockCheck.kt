@@ -16,6 +16,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -46,15 +49,16 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** One barcode of one size of one product. */
-private data class Hit(val pid: String, val article: String, val colour: String, val size: String, val cats: List<String>, val brand: String = "")
+private data class Hit(val pid: String, val article: String, val colour: String, val size: String, val cats: List<String>, val brand: String = "", val type: String = "")
 
 private fun catsOfProduct(p: Product): List<String> = p.category.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }
 
 private fun sizeKey(pid: String, colour: String, size: String) = "$pid|$colour|$size"
 
 /** The saved check: category and brand ("" = all), scanned barcodes with their time, hand counts for pieces without a barcode. */
-private class CheckState(var cat: String, val scanned: MutableMap<String, Long>, val manual: MutableMap<String, Int>, var brand: String = "") {
-    fun toJson(): String = JSONObject().put("cat", cat).put("brand", brand)
+private class CheckState(var cat: String, val scanned: MutableMap<String, Long>, val manual: MutableMap<String, Int>,
+    var brand: String = "", var type: String = "", var colour: String = "") {
+    fun toJson(): String = JSONObject().put("cat", cat).put("brand", brand).put("type", type).put("colour", colour)
         .put("scanned", JSONObject(scanned.mapValues { it.value }))
         .put("manual", JSONObject(manual.mapValues { it.value })).toString()
 
@@ -66,7 +70,7 @@ private class CheckState(var cat: String, val scanned: MutableMap<String, Long>,
             CheckState(o.optString("cat", ""),
                 sc.keys().asSequence().associateWith { sc.optLong(it) }.toMutableMap(),
                 mn.keys().asSequence().associateWith { mn.optInt(it) }.toMutableMap(),
-                o.optString("brand", ""))
+                o.optString("brand", ""), o.optString("type", ""), o.optString("colour", ""))
         } catch (e: Exception) { CheckState("", mutableMapOf(), mutableMapOf()) }
     }
 }
@@ -176,7 +180,7 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
             p.variants.forEach { v ->
                 v.sizes.forEach { s ->
                     (s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }).forEach { c ->
-                        m[c] = Hit(p.id, p.article.ifBlank { p.name }, v.colour, s.size, catsOfProduct(p), p.brand.trim().uppercase())
+                        m[c] = Hit(p.id, p.article.ifBlank { p.name }, v.colour, s.size, catsOfProduct(p), p.brand.trim().uppercase(), p.productType.trim())
                     }
                 }
             }
@@ -185,17 +189,22 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     }
     val allCats = remember(active) { active.flatMap { catsOfProduct(it) }.distinct().sorted() }
     val allBrands = remember(active) { active.map { it.brand.trim().uppercase() }.filter { it.isNotEmpty() }.distinct().sorted() }
+    val allTypes = remember(active) { active.map { it.productType.trim() }.filter { it.isNotEmpty() }.distinct().sorted() }
+    val allColours = remember(active) { active.flatMap { p -> p.variants.map { it.colour.trim().uppercase() } }.filter { it.isNotEmpty() }.distinct().sorted() }
 
     // the pieces of the chosen category (or all): expected barcodes per size
-    val inScope = remember(active, st.cat, st.brand, tick) {
-        active.filter { (st.cat.isEmpty() || st.cat in catsOfProduct(it)) &&
-            (st.brand.isEmpty() || it.brand.trim().uppercase() == st.brand) }
+    val inScope = remember(active, st.brand, st.type, st.colour, tick) {
+        active.filter { p ->
+            (st.brand.isEmpty() || p.brand.trim().uppercase() == st.brand) &&
+            (st.type.isEmpty() || p.productType.trim() == st.type) &&
+            (st.colour.isEmpty() || p.variants.any { it.colour.trim().uppercase() == st.colour })
+        }
     }
     data class SizeRow(val pid: String, val article: String, val colour: String, val size: String,
                        val codes: List<String>, val noBarcode: Int)
-    val sizeRows = remember(inScope) {
+    val sizeRows = remember(inScope, st.colour) {
         inScope.flatMap { p ->
-            p.variants.flatMap { v ->
+            p.variants.filter { st.colour.isEmpty() || it.colour.trim().uppercase() == st.colour }.flatMap { v ->
                 v.sizes.map { s ->
                     val codes = s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }
                     SizeRow(p.id, p.article.ifBlank { p.name }, v.colour, s.size, codes,
@@ -233,9 +242,13 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                 feedback.notFound(); lastRed = true
                 lastText = "यह आइटम इस ब्रांड का नहीं: ${hit.article} · ${hit.colour} · ${hit.size}"
             }
-            st.cat.isNotEmpty() && st.cat !in hit.cats -> {
+            st.type.isNotEmpty() && st.type != hit.type -> {
                 feedback.notFound(); lastRed = true
-                lastText = "यह आइटम इस कैटेगरी का नहीं: ${hit.article} · ${hit.colour} · ${hit.size}"
+                lastText = "यह आइटम इस टाइप का नहीं: ${hit.article} · ${hit.colour} · ${hit.size}"
+            }
+            st.colour.isNotEmpty() && st.colour != hit.colour.trim().uppercase() -> {
+                feedback.notFound(); lastRed = true
+                lastText = "यह आइटम इस रंग का नहीं: ${hit.article} · ${hit.colour} · ${hit.size}"
             }
             st.scanned.containsKey(code) -> {
                 feedback.again(); lastRed = true
@@ -308,20 +321,14 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                     Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("नहीं स्कैन हुए ($missingCount)") })
                 }
 
-                // filters: category, then brand (ALL first in each)
-                LazyRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp)) {
-                    item { FilterChip(selected = st.cat.isEmpty(), onClick = { st.cat = ""; save() }, label = { Text("ALL") }) }
-                    items(allCats) { c ->
-                        FilterChip(selected = st.cat == c, onClick = { st.cat = c; save() }, label = { Text(c) })
-                    }
-                }
-                LazyRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp)) {
-                    item { FilterChip(selected = st.brand.isEmpty(), onClick = { st.brand = ""; save() }, label = { Text("सभी ब्रांड") }) }
-                    items(allBrands) { b ->
-                        FilterChip(selected = st.brand == b, onClick = { st.brand = b; save() }, label = { Text(b) })
-                    }
+                // filters: ALL (everything together), then brand, type and colour
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = st.brand.isEmpty() && st.type.isEmpty() && st.colour.isEmpty(),
+                        onClick = { st.brand = ""; st.type = ""; st.colour = ""; save() },
+                        label = { Text("ALL", maxLines = 1) }, modifier = Modifier.weight(1f))
+                    FilterPick("BRAND", st.brand, allBrands, Modifier.weight(1f)) { st.brand = it; save() }
+                    FilterPick("Type", st.type, allTypes, Modifier.weight(1f)) { st.type = it; save() }
+                    FilterPick("Colour", st.colour, allColours, Modifier.weight(1f)) { st.colour = it; save() }
                 }
 
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
@@ -400,7 +407,7 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
         confirmButton = { TextButton(onClick = {
             confirmApply = false
             scope.launch {
-                val changed = app.repo.applyStockCheck(inScope, applyList, st.manual.toMap())
+                val changed = app.repo.applyStockCheck(inScope, applyList, st.manual.toMap(), st.colour)
                 st.scanned.clear(); st.manual.clear(); save()
                 toast(ctx, "स्टॉक चेक लागू हुआ: $changed साइज़ बदले")
                 onClose()
@@ -422,4 +429,21 @@ private fun OverlayChip(text: String, onClick: () -> Unit) {
     Text(text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
         modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
             .clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 5.dp))
+}
+
+/** One filter button: shows its name, or the chosen value; opens the list of values ("सभी" first). */
+@Composable
+private fun FilterPick(label: String, value: String, options: List<String>, modifier: Modifier, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        FilterChip(selected = value.isNotEmpty(), onClick = { open = true }, modifier = Modifier.fillMaxWidth(),
+            label = { Text(if (value.isEmpty()) label else value, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false },
+            modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+            DropdownMenuItem(text = { Text("सभी") }, onClick = { open = false; onPick("") })
+            options.forEach { o ->
+                DropdownMenuItem(text = { Text(o) }, onClick = { open = false; onPick(o) })
+            }
+        }
+    }
 }
