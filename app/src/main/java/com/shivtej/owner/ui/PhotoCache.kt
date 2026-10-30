@@ -78,6 +78,9 @@ object PhotoCache {
         }
     }
 
+    /** The saved photo for a name: downloads it now if it is not on the phone yet. Null when it could not be saved. */
+    suspend fun ensure(ctx: Context, name: String): File? = if (fetch(ctx, name) == null) local(ctx, name) else null
+
     /**
      * Downloads every product photo that is not on the phone yet.
      * retry = true tries again the photos that failed before; otherwise they are not asked for again on every change.
