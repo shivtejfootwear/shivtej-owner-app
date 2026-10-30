@@ -120,7 +120,7 @@ object Api {
             .addQueryParameter("file", fileName)
             .build()
         val req = Request.Builder().url(url).header("apikey", key).get().build()
-        client.newCall(req).execute().use { resp ->
+        client.newBuilder().callTimeout(20, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw fail(resp.code, text)
             return JSONObject(text).getString("url")
