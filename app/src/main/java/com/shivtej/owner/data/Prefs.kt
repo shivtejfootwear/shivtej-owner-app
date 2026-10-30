@@ -174,10 +174,13 @@ class Prefs(ctx: Context) {
     var stockCheckJson: String          // the running stock check (scanned barcodes, hand counts, category); "" = none
         get() = sp.getString("stock_check_v1", "") ?: ""
         set(v) = sp.edit().putString("stock_check_v1", v).apply()
-    /** Barcodes sold on this phone (comma-separated). The server keeps them in its list after a sale, so they are not brought back. */
-    var soldBarcodes: String
-        get() = sp.getString("sold_barcodes_v1", "") ?: ""
-        set(v) = sp.edit().putString("sold_barcodes_v1", v).apply()
+    /** Sold barcodes on this phone: JSON {barcode: {bill, billId, at, pid, colour, size, article, price}}. */
+    var soldJson: String
+        get() = sp.getString("sold_barcodes_v2", "") ?: ""
+        set(v) = sp.edit().putString("sold_barcodes_v2", v).apply()
+    var soldBackfillDone: Boolean
+        get() = sp.getBoolean("sold_backfill_v2", false)
+        set(v) = sp.edit().putBoolean("sold_backfill_v2", v).apply()
     var stockCheckSound: Boolean        // sounds during the stock check (on by default)
         get() = sp.getBoolean("stock_check_sound", true)
         set(v) = sp.edit().putBoolean("stock_check_sound", v).apply()

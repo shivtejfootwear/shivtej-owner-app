@@ -74,6 +74,7 @@ fun PosScreen(app: App, nav: Nav) {
     var query by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     var unknownCode by remember { mutableStateOf<String?>(null) }
+    var soldScan by remember { mutableStateOf<com.shivtej.owner.data.Repo.SoldInfo?>(null) }
     var assignCode by remember { mutableStateOf<String?>(null) }
     var picker by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -99,7 +100,10 @@ fun PosScreen(app: App, nav: Nav) {
         scope.launch {
             val h = app.repo.lookup(c)
             when {
-                h == null -> { Beeps.fail(ctx); unknownCode = c }
+                h == null -> {
+                    val sold = app.repo.soldInfo(c)
+                    if (sold != null) { Beeps.fail(ctx); soldScan = sold } else { Beeps.fail(ctx); unknownCode = c }
+                }
                 cart.lines.any { line -> c in line.barcode.split(",") } -> { Beeps.again(ctx); toast(ctx, "This piece is already in the bill") }
                 else -> {
                     val err = cart.add(CartLine(h.product.id, h.product.article, h.product.name, h.colour, h.size.size,
@@ -373,6 +377,23 @@ fun PosScreen(app: App, nav: Nav) {
     if (scanning) ScannerDialog(onResult = { scanning = false; handleCode(it) }, onDismiss = { scanning = false })
 
     // ---- unknown barcode
+    // a sold piece was scanned at the counter: is it a return to stock, or only a look?
+    soldScan?.let { s ->
+        AlertDialog(
+            onDismissRequest = { soldScan = null },
+            title = { Text("यह माल बिका हुआ है") },
+            text = { Text("${s.article} · ${s.colour} · साइज़ ${s.size}\nबिल: ${s.bill}\nकिसी ग्राहक का वापस किया हुआ है तो स्टॉक में जोड़ें।") },
+            confirmButton = { TextButton(onClick = {
+                val code = s.code; soldScan = null
+                scope.launch {
+                    val ok = runCatching { app.repo.restockSold(code) }.getOrDefault(false)
+                    toast(ctx, if (ok) "वापसी: स्टॉक में जोड़ा गया" else "स्टॉक में नहीं जुड़ पाया")
+                }
+            }) { Text("हाँ, वापसी है: स्टॉक में जोड़ें") } },
+            dismissButton = { TextButton(onClick = { soldScan = null }) { Text("नहीं, बस देखा") } }
+        )
+    }
+
     unknownCode?.let { code ->
         AlertDialog(
             onDismissRequest = { unknownCode = null },

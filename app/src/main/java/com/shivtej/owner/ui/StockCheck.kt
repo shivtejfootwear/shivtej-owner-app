@@ -167,6 +167,8 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     var lastAt by remember { mutableLongStateOf(0L) }
     var tick by remember { mutableIntStateOf(0) }
     var confirmApply by remember { mutableStateOf(false) }
+    var soldHit by remember { mutableStateOf<com.shivtej.owner.data.Repo.SoldInfo?>(null) }
+    val scopeSold = rememberCoroutineScope()
     var confirmClear by remember { mutableStateOf(false) }
     val feedback = remember(ctx) { Feedback(ctx) }
     DisposableEffect(Unit) { onDispose { feedback.release() } }
@@ -234,6 +236,13 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
         lastCode = code; lastAt = now
         val hit = index[code]
         when {
+            hit == null && app.repo.soldInfo(code) != null -> {
+                // sold earlier: never counted in stock; ask whether the customer brought it back
+                feedback.notFound(); lastRed = true
+                val s = app.repo.soldInfo(code)!!
+                lastText = "बिका हुआ: ${s.article} · ${s.colour} · ${s.size} (${s.bill})"
+                soldHit = s
+            }
             hit == null -> {
                 feedback.notFound(); lastRed = true
                 lastText = "बारकोड नहीं मिला: $code"
@@ -265,6 +274,24 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     }
 
     val applyList = remember(tick) { st.scanned.keys.toSet() }
+    val soldCount = remember(tick) { app.repo.soldAll().size }
+    soldHit?.let { s ->
+        AlertDialog(
+            onDismissRequest = { soldHit = null },
+            title = { Text("यह माल बिका हुआ है") },
+            text = { Text("${s.article} · ${s.colour} · साइज़ ${s.size}\nबिल: ${s.bill}\nयह स्टॉक में नहीं है, गिनती में नहीं जुड़ेगा।\nकिसी ग्राहक ने वापस किया है तो स्टॉक में जोड़ें।") },
+            confirmButton = { TextButton(onClick = {
+                soldHit = null
+                scopeSold.launch {
+                    val ok = runCatching { app.repo.restockSold(s.code) }.getOrDefault(false)
+                    lastText = if (ok) "वापसी: स्टॉक में जुड़ा ${s.article} · ${s.colour} · ${s.size}" else "स्टॉक में नहीं जुड़ पाया"
+                    lastRed = !ok
+                    tick++
+                }
+            }) { Text("हाँ, वापसी है: स्टॉक में जोड़ें") } },
+            dismissButton = { TextButton(onClick = { soldHit = null }) { Text("नहीं, बस देखा") } }
+        )
+    }
     fun shareCheck() {
         val sb = StringBuilder("स्टॉक चेक · ").append(if (st.cat.isEmpty()) "ALL" else st.cat).append("\n")
         sb.append("\nस्कैन हुए (").append(scannedHere.size).append("):\n")
@@ -311,6 +338,7 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                         color = Color(0xFF2E7D32), trackColor = Color(0xFFECEEF2))
                     Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
                         Text("बाकी $missingCount", fontSize = 13.sp, color = Color(0xFFC62828), fontWeight = FontWeight.SemiBold)
+                        if (soldCount > 0) Text("  · बिका हुआ (गिनती में नहीं): $soldCount", fontSize = 12.sp, color = Color(0xFF8E0000))
                         Spacer(Modifier.weight(1f))
                         Text("हाथ से गिनती: $handCounted", fontSize = 12.sp, color = Color(0xFF6E6E73))
                     }

@@ -464,28 +464,46 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
      */
     /** One piece sold or taken out: its barcode leaves the stock (a sold barcode can not be sold again).
      *  The scanned barcodes (comma-separated on the bill line) go first; if there are none, any barcodes of that size go. */
-    private fun soldSet(): MutableSet<String> = prefs.soldBarcodes.split(',').filter { it.isNotBlank() }.toMutableSet()
+    /** A barcode that was sold: the bill it went out on and the item it belongs to. */
+    data class SoldInfo(val code: String, val bill: String, val billId: String, val at: Long,
+                        val pid: String, val colour: String, val size: String, val article: String, val price: Double)
 
-    /** Remembers a sold barcode so a later product download (the server still lists it) does not put it back in stock. */
-    private fun markSold(code: String) {
-        val set = soldSet(); set.add(code)
-        prefs.soldBarcodes = set.toList().takeLast(5000).joinToString(",")
+    private fun soldMap(): JSONObject = try { JSONObject(prefs.soldJson.ifBlank { "{}" }) } catch (e: Exception) { JSONObject() }
+
+    fun soldInfo(code: String): SoldInfo? {
+        val o = soldMap().optJSONObject(code) ?: return null
+        return SoldInfo(code, o.str("bill"), o.str("billId"), o.optLong("at"), o.str("pid"), o.str("colour"),
+            o.str("size"), o.str("article"), o.optDouble("price", 0.0))
+    }
+
+    fun soldAll(): List<SoldInfo> = soldMap().keys().asSequence().mapNotNull { soldInfo(it) }.toList()
+
+    /** Remembers a sold barcode, so a later product download (the server still lists it) does not put it back in stock. */
+    private fun markSold(info: SoldInfo) {
+        val m = soldMap()
+        m.put(info.code, JSONObject().put("bill", info.bill).put("billId", info.billId).put("at", info.at)
+            .put("pid", info.pid).put("colour", info.colour).put("size", info.size).put("article", info.article).put("price", info.price))
+        prefs.soldJson = m.toString()
     }
 
     private fun unmarkSold(code: String) {
-        val set = soldSet(); if (set.remove(code)) prefs.soldBarcodes = set.joinToString(",")
+        val m = soldMap()
+        if (m.has(code)) { m.remove(code); prefs.soldJson = m.toString() }
     }
 
-    private suspend fun consumePieces(pid: String, colour: String, size: String, qty: Int, scanned: String) {
+    private fun soldSet(): Set<String> = soldMap().keys().asSequence().toSet()
+
+    private suspend fun consumePieces(pid: String, colour: String, size: String, qty: Int, scanned: String,
+                                      sale: (String) -> SoldInfo? = { null }) {
         val left = dao.piecesOfSize(pid, colour, size).sortedBy { it.barcode }.toMutableList()
         var need = qty
         for (code in scanned.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
-            left.firstOrNull { it.barcode == code }?.let { left.remove(it); dao.delPiece(it.barcode); markSold(it.barcode); need-- }
+            left.firstOrNull { it.barcode == code }?.let { left.remove(it); dao.delPiece(it.barcode); sale(it.barcode)?.let(::markSold); need-- }
         }
         while (need > 0 && left.isNotEmpty()) {
             val piece = left.removeAt(0)
             dao.delPiece(piece.barcode)
-            markSold(piece.barcode)
+            sale(piece.barcode)?.let(::markSold)
             need--
         }
         // the size's main barcode follows the pieces still in stock
@@ -501,6 +519,40 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         if (dao.sizesOf(pid).firstOrNull { it.colour == colour && it.size == size }?.barcode.isNullOrBlank()) {
             dao.setSizeBarcode(pid, colour, size, code)
         }
+    }
+
+    /** A sold barcode comes back (customer returned it): stock +1, the barcode is in stock again, the sale record is cleared. */
+    suspend fun restockSold(code: String): Boolean {
+        val info = soldInfo(code) ?: return false
+        if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) { unmarkSold(code); return true }
+        processReturn("BILL", info.billId, "RETURN", "वापसी (बारकोड स्कैन): बिल ${info.bill}", true, 0.0,
+            listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price)), emptyList())
+        returnPiece(info.pid, info.colour, info.size, code)
+        unmarkSold(code)
+        return true
+    }
+
+    /** Once per phone: every barcode on the bills already made is marked sold (and taken out of the piece list here).
+     *  Bills whose items came back to stock keep their barcodes in stock. */
+    suspend fun backfillSold() {
+        if (prefs.soldBackfillDone) return
+        val returnedBills = dao.allReturns().filter { it.kind == "RETURN" && it.restock }.map { it.refId }.toSet()
+        db.withTransaction {
+            dao.allBills().forEach { bl ->
+                parseBillItems(bl.itemsJson).forEach { line ->
+                    line.barcode.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { code ->
+                        if (bl.id in returnedBills) {
+                            returnPiece(line.productId, line.colour, line.size, code)
+                        } else {
+                            dao.delPiece(code)
+                            markSold(SoldInfo(code, bl.billNo, bl.id, bl.createdAt, line.productId, line.colour, line.size, line.article, line.price))
+                        }
+                    }
+                }
+            }
+        }
+        prefs.soldBackfillDone = true
+        onChanged()
     }
 
     suspend fun createBill(lines: List<CartLine>, method: String, extra: BillExtra = BillExtra()): BillE {
@@ -531,7 +583,9 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             lines.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
-                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode) { code ->
+                    SoldInfo(code, no.toString(), id, now, l.productId, l.colour, l.size, l.article, l.price)
+                }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.putLog(StockLogE("$id#${i + 1}", l.productId, l.article, l.colour, l.size,
                     after - before, after, "POS_SALE", now, false))

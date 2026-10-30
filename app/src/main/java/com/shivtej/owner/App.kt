@@ -61,6 +61,8 @@ class App : Application() {
         db = AppDb.build(this)
         repo = Repo(db, prefs)
         sync = SyncManager(repo, prefs, scope, this)
+        // once: barcodes of the bills already made are marked as sold (so stock check and POS know them)
+        scope.launch { runCatching { repo.backfillSold() } }
         // product photos are kept on the phone: whenever the product list changes, the missing photos download
         scope.launch { repo.products.collect { com.shivtej.owner.ui.PhotoCache.syncAll(this@App, it) } }
         net = Net(this)
