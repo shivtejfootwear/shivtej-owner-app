@@ -12,9 +12,10 @@ import kotlin.math.sin
 
 /**
  * Scanner sounds, all made here (no system tone, so they play on every phone):
- *  ok    = a valid barcode: one high beep + a short vibration
- *  again = the same piece scanned again: two mid beeps + a double vibration
- *  fail  = not valid / not found / already used elsewhere: one low long buzz + a long vibration
+ *  ok    = a valid barcode: one high beep (2000 Hz) + a short vibration
+ *  again = the same piece scanned again: three quick mid beeps (1000 Hz) + a double vibration
+ *  fail  = not valid / not found / already used elsewhere: a low square buzz (160 Hz) + a long vibration
+ * These are the samples the owner picked (OK A, AGAIN C, FAIL B).
  * The sound is on/off from the "आवाज़" switch in the stock check (prefs.stockCheckSound).
  */
 object Beeps {
@@ -23,12 +24,13 @@ object Beeps {
     private const val AGAIN = 1
     private const val FAIL = 2
 
-    private fun wave(freq: Int, ms: Int): ShortArray {
+    private fun wave(freq: Int, ms: Int, amp: Double = 0.9, square: Boolean = false): ShortArray {
         val n = RATE * ms / 1000
         val fade = RATE / 200
         val out = ShortArray(n)
         for (i in 0 until n) {
-            var v = sin(2 * PI * freq * i / RATE) * 0.95
+            val s = sin(2 * PI * freq * i / RATE)
+            var v = (if (square) (if (s >= 0) 1.0 else -1.0) else s) * amp
             if (i < fade) v *= i.toDouble() / fade
             if (i > n - fade) v *= (n - i).toDouble() / fade
             out[i] = (v * Short.MAX_VALUE).toInt().toShort()
@@ -45,9 +47,9 @@ object Beeps {
 
     private val sounds: Map<Int, ShortArray> by lazy {
         mapOf(
-            OK to wave(1800, 120),
-            AGAIN to concat(wave(700, 110), silence(90), wave(700, 110)),
-            FAIL to wave(220, 380)
+            OK to wave(2000, 150),
+            AGAIN to concat(wave(1000, 70), silence(50), wave(1000, 70), silence(50), wave(1000, 70)),
+            FAIL to wave(160, 450, amp = 0.6, square = true)
         )
     }
     private val tracks = HashMap<Int, AudioTrack>()
