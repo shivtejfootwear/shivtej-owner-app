@@ -279,8 +279,8 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 // camera on top; the small wordmark, sound and close sit over it, the last result at the bottom
-                Box(Modifier.fillMaxWidth().height(330.dp)) {
-                    ContinuousScanner(height = 330.dp) { onCode(it) }
+                Box(Modifier.fillMaxWidth().height(190.dp)) {
+                    ContinuousScanner(height = 190.dp) { onCode(it) }
                     Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Wordmark()
                         Spacer(Modifier.weight(1f))
@@ -333,18 +333,22 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
 
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
                     if (tab == 0) {
+                        // only what is scanned: one article per block, one line per size that has a scan
                         val byItem = sizeRows.groupBy { "${it.article} · ${it.colour}" }
                         byItem.forEach { (title, rows) ->
-                            item(key = "s_$title") {
-                                Text(title, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-                            }
-                            items(rows, key = { "s_${it.pid}|${it.colour}|${it.size}" }) { r ->
-                                Text("  साइज़ ${r.size}: स्कैन ${gotOf(r)} / ${totalOf(r)}" +
-                                    if (r.noBarcode > 0) "  (बिना बारकोड ${r.noBarcode})" else "",
-                                    fontSize = 13.sp)
+                            val got = rows.filter { gotOf(it) > 0 }
+                            if (got.isNotEmpty()) {
+                                item(key = "s_$title") {
+                                    Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                                }
+                                items(got, key = { "s_${it.pid}|${it.colour}|${it.size}" }) { r ->
+                                    Text("  साइज़ ${r.size}:  ${gotOf(r)} / ${totalOf(r)}" +
+                                        if (r.noBarcode > 0) "  (बिना बारकोड ${r.noBarcode})" else "",
+                                        fontSize = 13.sp, modifier = Modifier.padding(vertical = 1.dp))
+                                }
                             }
                         }
-                        if (sizeRows.isEmpty()) item { Text("इस कैटेगरी में कोई आइटम नहीं", fontSize = 13.sp) }
+                        if (byItem.values.none { rows -> rows.any { gotOf(it) > 0 } }) item { Text("अभी कोई आइटम स्कैन नहीं हुआ", fontSize = 13.sp) }
                     } else {
                         val byItem = sizeRows.groupBy { "${it.article} · ${it.colour}" }
                         byItem.forEach { (title, rows) ->

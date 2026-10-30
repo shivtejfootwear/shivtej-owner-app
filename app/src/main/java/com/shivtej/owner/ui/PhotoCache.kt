@@ -97,7 +97,20 @@ object PhotoCache {
                     return@withContext Try("स्टोरेज से फ़ोटो नहीं आई (कोड $code)", code == 429 || code >= 500, ra.coerceAtMost(30_000L))
                 }
                 val appendMode = code == 206          // server sent only the rest
-                conn.inputStream.use { inp -> java.io.FileOutputStream(tmp, appendMode).use { inp.copyTo(it) } }
+                // A very slow link must not keep the whole queue waiting: after 60 s this try stops,
+                // what arrived stays in the .part file, and the next try continues from there.
+                val deadline = System.currentTimeMillis() + 60_000L
+                java.io.FileOutputStream(tmp, appendMode).use { out ->
+                    conn.inputStream.use { inp ->
+                        val buf = ByteArray(8192)
+                        while (true) {
+                            if (System.currentTimeMillis() > deadline) return@withContext Try("नेटवर्क बहुत धीमा है, आधी फ़ोटो सेव है", false)
+                            val n = inp.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
                 if (tmp.length() == 0L) { tmp.delete(); return@withContext Try("फ़ाइल खाली आई", true) }
                 tmp.renameTo(f)
                 Try(null, false)
