@@ -33,6 +33,8 @@ object PhotoCache {
 
     private val busy = HashSet<String>()
     private val reasons = LinkedHashMap<String, String>()   // photos that failed in this run, with the reason
+    private val failedAt = HashMap<String, Long>()          // when each failed photo was last tried
+    private const val RETRY_AFTER = 10 * 60_000L
 
     private fun dir(ctx: Context) = File(ctx.applicationContext.filesDir, "photos").apply { mkdirs() }
     private fun fileOf(ctx: Context, name: String) = File(dir(ctx), name.replace(Regex("[^A-Za-z0-9._-]"), "_"))
@@ -40,20 +42,35 @@ object PhotoCache {
     /** The saved photo for a "products/..." name, or null when it is not on the phone yet. */
     fun local(ctx: Context, name: String): File? = fileOf(ctx, name).takeIf { it.isFile && it.length() > 0 }
 
-    /** Downloads one photo. Returns null when it is saved on the phone, otherwise the reason it could not be saved. */
-    suspend fun fetch(ctx: Context, name: String): String? = withContext(Dispatchers.IO) {
-        if (local(ctx, name) != null) return@withContext null
-        val pid = name.split("/").getOrNull(1) ?: return@withContext "फ़ाइल का नाम गलत है"
-        synchronized(busy) { if (!busy.add(name)) return@withContext "अभी डाउनलोड चल रहा है" }
+    private class Try(val reason: String?, val temporary: Boolean)
+
+    /** Downloads one photo. Returns null when it is saved on the phone, otherwise the reason it could not be saved.
+     *  Temporary problems (server busy, network dropped) are tried again a few times, after a short wait. */
+    suspend fun fetch(ctx: Context, name: String): String? {
+        if (local(ctx, name) != null) return null
+        var last: Try = Try("अभी डाउनलोड चल रहा है", false)
+        for (i in 0 until 4) {
+            last = fetchOnce(ctx, name)
+            if (last.reason == null || !last.temporary) break
+            kotlinx.coroutines.delay(2000L * (i + 1))
+        }
+        return last.reason
+    }
+
+    private suspend fun fetchOnce(ctx: Context, name: String): Try = withContext(Dispatchers.IO) {
+        if (local(ctx, name) != null) return@withContext Try(null, false)
+        val pid = name.split("/").getOrNull(1) ?: return@withContext Try("फ़ाइल का नाम गलत है", false)
+        synchronized(busy) { if (!busy.add(name)) return@withContext Try("अभी डाउनलोड चल रहा है", false) }
         try {
             val url = try {
                 Api.productPhotoUrl(pid, name)
             } catch (e: Exception) {
-                return@withContext when ((e as? ApiError)?.status ?: 0) {
-                    404 -> "सर्वर पर यह फ़ोटो इस प्रोडक्ट से जुड़ी नहीं मिली"
-                    400 -> "सर्वर ने फ़ाइल का नाम नहीं माना"
-                    0 -> "इंटरनेट या सर्वर की दिक्कत"
-                    else -> "सर्वर ने लिंक नहीं दिया"
+                val st = (e as? ApiError)?.status ?: 0
+                return@withContext when (st) {
+                    404 -> Try("सर्वर पर यह फ़ोटो इस प्रोडक्ट से जुड़ी नहीं मिली", false)
+                    400 -> Try("सर्वर ने फ़ाइल का नाम नहीं माना", false)
+                    0 -> Try("इंटरनेट या सर्वर की दिक्कत", true)
+                    else -> Try("सर्वर ने लिंक नहीं दिया (कोड $st)", st >= 500)
                 }
             }
             val conn = URL(url).openConnection() as HttpURLConnection
@@ -61,32 +78,31 @@ object PhotoCache {
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 30_000
                 val code = conn.responseCode
-                if (code != 200) return@withContext "स्टोरेज में फ़ाइल नहीं मिली (कोड $code)"
+                if (code != 200) return@withContext Try("स्टोरेज से फ़ोटो नहीं आई (कोड $code)", code == 429 || code >= 500)
                 val f = fileOf(ctx, name)
                 val tmp = File(f.parentFile, f.name + ".part")
                 conn.inputStream.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
-                if (tmp.length() == 0L) { tmp.delete(); return@withContext "फ़ाइल खाली आई" }
+                if (tmp.length() == 0L) { tmp.delete(); return@withContext Try("फ़ाइल खाली आई", true) }
                 tmp.renameTo(f)
-                null
+                Try(null, false)
             } finally {
                 conn.disconnect()
             }
         } catch (e: Exception) {
-            "डाउनलोड टूटा (${e.javaClass.simpleName})"
+            Try("नेटवर्क टूटा (${e.javaClass.simpleName})", true)
         } finally {
             synchronized(busy) { busy.remove(name) }
         }
     }
 
     /** The saved photo for a name: downloads it now if it is not on the phone yet. Null when it could not be saved. */
-    suspend fun ensure(ctx: Context, name: String): File? = if (fetch(ctx, name) == null) local(ctx, name) else null
 
     /**
      * Downloads every product photo that is not on the phone yet.
      * retry = true tries again the photos that failed before; otherwise they are not asked for again on every change.
      */
     suspend fun syncAll(ctx: Context, products: List<Product>, retry: Boolean = false) {
-        if (retry) reasons.clear()
+        if (retry) { reasons.clear(); failedAt.clear() }
         val item = LinkedHashMap<String, String>()
         products.forEach { p ->
             val t = titleOf(p.brand, p.article, p.name)
@@ -108,9 +124,11 @@ object PhotoCache {
         var lastPct = if (total == 0) 100 else saved * 100 / total
         for (n in names) {
             if (local(ctx, n) != null) continue
-            if (reasons.containsKey(n)) continue          // failed before: waits for "दोबारा कोशिश करें"
+            val last = failedAt[n]
+            if (last != null && System.currentTimeMillis() - last < RETRY_AFTER) continue   // tried recently
             val r = fetch(ctx, n)
-            if (r == null) { saved++; reasons.remove(n) } else reasons[n] = r
+            if (r == null) { saved++; reasons.remove(n); failedAt.remove(n) }
+            else { reasons[n] = r; failedAt[n] = System.currentTimeMillis() }
             val pct = saved * 100 / total
             if (pct != lastPct || r != null) { lastPct = pct; publish(true) }   // a few updates only, so the screen does not lag
         }

@@ -259,7 +259,7 @@ private fun CatalogPhoto(src: String?, modifier: Modifier) {
     val isPrivate = src != null && src.startsWith("products/")
     val ctx = LocalContext.current
     val remoteUrl by produceState<Any?>(null, src) {
-        value = if (src != null && isPrivate) (PhotoCache.local(ctx, src) ?: PhotoCache.ensure(ctx, src) ?: privatePhotoUrl(src)) else null
+        value = if (src != null && isPrivate) (PhotoCache.local(ctx, src) ?: privatePhotoUrl(src)) else null
     }
     val model: Any? = when {
         src == null -> null

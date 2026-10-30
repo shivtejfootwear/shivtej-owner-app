@@ -133,7 +133,7 @@ fun Thumb(src: String?, size: Dp = 56.dp, crop: Boolean = true) {
     val isPrivate = src != null && src.startsWith("products/")
     val remoteUrl by produceState<Any?>(null, src) {
         // the photo saved on the phone shows at once; the server is used only if it is not saved yet
-        value = if (src != null && isPrivate) (PhotoCache.local(ctx, src) ?: PhotoCache.ensure(ctx, src) ?: privatePhotoUrl(src)) else null
+        value = if (src != null && isPrivate) (PhotoCache.local(ctx, src) ?: privatePhotoUrl(src)) else null
     }
     val model: Any? = when {
         src == null -> null
