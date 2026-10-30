@@ -442,12 +442,19 @@ private fun FilterPick(label: String, value: String, options: List<String>, modi
     Box(modifier) {
         FilterChip(selected = value.isNotEmpty(), onClick = { open = true }, modifier = Modifier.fillMaxWidth(),
             label = { Text(if (value.isEmpty()) label else value, maxLines = 1, overflow = TextOverflow.Ellipsis) })
-        DropdownMenu(expanded = open, onDismissRequest = { open = false },
-            modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-            DropdownMenuItem(text = { Text("सभी") }, onClick = { open = false; onPick("") })
-            options.forEach { o ->
-                DropdownMenuItem(text = { Text(o) }, onClick = { open = false; onPick(o) })
-            }
-        }
     }
+    // A plain list in a dialog (not a DropdownMenu with a scroll inside): the old menu crashed the app when opened.
+    if (open) AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text(label) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                item { TextButton(onClick = { open = false; onPick("") }, modifier = Modifier.fillMaxWidth()) { Text("सभी", modifier = Modifier.fillMaxWidth()) } }
+                items(options) { o ->
+                    TextButton(onClick = { open = false; onPick(o) }, modifier = Modifier.fillMaxWidth()) { Text(o, modifier = Modifier.fillMaxWidth()) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { open = false }) { Text("बंद करें") } }
+    )
 }
