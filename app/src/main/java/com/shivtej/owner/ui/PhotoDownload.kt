@@ -52,11 +52,15 @@ fun PhotoDownloadButton(app: App) {
     val st by PhotoCache.state.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf(false) }
     val allSaved = st.total == 0 || st.missing == 0
+    // The button exists only while a photo is missing or a download is running. When everything is saved it is gone.
+    val show = st.downloading || !allSaved
+    // Closes the dialog when the button goes away, so it never pops up again on its own later.
+    LaunchedEffect(show) { if (!show) open = false }
+    if (!show) return
 
     IconButton(onClick = { open = true }) {
         when {
             st.downloading -> Text("${st.percent}%", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            allSaved -> Icon(Icons.Filled.CheckCircle, "सभी फ़ोटो सेव हैं", tint = Color(0xFF66BB6A))
             else -> Box(contentAlignment = Alignment.TopEnd) {
                 DownloadTrayGlyph(Modifier.size(24.dp))
                 Text(if (st.missing > 99) "99+" else "${st.missing}", fontSize = 9.sp, fontWeight = FontWeight.Bold,
