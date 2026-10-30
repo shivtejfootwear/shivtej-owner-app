@@ -129,9 +129,11 @@ suspend fun privatePhotoUrl(name: String): String? = withContext(Dispatchers.IO)
 
 @Composable
 fun Thumb(src: String?, size: Dp = 56.dp, crop: Boolean = true) {
+    val ctx = LocalContext.current
     val isPrivate = src != null && src.startsWith("products/")
-    val remoteUrl by produceState<String?>(null, src) {
-        value = if (src != null && isPrivate) privatePhotoUrl(src) else null
+    val remoteUrl by produceState<Any?>(null, src) {
+        // the photo saved on the phone shows at once; the server is used only if it is not saved yet
+        value = if (src != null && isPrivate) (PhotoCache.local(ctx, src) ?: PhotoCache.download(ctx, src) ?: privatePhotoUrl(src)) else null
     }
     val model: Any? = when {
         src == null -> null

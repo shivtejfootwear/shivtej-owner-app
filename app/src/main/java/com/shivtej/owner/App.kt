@@ -61,6 +61,8 @@ class App : Application() {
         db = AppDb.build(this)
         repo = Repo(db, prefs)
         sync = SyncManager(repo, prefs, scope, this)
+        // product photos are kept on the phone: whenever the product list changes, the missing photos download
+        scope.launch { repo.products.collect { com.shivtej.owner.ui.PhotoCache.syncAll(this@App, it) } }
         net = Net(this)
         cart = com.shivtej.owner.data.CartStore(prefs)
         printer = com.shivtej.owner.util.PrinterManager(this, prefs)

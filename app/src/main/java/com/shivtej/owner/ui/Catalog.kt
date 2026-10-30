@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -256,7 +257,10 @@ private fun ColourDot(name: String, sizeDp: Int) {
 @Composable
 private fun CatalogPhoto(src: String?, modifier: Modifier) {
     val isPrivate = src != null && src.startsWith("products/")
-    val remoteUrl by produceState<String?>(null, src) { value = if (src != null && isPrivate) privatePhotoUrl(src) else null }
+    val ctx = LocalContext.current
+    val remoteUrl by produceState<Any?>(null, src) {
+        value = if (src != null && isPrivate) (PhotoCache.local(ctx, src) ?: PhotoCache.download(ctx, src) ?: privatePhotoUrl(src)) else null
+    }
     val model: Any? = when {
         src == null -> null
         isPrivate -> remoteUrl
