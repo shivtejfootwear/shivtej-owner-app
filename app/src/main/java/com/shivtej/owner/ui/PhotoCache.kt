@@ -49,20 +49,19 @@ object PhotoCache {
 
     /**
      * Downloads one photo. Returns null when it is saved on the phone, otherwise the reason it could not be saved.
-     * Temporary errors (server busy 503, too many requests 429, network dropped) are tried again with
-     * exponential backoff: 1 s, 2 s, 4 s, 8 s (or the Retry-After time the server gives, up to 30 s).
+     * A temporary error (server busy 503, too many requests 429, network dropped) is tried again up to [retries] times,
+     * waiting 2 s, then 4 s (or the Retry-After time the server gives, up to 30 s).
      */
-    suspend fun fetch(ctx: Context, name: String): String? = gate.withLock {
+    suspend fun fetch(ctx: Context, name: String, retries: Int = 0): String? = gate.withLock {
         if (local(ctx, name) != null) return@withLock null
-        var attempt = 0
-        var wait = 1000L
-        var last: Try
-        while (true) {
-            last = fetchOnce(ctx, name)
-            if (last.reason == null || !last.temporary || attempt >= 4) break
-            attempt++
+        var wait = 2000L
+        var left = retries
+        var last = fetchOnce(ctx, name)
+        while (last.reason != null && last.temporary && left > 0) {
             kotlinx.coroutines.delay(maxOf(wait, last.waitMs))
             wait *= 2
+            left--
+            last = fetchOnce(ctx, name)
         }
         last.reason
     }
@@ -84,8 +83,8 @@ object PhotoCache {
             }
             val conn = URL(url).openConnection() as HttpURLConnection
             try {
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 30_000
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 20_000
                 val code = conn.responseCode
                 if (code != 200) {
                     val ra = (conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull() ?: 0L) * 1000L
@@ -130,15 +129,27 @@ object PhotoCache {
 
         publish(true)
         var lastPct = if (total == 0) 100 else saved * 100 / total
+        val later = ArrayList<String>()
+        fun done(n: String, r: String?) {
+            if (r == null) { saved++; reasons.remove(n); failedAt.remove(n) }
+            else { reasons[n] = r; failedAt[n] = System.currentTimeMillis() }
+        }
+        // Pass 1: every missing photo, once. Failed ones wait for pass 2.
         for (n in names) {
             if (local(ctx, n) != null) continue
             val last = failedAt[n]
             if (last != null && System.currentTimeMillis() - last < RETRY_AFTER) continue   // tried recently
-            val r = fetch(ctx, n)
-            if (r == null) { saved++; reasons.remove(n); failedAt.remove(n) }
-            else { reasons[n] = r; failedAt[n] = System.currentTimeMillis() }
+            val r = fetch(ctx, n, retries = 0)
+            if (r != null) later.add(n)
+            done(n, r)
             val pct = saved * 100 / total
             if (pct != lastPct || r != null) { lastPct = pct; publish(true) }   // a few updates only, so the screen does not lag
+        }
+        // Pass 2: the failed ones, with a couple of quick retries each.
+        for (n in later) {
+            if (local(ctx, n) != null) continue
+            done(n, fetch(ctx, n, retries = 2))
+            publish(true)
         }
         publish(false)
     }
