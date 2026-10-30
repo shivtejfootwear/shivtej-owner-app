@@ -8,6 +8,8 @@ import com.shivtej.owner.net.ApiError
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
@@ -31,7 +33,8 @@ object PhotoCache {
     private val _state = MutableStateFlow(PhotoState(0, 0, false, 100, emptyList()))
     val state: StateFlow<PhotoState> = _state
 
-    private val busy = HashSet<String>()
+    // Only one photo is downloaded at a time. A second request for the same photo waits, then finds it saved.
+    private val gate = Mutex()
     private val reasons = LinkedHashMap<String, String>()   // photos that failed in this run, with the reason
     private val failedAt = HashMap<String, Long>()          // when each failed photo was last tried
     private const val RETRY_AFTER = 10 * 60_000L
@@ -42,25 +45,31 @@ object PhotoCache {
     /** The saved photo for a "products/..." name, or null when it is not on the phone yet. */
     fun local(ctx: Context, name: String): File? = fileOf(ctx, name).takeIf { it.isFile && it.length() > 0 }
 
-    private class Try(val reason: String?, val temporary: Boolean)
+    private class Try(val reason: String?, val temporary: Boolean, val waitMs: Long = 0)
 
-    /** Downloads one photo. Returns null when it is saved on the phone, otherwise the reason it could not be saved.
-     *  Temporary problems (server busy, network dropped) are tried again a few times, after a short wait. */
-    suspend fun fetch(ctx: Context, name: String): String? {
-        if (local(ctx, name) != null) return null
-        var last: Try = Try("अभी डाउनलोड चल रहा है", false)
-        for (i in 0 until 4) {
+    /**
+     * Downloads one photo. Returns null when it is saved on the phone, otherwise the reason it could not be saved.
+     * Temporary errors (server busy 503, too many requests 429, network dropped) are tried again with
+     * exponential backoff: 1 s, 2 s, 4 s, 8 s (or the Retry-After time the server gives, up to 30 s).
+     */
+    suspend fun fetch(ctx: Context, name: String): String? = gate.withLock {
+        if (local(ctx, name) != null) return@withLock null
+        var attempt = 0
+        var wait = 1000L
+        var last: Try
+        while (true) {
             last = fetchOnce(ctx, name)
-            if (last.reason == null || !last.temporary) break
-            kotlinx.coroutines.delay(2000L * (i + 1))
+            if (last.reason == null || !last.temporary || attempt >= 4) break
+            attempt++
+            kotlinx.coroutines.delay(maxOf(wait, last.waitMs))
+            wait *= 2
         }
-        return last.reason
+        last.reason
     }
 
     private suspend fun fetchOnce(ctx: Context, name: String): Try = withContext(Dispatchers.IO) {
         if (local(ctx, name) != null) return@withContext Try(null, false)
         val pid = name.split("/").getOrNull(1) ?: return@withContext Try("फ़ाइल का नाम गलत है", false)
-        synchronized(busy) { if (!busy.add(name)) return@withContext Try("अभी डाउनलोड चल रहा है", false) }
         try {
             val url = try {
                 Api.productPhotoUrl(pid, name)
@@ -78,7 +87,10 @@ object PhotoCache {
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 30_000
                 val code = conn.responseCode
-                if (code != 200) return@withContext Try("स्टोरेज से फ़ोटो नहीं आई (कोड $code)", code == 429 || code >= 500)
+                if (code != 200) {
+                    val ra = (conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull() ?: 0L) * 1000L
+                    return@withContext Try("स्टोरेज से फ़ोटो नहीं आई (कोड $code)", code == 429 || code >= 500, ra.coerceAtMost(30_000L))
+                }
                 val f = fileOf(ctx, name)
                 val tmp = File(f.parentFile, f.name + ".part")
                 conn.inputStream.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
@@ -90,12 +102,8 @@ object PhotoCache {
             }
         } catch (e: Exception) {
             Try("नेटवर्क टूटा (${e.javaClass.simpleName})", true)
-        } finally {
-            synchronized(busy) { busy.remove(name) }
         }
     }
-
-    /** The saved photo for a name: downloads it now if it is not on the phone yet. Null when it could not be saved. */
 
     /**
      * Downloads every product photo that is not on the phone yet.
