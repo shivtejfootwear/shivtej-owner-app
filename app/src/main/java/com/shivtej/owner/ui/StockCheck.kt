@@ -12,7 +12,11 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -23,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -41,15 +46,15 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** One barcode of one size of one product. */
-private data class Hit(val pid: String, val article: String, val colour: String, val size: String, val cats: List<String>)
+private data class Hit(val pid: String, val article: String, val colour: String, val size: String, val cats: List<String>, val brand: String = "")
 
 private fun catsOfProduct(p: Product): List<String> = p.category.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }
 
 private fun sizeKey(pid: String, colour: String, size: String) = "$pid|$colour|$size"
 
-/** The saved check: category ("" = all), scanned barcodes with their time, hand counts for pieces without a barcode. */
-private class CheckState(var cat: String, val scanned: MutableMap<String, Long>, val manual: MutableMap<String, Int>) {
-    fun toJson(): String = JSONObject().put("cat", cat)
+/** The saved check: category and brand ("" = all), scanned barcodes with their time, hand counts for pieces without a barcode. */
+private class CheckState(var cat: String, val scanned: MutableMap<String, Long>, val manual: MutableMap<String, Int>, var brand: String = "") {
+    fun toJson(): String = JSONObject().put("cat", cat).put("brand", brand)
         .put("scanned", JSONObject(scanned.mapValues { it.value }))
         .put("manual", JSONObject(manual.mapValues { it.value })).toString()
 
@@ -60,7 +65,8 @@ private class CheckState(var cat: String, val scanned: MutableMap<String, Long>,
             val mn = o.optJSONObject("manual") ?: JSONObject()
             CheckState(o.optString("cat", ""),
                 sc.keys().asSequence().associateWith { sc.optLong(it) }.toMutableMap(),
-                mn.keys().asSequence().associateWith { mn.optInt(it) }.toMutableMap())
+                mn.keys().asSequence().associateWith { mn.optInt(it) }.toMutableMap(),
+                o.optString("brand", ""))
         } catch (e: Exception) { CheckState("", mutableMapOf(), mutableMapOf()) }
     }
 }
@@ -76,7 +82,7 @@ private class Feedback(private val ctx: Context) {
 /** Live camera that stays open; every code it reads goes to onCode (the screen decides what to do). */
 @androidx.annotation.OptIn(markerClass = [ExperimentalGetImage::class])
 @Composable
-internal fun ContinuousScanner(onCode: (String) -> Unit) {
+internal fun ContinuousScanner(height: Dp = 190.dp, onCode: (String) -> Unit) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(ctx) }
@@ -125,7 +131,7 @@ internal fun ContinuousScanner(onCode: (String) -> Unit) {
             executor.shutdown()
         }
     }
-    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(190.dp))
+    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(height))
 }
 
 /** The "Stock check" screen (dashboard button / menu): opens the check at once, and the button reopens it. */
@@ -170,7 +176,7 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
             p.variants.forEach { v ->
                 v.sizes.forEach { s ->
                     (s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }).forEach { c ->
-                        m[c] = Hit(p.id, p.article.ifBlank { p.name }, v.colour, s.size, catsOfProduct(p))
+                        m[c] = Hit(p.id, p.article.ifBlank { p.name }, v.colour, s.size, catsOfProduct(p), p.brand.trim().uppercase())
                     }
                 }
             }
@@ -178,10 +184,12 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
         m
     }
     val allCats = remember(active) { active.flatMap { catsOfProduct(it) }.distinct().sorted() }
+    val allBrands = remember(active) { active.map { it.brand.trim().uppercase() }.filter { it.isNotEmpty() }.distinct().sorted() }
 
     // the pieces of the chosen category (or all): expected barcodes per size
-    val inScope = remember(active, st.cat, tick) {
-        active.filter { st.cat.isEmpty() || st.cat in catsOfProduct(it) }
+    val inScope = remember(active, st.cat, st.brand, tick) {
+        active.filter { (st.cat.isEmpty() || st.cat in catsOfProduct(it)) &&
+            (st.brand.isEmpty() || it.brand.trim().uppercase() == st.brand) }
     }
     data class SizeRow(val pid: String, val article: String, val colour: String, val size: String,
                        val codes: List<String>, val noBarcode: Int)
@@ -221,6 +229,10 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                 feedback.notFound(); lastRed = true
                 lastText = "बारकोड नहीं मिला: $code"
             }
+            st.brand.isNotEmpty() && st.brand != hit.brand -> {
+                feedback.notFound(); lastRed = true
+                lastText = "यह आइटम इस ब्रांड का नहीं: ${hit.article} · ${hit.colour} · ${hit.size}"
+            }
             st.cat.isNotEmpty() && st.cat !in hit.cats -> {
                 feedback.notFound(); lastRed = true
                 lastText = "यह आइटम इस कैटेगरी का नहीं: ${hit.article} · ${hit.colour} · ${hit.size}"
@@ -252,47 +264,67 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("स्टॉक चेक", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { soundOn = !soundOn; app.repo.prefs.stockCheckSound = soundOn }) {
-                        Text(if (soundOn) "🔊 आवाज़ चालू" else "🔇 आवाज़ बंद")
-                    }
-                    TextButton(onClick = onClose) { Text("बंद करें") }
-                }
-
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = st.cat.isEmpty(), onClick = { st.cat = ""; save() }, label = { Text("ALL") })
-                    allCats.take(4).forEach { c ->
-                        FilterChip(selected = st.cat == c, onClick = { st.cat = c; save() }, label = { Text(c) })
-                    }
-                }
-                if (allCats.size > 4) {
-                    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        allCats.drop(4).forEach { c ->
-                            FilterChip(selected = st.cat == c, onClick = { st.cat = c; save() }, label = { Text(c) })
+            Column(Modifier.fillMaxSize()) {
+                // camera on top; the small wordmark, sound and close sit over it, the last result at the bottom
+                Box(Modifier.fillMaxWidth().height(330.dp)) {
+                    ContinuousScanner(height = 330.dp) { onCode(it) }
+                    Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Wordmark()
+                        Spacer(Modifier.weight(1f))
+                        OverlayChip(if (soundOn) "🔊 चालू" else "🔇 बंद") {
+                            soundOn = !soundOn; app.repo.prefs.stockCheckSound = soundOn
                         }
+                        Spacer(Modifier.width(6.dp))
+                        OverlayChip("बंद करें", onClose)
+                    }
+                    Text(lastText, color = if (lastRed) Color(0xFFFF8A80) else Color(0xFFA5D6A7),
+                        fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(10.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+
+                // progress: how much of the stock is scanned
+                val pct = if (totalPieces == 0) 0 else scannedTotal * 100 / totalPieces
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text("$pct%", fontWeight = FontWeight.ExtraBold, fontSize = 28.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text("स्कैन $scannedTotal · कुल $totalPieces", fontSize = 13.sp, color = Color(0xFF6E6E73))
+                    }
+                    LinearProgressIndicator(
+                        progress = if (totalPieces == 0) 0f else scannedTotal.toFloat() / totalPieces,
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(8.dp),
+                        color = Color(0xFF2E7D32), trackColor = Color(0xFFECEEF2))
+                    Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                        Text("बाकी $missingCount", fontSize = 13.sp, color = Color(0xFFC62828), fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.weight(1f))
+                        Text("हाथ से गिनती: $handCounted", fontSize = 12.sp, color = Color(0xFF6E6E73))
                     }
                 }
-
-                // the scanner stays open all the time
-                ContinuousScanner { onCode(it) }
-                Text(lastText, color = if (lastRed) Color(0xFFC62828) else Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp))
-
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("स्कैन: $scannedTotal", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
-                    Text("बाकी: $missingCount", fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
-                    Text("कुल: ${totalPieces}", fontWeight = FontWeight.Bold)
-                }
-                Text("हाथ से गिनती (बिना बारकोड): $handCounted", fontSize = 12.sp)
 
                 TabRow(selectedTabIndex = tab) {
                     Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("स्कैन हुए ($scannedTotal)") })
                     Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("नहीं स्कैन हुए ($missingCount)") })
                 }
 
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 6.dp)) {
+                // filters: category, then brand (ALL first in each)
+                LazyRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    item { FilterChip(selected = st.cat.isEmpty(), onClick = { st.cat = ""; save() }, label = { Text("ALL") }) }
+                    items(allCats) { c ->
+                        FilterChip(selected = st.cat == c, onClick = { st.cat = c; save() }, label = { Text(c) })
+                    }
+                }
+                LazyRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    item { FilterChip(selected = st.brand.isEmpty(), onClick = { st.brand = ""; save() }, label = { Text("सभी ब्रांड") }) }
+                    items(allBrands) { b ->
+                        FilterChip(selected = st.brand == b, onClick = { st.brand = b; save() }, label = { Text(b) })
+                    }
+                }
+
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
                     if (tab == 0) {
                         val byItem = sizeRows.groupBy { "${it.article} · ${it.colour}" }
                         byItem.forEach { (title, rows) ->
@@ -336,12 +368,12 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                     }
                 }
 
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = { confirmClear = true }, modifier = Modifier.weight(1f)) { Text("सब साफ़ करें", fontSize = 12.sp) }
                     OutlinedButton(onClick = onClose, modifier = Modifier.weight(1f)) { Text("रोकें (बाद में जारी)", fontSize = 12.sp) }
                     Button(onClick = { confirmApply = true }, modifier = Modifier.weight(1f)) { Text("लागू करें", fontSize = 12.sp) }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = { shareCheck() }, modifier = Modifier.weight(1f)) {
                         Text("सूची शेयर (WhatsApp / Excel)", fontSize = 12.sp)
                     }
@@ -377,3 +409,17 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
         dismissButton = { TextButton(onClick = { confirmApply = false }) { Text("रद्द") } })
 }
 
+
+/** A small, plain wordmark over the camera (the shop name only, kept short). */
+@Composable
+private fun Wordmark() {
+    Text("SHIVTEJ", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp, letterSpacing = 2.sp, color = Color(0xFFC62828),
+        modifier = Modifier.background(Color.White.copy(alpha = 0.92f), RoundedCornerShape(6.dp)).padding(horizontal = 9.dp, vertical = 4.dp))
+}
+
+@Composable
+private fun OverlayChip(text: String, onClick: () -> Unit) {
+    Text(text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+        modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 5.dp))
+}
