@@ -266,6 +266,33 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         return fixed
     }
 
+    /**
+     * Stock check (applied): for each size of these products, qty = pieces scanned (kept barcodes) + pieces
+     * counted by hand without barcode. Barcodes that were not scanned leave the size. Returns sizes changed.
+     */
+    suspend fun applyStockCheck(products: List<Product>, scanned: Set<String>, manual: Map<String, Int>): Int {
+        var changed = 0
+        for (p in products) {
+            var productChanged = false
+            val variants = p.variants.map { v ->
+                v.copy(sizes = v.sizes.map { s ->
+                    val key = "${p.id}|${v.colour}|${s.size}"
+                    val codes = s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }
+                    val hand = manual[key]
+                    if (codes.isEmpty() && hand == null) return@map s
+                    val kept = codes.filter { it in scanned }
+                    val noBarcode = hand ?: (s.qty - codes.size).coerceAtLeast(0)
+                    val newQty = kept.size + noBarcode
+                    if (newQty == s.qty && kept.size == codes.size) return@map s
+                    productChanged = true; changed++
+                    s.copy(qty = newQty, barcode = kept.firstOrNull() ?: "", barcodes = kept)
+                })
+            }
+            if (productChanged) runCatching { saveProduct(p.copy(variants = variants), isNew = false) }
+        }
+        return changed
+    }
+
     suspend fun saveProduct(p0: Product, isNew: Boolean) {
         // all English names are saved in CAPITAL letters (Hindi stays as it is); the Men / Ladies category is not changed
         val p = p0.copy(article = capName(p0.article), brand = capName(p0.brand), productType = capName(p0.productType), category = capName(p0.category),

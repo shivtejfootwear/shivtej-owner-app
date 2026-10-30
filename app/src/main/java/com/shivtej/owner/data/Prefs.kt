@@ -171,6 +171,12 @@ class Prefs(ctx: Context) {
     var qtyFromBarcodesFixed: Boolean   // one-time repair done: sizes with barcodes but qty 0 got qty from their barcodes
         get() = sp.getBoolean("qty_barcode_fix_v1", false)
         set(v) = sp.edit().putBoolean("qty_barcode_fix_v1", v).apply()
+    var stockCheckJson: String          // the running stock check (scanned barcodes, hand counts, category); "" = none
+        get() = sp.getString("stock_check_v1", "") ?: ""
+        set(v) = sp.edit().putString("stock_check_v1", v).apply()
+    var stockCheckSound: Boolean        // sounds during the stock check (on by default)
+        get() = sp.getBoolean("stock_check_sound", true)
+        set(v) = sp.edit().putBoolean("stock_check_sound", v).apply()
     var notOrderKeys: Set<String>       // supplier order list: pieces the owner chose NOT to order (supplier|article|colour|size)
         get() = sp.getStringSet("supplier_not_order", emptySet())?.toSet() ?: emptySet()
         set(v) = sp.edit().putStringSet("supplier_not_order", v).apply()

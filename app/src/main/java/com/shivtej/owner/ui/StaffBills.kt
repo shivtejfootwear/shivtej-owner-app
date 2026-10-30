@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +29,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.OffsetDateTime
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -45,6 +47,13 @@ private fun whenText(iso: String): String = try {
     when { mins < 1 -> "just now"; mins < 60 -> "$mins min ago"; mins < 24 * 60 -> "${mins / 60} h ago"; else -> t.format(tFmt) }
 } catch (e: Exception) { "" }
 
+/** "आज", "कल" or the date, from the bill's time (phone time zone). */
+private fun dayOf(iso: String): String = try {
+    val d = OffsetDateTime.parse(iso).atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()
+    val today = LocalDate.now()
+    when (d) { today -> "आज"; today.minusDays(1) -> "कल"; else -> d.format(DateTimeFormatter.ofPattern("d MMM yyyy")) }
+} catch (e: Exception) { "" }
+
 @Composable
 fun StaffBillsScreen(app: App, nav: Nav) {
     val ctx = LocalContext.current
@@ -53,6 +62,7 @@ fun StaffBillsScreen(app: App, nav: Nav) {
     var bills by remember { mutableStateOf<List<SBill>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var askDelete by remember { mutableStateOf<SBill?>(null) }
 
     fun load(quiet: Boolean = false) {
         if (!quiet) { loading = true; error = null }
@@ -88,10 +98,26 @@ fun StaffBillsScreen(app: App, nav: Nav) {
         }
     }
 
+    fun deleteBill(b: SBill) {
+        // gone from the list at once; the server marks it cancelled, so the manager's phone drops it too
+        bills = bills?.filterNot { it.id == b.id }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { Api.rpc("owner_staff_bill_delete", JSONObject().put("p_code", code).put("p_id", b.id)) }
+                toast(ctx, "बिल हटाया गया")
+                load(quiet = true)
+            } catch (e: Exception) {
+                val m = e.message.orEmpty()
+                toast(ctx, if (m.contains("PGRST202") || m.contains("Could not find the function")) "पहले owner_update_28 SQL चलाएँ" else "हटाने में दिक्कत, फिर कोशिश करें")
+                load(quiet = true)
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Bills sent by managers. Tap \"Bill\" to set the customer and rate.", fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text("मैनेजर के भेजे बिल। \"बिल बनाएँ\" से POS में खुलेंगे, \"एडिट\" से आइटम बदलें, ग्राहक न लें तो \"डिलीट\" करें।",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
             IconButton(onClick = { load() }) { Icon(Icons.Filled.Refresh, "Refresh") }
         }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -100,37 +126,66 @@ fun StaffBillsScreen(app: App, nav: Nav) {
         val list = bills
         if (list != null) {
             if (list.isEmpty()) EmptyState("No bills from managers right now.")
-            // group by manager, keep server order (name, then oldest first)
             val grouped = list.groupBy { it.staffName }
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
                 grouped.forEach { (staff, items) ->
                     item(key = "h_$staff") {
-                        Text("🪪 $staff · ${items.size} bill(s)", fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-                    }
-                    items.forEachIndexed { idx, b ->
-                      item(key = b.id) {
-                        Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF283593)), contentAlignment = Alignment.Center) {
-                                    Text("${idx + 1}", color = Color.White, fontWeight = FontWeight.Bold)
-                                }
-                                Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                                    val n = (0 until b.items.length()).sumOf { b.items.optJSONObject(it)?.optInt("qty", 0) ?: 0 }
-                                    Text("$n item(s) · rate to set", fontWeight = FontWeight.SemiBold)
-                                    val names = (0 until b.items.length()).mapNotNull { b.items.optJSONObject(it)?.optString("article")?.ifBlank { b.items.optJSONObject(it)?.optString("name") } }
-                                    Text((names.joinToString(", ").ifBlank { "items" }) + " · " + whenText(b.at),
-                                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                Button(onClick = { openInPos(b) }, colors = ButtonDefaults.buttonColors(containerColor = BrandRed)) { Text("Bill") }
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(42.dp).clip(CircleShape).background(Color(0xFFE65100)), contentAlignment = Alignment.Center) {
+                                Text(staff.trim().firstOrNull()?.uppercase() ?: "M", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                            }
+                            Column(Modifier.padding(start = 10.dp)) {
+                                Text(staff, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                Text("${items.size} बिल", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                      }
+                    }
+                    items.groupBy { dayOf(it.at) }.forEach { (day, dayBills) ->
+                        item(key = "d_${staff}_$day") {
+                            Text(day, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = BrandRed,
+                                modifier = Modifier.padding(top = 6.dp, start = 4.dp))
+                        }
+                        dayBills.forEachIndexed { idx, b ->
+                            item(key = b.id) {
+                                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                    Column(Modifier.padding(10.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(26.dp).clip(CircleShape).background(Color(0xFF283593)), contentAlignment = Alignment.Center) {
+                                                Text("${idx + 1}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            }
+                                            val n = (0 until b.items.length()).sumOf { b.items.optJSONObject(it)?.optInt("qty", 0) ?: 0 }
+                                            Text("  $n पीस · ${whenText(b.at)}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                        }
+                                        for (k in 0 until b.items.length()) {
+                                            val it = b.items.optJSONObject(k) ?: continue
+                                            Text("${it.optString("article")} · ${it.optString("colour")} · साइज़ ${it.optString("size")} × ${it.optInt("qty", 1)}",
+                                                fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, top = 2.dp))
+                                        }
+                                        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Button(onClick = { openInPos(b) }, colors = ButtonDefaults.buttonColors(containerColor = BrandRed), modifier = Modifier.weight(1f)) { Text("बिल बनाएँ", fontSize = 12.sp) }
+                                            OutlinedButton(onClick = { openInPos(b) }, modifier = Modifier.weight(1f)) { Text("एडिट", fontSize = 12.sp) }
+                                            OutlinedButton(onClick = { askDelete = b }, modifier = Modifier.weight(1f)) {
+                                                Text("डिलीट", fontSize = 12.sp, color = BrandRed)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         } else if (error == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
+    }
+
+    askDelete?.let { b ->
+        AlertDialog(
+            onDismissRequest = { askDelete = null },
+            title = { Text("यह बिल हटाएँ?") },
+            text = { Text("${b.staffName} का यह बिल यहाँ से और उनके फ़ोन की सूची से भी हट जाएगा। ग्राहक न लेने पर ही हटाएँ।") },
+            confirmButton = { TextButton(onClick = { askDelete = null; deleteBill(b) }) { Text("हाँ, हटाएँ", color = BrandRed) } },
+            dismissButton = { TextButton(onClick = { askDelete = null }) { Text("रद्द") } })
     }
 }

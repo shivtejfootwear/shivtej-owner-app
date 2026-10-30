@@ -43,13 +43,18 @@ private data class StockRow(val p: Product, val v: Variant, val s: SizeStock)
 @Composable
 fun StockScreen(app: App, initialTab: Int, initialFilter: String) {
     var tab by remember(initialTab) { mutableIntStateOf(initialTab) }
+    var checking by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
+        Button(onClick = { checking = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("स्टॉक चेक (बारकोड स्कैन से गिनती)")
+        }
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Inventory") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Stock history") })
         }
         if (tab == 0) InventoryTab(app, initialFilter) else HistoryTab(app)
     }
+    if (checking) StockCheckDialog(app) { checking = false }
 }
 
 @Composable
