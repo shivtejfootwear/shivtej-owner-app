@@ -464,15 +464,28 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
      */
     /** One piece sold or taken out: its barcode leaves the stock (a sold barcode can not be sold again).
      *  The scanned barcodes (comma-separated on the bill line) go first; if there are none, any barcodes of that size go. */
+    private fun soldSet(): MutableSet<String> = prefs.soldBarcodes.split(',').filter { it.isNotBlank() }.toMutableSet()
+
+    /** Remembers a sold barcode so a later product download (the server still lists it) does not put it back in stock. */
+    private fun markSold(code: String) {
+        val set = soldSet(); set.add(code)
+        prefs.soldBarcodes = set.toList().takeLast(5000).joinToString(",")
+    }
+
+    private fun unmarkSold(code: String) {
+        val set = soldSet(); if (set.remove(code)) prefs.soldBarcodes = set.joinToString(",")
+    }
+
     private suspend fun consumePieces(pid: String, colour: String, size: String, qty: Int, scanned: String) {
         val left = dao.piecesOfSize(pid, colour, size).sortedBy { it.barcode }.toMutableList()
         var need = qty
         for (code in scanned.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
-            left.firstOrNull { it.barcode == code }?.let { left.remove(it); dao.delPiece(it.barcode); need-- }
+            left.firstOrNull { it.barcode == code }?.let { left.remove(it); dao.delPiece(it.barcode); markSold(it.barcode); need-- }
         }
         while (need > 0 && left.isNotEmpty()) {
             val piece = left.removeAt(0)
             dao.delPiece(piece.barcode)
+            markSold(piece.barcode)
             need--
         }
         // the size's main barcode follows the pieces still in stock
@@ -484,6 +497,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         if (code.isBlank()) return
         if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) return
         dao.putPieces(listOf(PieceBarcodeE(code, pid, colour, size)))
+        unmarkSold(code)
         if (dao.sizesOf(pid).firstOrNull { it.colour == colour && it.size == size }?.barcode.isNullOrBlank()) {
             dao.setSizeBarcode(pid, colour, size, code)
         }
@@ -1538,9 +1552,11 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 val keep = dao.product(id)
                 val withType = if (o.has("product_type")) pe else pe.copy(productType = keep?.productType ?: "")
                 dao.putProduct(if (o.has("sub_category")) withType else withType.copy(subCategory = keep?.subCategory ?: ""))
-                dao.putVariants(vs); dao.putSizes(ss)
+                val soldHere = soldSet()
+                dao.putVariants(vs); dao.putSizes(ss.map { if (it.barcode.isNotBlank() && it.barcode in soldHere) it.copy(barcode = "") else it })
                 // upsert only: pieces this phone already has stay; the server's list adds the rest
-                val pieces = parsePieces(o)
+                val sold = soldSet()
+                val pieces = parsePieces(o).filter { it.barcode !in sold }   // sold here: not back in stock
                 if (pieces.isNotEmpty()) dao.putPieces(pieces)
             }
         }
