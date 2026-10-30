@@ -10,10 +10,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,20 +25,19 @@ import com.shivtej.owner.App
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/** Download tray with an arrow going into it (the chosen icon). */
-val DownloadTrayIcon: ImageVector by lazy {
-    val line = SolidColor(Color.White)
-    ImageVector.Builder("DownloadTray", 24.dp, 24.dp, 24f, 24f).apply {
-        path(stroke = line, strokeLineWidth = 2.2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
-            moveTo(12f, 4f); lineTo(12f, 14f)
-        }
-        path(stroke = line, strokeLineWidth = 2.2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
-            moveTo(8f, 10.5f); lineTo(12f, 14.5f); lineTo(16f, 10.5f)
-        }
-        path(stroke = line, strokeLineWidth = 2.2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
-            moveTo(4f, 14f); lineTo(4f, 19f); lineTo(20f, 19f); lineTo(20f, 14f)
-        }
-    }.build()
+/** Download tray with an arrow going into it (the chosen icon), drawn directly so it works on every version. */
+@Composable
+fun DownloadTrayGlyph(modifier: Modifier = Modifier, color: Color = Color.White) {
+    Canvas(modifier) {
+        val k = size.minDimension / 24f
+        fun pt(x: Float, y: Float) = Offset(x * k, y * k)
+        val w = 2.2f * k
+        drawLine(color, pt(12f, 4f), pt(12f, 14f), strokeWidth = w, cap = StrokeCap.Round)
+        drawPath(Path().apply { moveTo(8f * k, 10.5f * k); lineTo(12f * k, 14.5f * k); lineTo(16f * k, 10.5f * k) },
+            color, style = Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(Path().apply { moveTo(4f * k, 14f * k); lineTo(4f * k, 19f * k); lineTo(20f * k, 19f * k); lineTo(20f * k, 14f * k) },
+            color, style = Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
 }
 
 /**
@@ -55,7 +56,7 @@ fun PhotoDownloadButton(app: App) {
             Icon(Icons.Filled.CheckCircle, "सभी फ़ोटो सेव हैं", tint = Color(0xFF66BB6A))
         } else {
             Box(contentAlignment = Alignment.TopEnd) {
-                Icon(DownloadTrayIcon, "फ़ोटो डाउनलोड करें")
+                DownloadTrayGlyph(Modifier.size(24.dp))
                 Text(if (st.missing > 99) "99+" else "${st.missing}", fontSize = 9.sp, fontWeight = FontWeight.Bold,
                     color = Color(0xFFC62828),
                     modifier = Modifier.background(Color.White, RoundedCornerShape(8.dp)).padding(horizontal = 3.dp))
