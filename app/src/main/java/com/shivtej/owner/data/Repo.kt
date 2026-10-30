@@ -279,9 +279,9 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     val key = "${p.id}|${v.colour}|${s.size}"
                     val codes = s.barcodes.ifEmpty { listOfNotNull(s.barcode.takeIf { it.isNotBlank() }) }
                     val hand = manual[key]
-                    if (codes.isEmpty() && hand == null) return@map s
                     val kept = codes.filter { it in scanned }
-                    val noBarcode = hand ?: (s.qty - codes.size).coerceAtLeast(0)
+                    // pieces without barcode: only what was counted by hand stays; the rest is not in stock
+                    val noBarcode = hand ?: 0
                     val newQty = kept.size + noBarcode
                     if (newQty == s.qty && kept.size == codes.size) return@map s
                     productChanged = true; changed++

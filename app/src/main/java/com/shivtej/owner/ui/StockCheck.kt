@@ -71,7 +71,7 @@ private class CheckState(var cat: String, val scanned: MutableMap<String, Long>,
 
 /** Three different sounds + vibration: OK (one beep), again (two beeps), not found (low buzz). */
 private class Feedback(ctx: Context, private val soundOn: () -> Boolean) {
-    private val tone = try { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100) } catch (e: Exception) { null }
+    private val tone = try { ToneGenerator(AudioManager.STREAM_MUSIC, 100) } catch (e: Exception) { null }
     private val vib = ctx.getSystemService(Vibrator::class.java)
     private val main = Handler(Looper.getMainLooper())
 
@@ -215,11 +215,18 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     }
     val inScopeCodes = remember(sizeRows) { sizeRows.flatMap { it.codes }.toSet() }
     val scannedHere = st.scanned.keys.filter { it in inScopeCodes }
-    val missingCount = inScopeCodes.size - scannedHere.size
+    // every piece in scope = barcoded pieces + pieces without barcode (qty not on a barcode)
     val totalPieces = inScopeCodes.size + sizeRows.sumOf { it.noBarcode }
+    // hand counts of pieces without barcode count as scanned, up to their number
     val handCounted = sizeRows.filter { it.noBarcode > 0 }.sumOf { r ->
-        st.manual[sizeKey(r.pid, r.colour, r.size)] ?: 0
+        minOf(r.noBarcode, st.manual[sizeKey(r.pid, r.colour, r.size)] ?: 0)
     }
+    val scannedTotal = scannedHere.size + handCounted
+    val missingCount = (totalPieces - scannedTotal).coerceAtLeast(0)
+    val uncounted = sizeRows.sumOf { r -> r.noBarcode - minOf(r.noBarcode, st.manual[sizeKey(r.pid, r.colour, r.size)] ?: 0) }
+    fun gotOf(r: SizeRow): Int = r.codes.count { it in st.scanned } +
+        minOf(r.noBarcode, st.manual[sizeKey(r.pid, r.colour, r.size)] ?: 0)
+    fun totalOf(r: SizeRow): Int = r.codes.size + r.noBarcode
 
     fun onCode(code: String) {
         val now = System.currentTimeMillis()
@@ -291,14 +298,14 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                     fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp))
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("स्कैन: ${scannedHere.size}", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                    Text("स्कैन: $scannedTotal", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
                     Text("बाकी: $missingCount", fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
                     Text("कुल: ${totalPieces}", fontWeight = FontWeight.Bold)
                 }
                 Text("हाथ से गिनती (बिना बारकोड): $handCounted", fontSize = 12.sp)
 
                 TabRow(selectedTabIndex = tab) {
-                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("स्कैन हुए (${scannedHere.size})") })
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("स्कैन हुए ($scannedTotal)") })
                     Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("नहीं स्कैन हुए ($missingCount)") })
                 }
 
@@ -310,9 +317,8 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                                 Text(title, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
                             }
                             items(rows, key = { "s_${it.pid}|${it.colour}|${it.size}" }) { r ->
-                                val got = r.codes.count { it in st.scanned }
-                                Text("  साइज़ ${r.size}: स्कैन $got / ${r.codes.size}" +
-                                    if (r.noBarcode > 0) "  (हाथ से ${st.manual[sizeKey(r.pid, r.colour, r.size)] ?: 0})" else "",
+                                Text("  साइज़ ${r.size}: स्कैन ${gotOf(r)} / ${totalOf(r)}" +
+                                    if (r.noBarcode > 0) "  (बिना बारकोड ${r.noBarcode})" else "",
                                     fontSize = 13.sp)
                             }
                         }
@@ -320,12 +326,12 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
                     } else {
                         val byItem = sizeRows.groupBy { "${it.article} · ${it.colour}" }
                         byItem.forEach { (title, rows) ->
-                            val missRows = rows.filter { r -> r.codes.any { it !in st.scanned } || r.noBarcode > 0 }
+                            val missRows = rows.filter { r -> totalOf(r) - gotOf(r) > 0 }
                             if (missRows.isNotEmpty()) item(key = "m_$title") {
                                 Text(title, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
                             }
                             items(missRows, key = { "m_${it.pid}|${it.colour}|${it.size}" }) { r ->
-                                val miss = r.codes.count { it !in st.scanned }
+                                val miss = totalOf(r) - gotOf(r)
                                 Column(Modifier.padding(start = 8.dp, bottom = 4.dp)) {
                                     Text("साइज़ ${r.size}: बाकी $miss" + if (r.noBarcode > 0) " · बिना बारकोड ${r.noBarcode}" else "",
                                         fontSize = 13.sp, color = Color(0xFFC62828))
@@ -373,9 +379,9 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     if (confirmApply) AlertDialog(
         onDismissRequest = { confirmApply = false },
         title = { Text("स्टॉक चेक लागू करें?") },
-        text = { Text("स्कैन हुए: ${scannedHere.size} पीस, स्टॉक वही रहेगा।\n" +
+        text = { Text("स्कैन हुए: $scannedTotal पीस, स्टॉक वही रहेगा।\n" +
             "नहीं स्कैन हुए: $missingCount पीस, ये स्टॉक से हट जाएँगे (बिका या गायब मानें)।\n" +
-            "हाथ से गिनती: $handCounted।\nसूची एक बार देख लें।") },
+            "इनमें बिना बारकोड और हाथ से न गिने गए: $uncounted।\nसूची एक बार देख लें।") },
         confirmButton = { TextButton(onClick = {
             confirmApply = false
             scope.launch {
