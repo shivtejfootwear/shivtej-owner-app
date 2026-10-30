@@ -85,14 +85,19 @@ object PhotoCache {
             try {
                 conn.connectTimeout = 10_000
                 conn.readTimeout = 20_000
+                val f = fileOf(ctx, name)
+                val tmp = File(f.parentFile, f.name + ".part")
+                // Resume: a slow link keeps what was already received, the next try asks only for the rest.
+                val have = if (tmp.isFile) tmp.length() else 0L
+                if (have > 0) conn.setRequestProperty("Range", "bytes=$have-")
                 val code = conn.responseCode
-                if (code != 200) {
+                if (code == 416) { tmp.delete(); return@withContext Try("फ़ोटो दोबारा शुरू हो रही है", true) }
+                if (code != 200 && code != 206) {
                     val ra = (conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull() ?: 0L) * 1000L
                     return@withContext Try("स्टोरेज से फ़ोटो नहीं आई (कोड $code)", code == 429 || code >= 500, ra.coerceAtMost(30_000L))
                 }
-                val f = fileOf(ctx, name)
-                val tmp = File(f.parentFile, f.name + ".part")
-                conn.inputStream.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
+                val appendMode = code == 206          // server sent only the rest
+                conn.inputStream.use { inp -> java.io.FileOutputStream(tmp, appendMode).use { inp.copyTo(it) } }
                 if (tmp.length() == 0L) { tmp.delete(); return@withContext Try("फ़ाइल खाली आई", true) }
                 tmp.renameTo(f)
                 Try(null, false)
@@ -148,7 +153,7 @@ object PhotoCache {
         // Pass 2: the failed ones, with a couple of quick retries each.
         for (n in later) {
             if (local(ctx, n) != null) continue
-            done(n, fetch(ctx, n, retries = 2))
+            done(n, fetch(ctx, n, retries = 4))
             publish(true)
         }
         publish(false)
