@@ -3,6 +3,8 @@ package com.shivtej.owner.ui
 import android.content.Context
 import com.shivtej.owner.data.Product
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
@@ -44,9 +46,22 @@ object PhotoCache {
         }
     }
 
+    /** How many product photos are on the phone, for the download button on the dashboard. */
+    data class PhotoState(val total: Int, val saved: Int, val downloading: Boolean) {
+        val missing: Int get() = (total - saved).coerceAtLeast(0)
+    }
+    private val _state = MutableStateFlow(PhotoState(0, 0, false))
+    val state: StateFlow<PhotoState> = _state
+
     /** Downloads every product photo that is not on the phone yet; the saved ones are not touched. */
     suspend fun syncAll(ctx: Context, products: List<Product>) {
         val names = products.flatMap { it.allImages }.filter { it.startsWith("products/") }.distinct()
-        for (n in names) if (local(ctx, n) == null) download(ctx, n)
+        val before = names.count { local(ctx, it) != null }
+        _state.value = PhotoState(names.size, before, before < names.size)
+        for (n in names) {
+            if (local(ctx, n) != null) continue
+            download(ctx, n)
+        }
+        _state.value = PhotoState(names.size, names.count { local(ctx, it) != null }, false)
     }
 }
