@@ -99,12 +99,12 @@ fun PosScreen(app: App, nav: Nav) {
         scope.launch {
             val h = app.repo.lookup(c)
             when {
-                h == null -> unknownCode = c
-                cart.lines.any { line -> c in line.barcode.split(",") } -> toast(ctx, "This piece is already in the bill")
+                h == null -> { Beeps.fail(ctx); unknownCode = c }
+                cart.lines.any { line -> c in line.barcode.split(",") } -> { Beeps.again(ctx); toast(ctx, "This piece is already in the bill") }
                 else -> {
                     val err = cart.add(CartLine(h.product.id, h.product.article, h.product.name, h.colour, h.size.size,
                         c, 1, maxOf(h.product.mrp, h.product.price), h.size.qty, h.product.mrp))
-                    if (err != null) toast(ctx, err) else toast(ctx, "Added: ${h.product.article} ${h.size.size}")
+                    if (err != null) { Beeps.fail(ctx); toast(ctx, err) } else { Beeps.ok(ctx); toast(ctx, "Added: ${h.product.article} ${h.size.size}") }
                 }
             }
         }

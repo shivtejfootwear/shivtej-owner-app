@@ -78,6 +78,8 @@ sealed interface Route {
     object StaffBills : Route
     // ---- stock check (scan all stock pieces; unscanned = sold / missing)
     object StockCheck : Route
+    // ---- pieces in stock that still have no barcode (scan a label to give it one)
+    object NoBarcode : Route
 }
 
 class Nav(private val stack: MutableList<Route>) {

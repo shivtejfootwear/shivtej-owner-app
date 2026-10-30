@@ -258,6 +258,7 @@ fun Shell(app: App) {
             DrawerItem("Add Item", Icons.Filled.AddCircle, Route.ProductEdit(null), DrawerOrange),
             DrawerItem("Stock / Inventory", Icons.Filled.Warehouse, Route.Stock(), DrawerOrange),
             DrawerItem("Stock check (scan)", Icons.Filled.QrCodeScanner, Route.StockCheck, DrawerOrange),
+            DrawerItem("No barcode pieces", Icons.Filled.LabelOff, Route.NoBarcode, DrawerOrange),
             DrawerItem("Suppliers & Purchases", Icons.Filled.Storefront, Route.Suppliers, DrawerOrange),
             DrawerItem("Supplier order list", Icons.Filled.Storefront, Route.SupplierOrders, DrawerOrange)
         )),
@@ -321,6 +322,7 @@ fun Shell(app: App) {
         Route.Catalog -> "Catalog"
         Route.StaffBills -> "Staff Bills"
         Route.StockCheck -> "Stock check"
+        Route.NoBarcode -> "No barcode pieces"
     }
 
     ModalNavigationDrawer(
@@ -428,6 +430,7 @@ fun Shell(app: App) {
                     Route.Catalog -> CatalogScreen(app)
                     Route.StaffBills -> StaffBillsScreen(app, nav)
                     Route.StockCheck -> StockCheckPage(app)
+                    Route.NoBarcode -> NoBarcodeScreen(app)
                 }
             }
         }

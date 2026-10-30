@@ -269,9 +269,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
                     fun acceptScan(size: SizeDraft, code: String) {
                         size.scanText = ""
                         if (code.isEmpty()) return
-                        if (size.codes.contains(code)) { toast(ctx, "This barcode is already on this size"); keepHere(size); return }
-                        if (draft.takenCodes().contains(code)) { toast(ctx, "This barcode is already used on this product"); keepHere(size); return }
+                        if (size.codes.contains(code)) { Beeps.again(ctx); toast(ctx, "This barcode is already on this size"); keepHere(size); return }
+                        if (draft.takenCodes().contains(code)) { Beeps.fail(ctx); toast(ctx, "This barcode is already used on this product"); keepHere(size); return }
                         size.codes.add(code)
+                        Beeps.ok(ctx)
                         // every scan adds one piece to this size's quantity by itself
                         size.qty = ((size.qty.toIntOrNull() ?: 0) + 1).toString()
                         keepHere(size)
@@ -392,8 +393,10 @@ fun ProductEditScreen(app: App, nav: Nav, id: String?) {
             val c = code.trim()
             when {
                 c.isEmpty() -> Unit
-                s.codes.contains(c) -> toast(ctx, "This barcode is already on this size")
+                s.codes.contains(c) -> { Beeps.again(ctx); toast(ctx, "This barcode is already on this size") }
+                draft.takenCodes().contains(c) -> { Beeps.fail(ctx); toast(ctx, "This barcode is already used on this product") }
                 else -> {
+                    Beeps.ok(ctx)
                     s.codes.add(c)
                     s.qty = ((s.qty.toIntOrNull() ?: 0) + 1).toString()
                 }

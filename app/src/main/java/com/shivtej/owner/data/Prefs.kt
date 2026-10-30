@@ -203,6 +203,10 @@ class Prefs(ctx: Context) {
                 v2 = if (v2.split(",").any { it.trim() == "stock_check" }) v2 else if (v2.isBlank()) "stock_check" else "$v2,stock_check"
                 sp.edit().putString("quick_actions", v2).putBoolean("qa_stockcheck_added", true).apply()
             }
+            if (!sp.getBoolean("qa_nobarcode_added", false)) {
+                v2 = if (v2.split(",").any { it.trim() == "no_barcode" }) v2 else if (v2.isBlank()) "no_barcode" else "$v2,no_barcode"
+                sp.edit().putString("quick_actions", v2).putBoolean("qa_nobarcode_added", true).apply()
+            }
             return v2
         }
         set(v) = sp.edit().putString("quick_actions", v).apply()

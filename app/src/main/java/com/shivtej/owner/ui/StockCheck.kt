@@ -4,12 +4,8 @@ package com.shivtej.owner.ui
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
-import android.os.VibrationEffect
-import android.os.Vibrator
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -69,31 +65,18 @@ private class CheckState(var cat: String, val scanned: MutableMap<String, Long>,
     }
 }
 
-/** Three different sounds + vibration: OK (one beep), again (two beeps), not found (low buzz). */
-private class Feedback(ctx: Context, private val soundOn: () -> Boolean) {
-    private val tone = try { ToneGenerator(AudioManager.STREAM_MUSIC, 100) } catch (e: Exception) { null }
-    private val vib = ctx.getSystemService(Vibrator::class.java)
-    private val main = Handler(Looper.getMainLooper())
-
-    private fun buzz(ms: Long) { try { vib?.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE)) } catch (_: Exception) { } }
-    private fun pattern(p: LongArray) { try { vib?.vibrate(VibrationEffect.createWaveform(p, -1)) } catch (_: Exception) { } }
-
-    fun ok() { buzz(60); if (soundOn()) tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 120) }
-    fun again() {
-        pattern(longArrayOf(0, 80, 120, 80))
-        if (soundOn()) {
-            tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 110)
-            main.postDelayed({ tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 110) }, 230)
-        }
-    }
-    fun notFound() { buzz(400); if (soundOn()) tone?.startTone(ToneGenerator.TONE_PROP_NACK, 350) }
-    fun release() { tone?.release() }
+/** The stock check's sounds are the shared Beeps (ok / again / fail). */
+private class Feedback(private val ctx: Context) {
+    fun ok() = Beeps.ok(ctx)
+    fun again() = Beeps.again(ctx)
+    fun notFound() = Beeps.fail(ctx)
+    fun release() {}
 }
 
 /** Live camera that stays open; every code it reads goes to onCode (the screen decides what to do). */
 @androidx.annotation.OptIn(markerClass = [ExperimentalGetImage::class])
 @Composable
-private fun ContinuousScanner(onCode: (String) -> Unit) {
+internal fun ContinuousScanner(onCode: (String) -> Unit) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(ctx) }
@@ -175,7 +158,7 @@ fun StockCheckDialog(app: App, onClose: () -> Unit) {
     var tick by remember { mutableIntStateOf(0) }
     var confirmApply by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
-    val feedback = remember { Feedback(ctx) { app.repo.prefs.stockCheckSound } }
+    val feedback = remember(ctx) { Feedback(ctx) }
     DisposableEffect(Unit) { onDispose { feedback.release() } }
 
     fun save() { app.repo.prefs.stockCheckJson = st.toJson(); tick++ }
