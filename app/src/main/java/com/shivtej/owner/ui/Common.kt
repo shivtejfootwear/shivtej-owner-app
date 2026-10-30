@@ -128,7 +128,7 @@ suspend fun privatePhotoUrl(name: String): String? = withContext(Dispatchers.IO)
 }
 
 @Composable
-fun Thumb(src: String?, size: Dp = 56.dp) {
+fun Thumb(src: String?, size: Dp = 56.dp, crop: Boolean = true) {
     val isPrivate = src != null && src.startsWith("products/")
     val remoteUrl by produceState<String?>(null, src) {
         value = if (src != null && isPrivate) privatePhotoUrl(src) else null
@@ -145,7 +145,7 @@ fun Thumb(src: String?, size: Dp = 56.dp) {
         ) { Icon(Icons.Filled.Image, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
     } else {
         AsyncImage(
-            model = model, contentDescription = null, contentScale = ContentScale.Crop,
+            model = model, contentDescription = null, contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
             modifier = Modifier.size(size).clip(RoundedCornerShape(8.dp))
         )
     }

@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 /** One size that still has pieces without a barcode. */
 private data class NoBcRow(
     val pid: String, val title: String, val article: String, val colour: String, val size: String,
-    val total: Int, val barcoded: Int
+    val total: Int, val barcoded: Int, val photo: String?
 ) {
     val missing: Int get() = total - barcoded
 }
@@ -36,7 +36,8 @@ private fun noBarcodeRows(products: List<Product>): List<NoBcRow> {
         p.variants.forEach { v ->
             v.sizes.forEach { s ->
                 val barcoded = minOf(s.qty, s.barcodes.size)
-                if (s.qty > barcoded) out.add(NoBcRow(p.id, title, p.article, v.colour, s.size, s.qty, barcoded))
+                if (s.qty > barcoded) out.add(NoBcRow(p.id, title, p.article, v.colour, s.size, s.qty, barcoded,
+                    v.images.firstOrNull() ?: p.allImages.firstOrNull()))
             }
         }
     }
@@ -98,8 +99,14 @@ fun NoBarcodeScreen(app: App) {
                     val first = group.first()
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
-                            Text(first.title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text("रंग: ${first.colour}", fontSize = 13.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // the item's photo, as it is (not cropped), so the owner knows which article this is
+                                Thumb(first.photo, 84.dp, crop = false)
+                                Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                                    Text(first.title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Text("रंग: ${first.colour}", fontSize = 13.sp)
+                                }
+                            }
                             HorizontalDivider(Modifier.padding(vertical = 6.dp))
                             group.forEach { r ->
                                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -28,7 +28,7 @@ object Beeps {
         val fade = RATE / 200
         val out = ShortArray(n)
         for (i in 0 until n) {
-            var v = sin(2 * PI * freq * i / RATE) * 0.6
+            var v = sin(2 * PI * freq * i / RATE) * 0.95
             if (i < fade) v *= i.toDouble() / fade
             if (i > n - fade) v *= (n - i).toDouble() / fade
             out[i] = (v * Short.MAX_VALUE).toInt().toShort()
@@ -57,7 +57,7 @@ object Beeps {
         val buf = sounds.getValue(kind)
         val t = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
             .setAudioFormat(AudioFormat.Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
