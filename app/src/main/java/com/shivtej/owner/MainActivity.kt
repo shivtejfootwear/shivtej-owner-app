@@ -306,6 +306,7 @@ fun Shell(app: App) {
         is Route.StaffDetail -> "Staff history"
         Route.Suppliers -> "Suppliers & Purchases"
         is Route.SupplierDetail -> "Supplier"
+        is Route.SupplierAbout -> "Supplier info"
         is Route.PurchaseForm -> if (route.billId == null) "New purchase bill" else "Edit purchase bill"
         Route.Printer -> "Bluetooth Printer"
         Route.ShopSettings -> "Shop & Bill Settings"
@@ -382,6 +383,9 @@ fun Shell(app: App) {
                         }
                     },
                     actions = {
+                        if (route is Route.SupplierDetail) IconButton(onClick = { nav.go(Route.SupplierAbout(route.id)) }) {
+                            Icon(Icons.Filled.Info, "Supplier info")
+                        }
                         StatusChip(app)
                         IconButton(onClick = { app.sync.kick(); toast(ctx, "Syncing...") }) {
                             Icon(Icons.Filled.Sync, "Sync")
@@ -418,6 +422,7 @@ fun Shell(app: App) {
                     is Route.StaffDetail -> StaffDetailScreen(app, nav, route.id)
                     Route.Suppliers -> SuppliersScreen(app, nav)
                     is Route.SupplierDetail -> SupplierDetailScreen(app, nav, route.id)
+                    is Route.SupplierAbout -> SupplierAboutScreen(app, nav, route.id)
                     is Route.PurchaseForm -> PurchaseFormScreen(app, nav, route.supplierId, route.billId)
                     Route.Printer -> PrinterScreen(app)
                     Route.ShopSettings -> ShopSettingsScreen(app, nav)

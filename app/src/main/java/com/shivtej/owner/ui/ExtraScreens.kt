@@ -114,7 +114,7 @@ fun SupplierOrderScreen(app: App) {
     val purchases by app.repo.purchases.collectAsStateWithLifecycle(emptyList())
     val suppliers by app.repo.suppliers.collectAsStateWithLifecycle(emptyList())
     val names = suppliers.associateBy { it.id }
-    // every low-stock piece, with its brand, category and the supplier of its newest purchase bill
+    // every size that is at ZERO stock (only these are ordered, never 1 or 2 pieces), with its brand, category and the supplier of its newest purchase bill
     val allRows = remember(products, purchases) {
         val lastSupplier = HashMap<String, String>()
         purchases.sortedByDescending { it.billDate }.forEach { b ->
@@ -127,7 +127,7 @@ fun SupplierOrderScreen(app: App) {
         products.filter { it.active }.forEach { p ->
             val sid = lastSupplier[p.article.trim().lowercase()] ?: ""
             p.variants.forEach { v ->
-                v.sizes.filter { it.qty <= LOW_STOCK_LIMIT }.forEach { s ->
+                v.sizes.filter { it.qty <= 0 }.forEach { s ->
                     rows.add(OrderRow(sid, p.brand, p.category, p.article.ifBlank { p.name }, v.colour, s.size, s.qty))
                 }
             }
@@ -162,10 +162,10 @@ fun SupplierOrderScreen(app: App) {
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Text("ब्रांड → कैटेगरी → आर्टिकल → साइज़। माल को लंबा दबाकर नीचे ऑर्डर पैड में खींचें, या \"पैड में\" दबाएँ। \"नहीं मंगवाना\" से वह साइज़ लिस्ट से हट जाएगा।",
+        Text("सिर्फ़ ज़ीरो स्टॉक वाले साइज़ यहाँ आते हैं (स्टॉक 1 या ज़्यादा वाले नहीं)। ब्रांड → कैटेगरी → आर्टिकल → साइज़। माल को लंबा दबाकर नीचे ऑर्डर पैड में खींचें, या \"पैड में\" दबाएँ। \"नहीं मंगवाना\" से वह साइज़ लिस्ट से हट जाएगा।",
             fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
-            if (byBrand.isEmpty()) item { EmptyState("कोई माल कम स्टॉक में नहीं है।") }
+            if (byBrand.isEmpty()) item { EmptyState("कोई भी साइज़ ज़ीरो स्टॉक में नहीं है।") }
             byBrand.forEach { (brand, rows) ->
                 item(key = "brand_$brand") {
                     BrandOrderCard(brand, rows,
@@ -220,7 +220,7 @@ private fun BrandOrderCard(brand: String, rows: List<OrderRow>, onPad: (OrderRow
                         aRows.forEach { r ->
                             DraggableRow(r.key, onDrop = { onDrop(r, it) }) {
                                 Row(Modifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("size ${r.size} · left ${r.qty}", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                                    Text("size ${r.size} · stock ${r.qty}", fontSize = 13.sp, modifier = Modifier.weight(1f))
                                     TextButton(onClick = { onPad(r) }) { Text("पैड में", fontSize = 12.sp) }
                                     TextButton(onClick = { onSkip(r) }) { Text("नहीं मंगवाना", fontSize = 12.sp) }
                                 }

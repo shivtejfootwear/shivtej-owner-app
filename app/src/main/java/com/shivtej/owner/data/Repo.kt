@@ -994,7 +994,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     }
 
     // ---------------------------------------------------------- suppliers, purchase bills, payments
-    suspend fun saveSupplier(id: String?, name: String, mobile: String, address: String, notes: String, active: Boolean, photoPath: String? = null): SupplierE {
+    suspend fun saveSupplier(id: String?, name: String, mobile: String, address: String, notes: String, active: Boolean, photoPath: String? = null, brands: List<SupplierBrand>? = null): SupplierE {
         val n = capName(name)   // company names in CAPITAL letters
         require(n.isNotEmpty()) { "Supplier name is required" }
         val m = BillMath.normMobile(mobile)
@@ -1006,10 +1006,12 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val old = if (id == null) null else dao.supplier(id)
             val s = SupplierE(old?.id ?: UUID.randomUUID().toString(), n, if (mobile.isBlank()) "" else m,
                 capName(address), notes.trim(), active, old?.createdAt ?: System.currentTimeMillis(), true,
-                photoPath = photoPath ?: old?.photoPath ?: "", photoUrl = if (photoPath == "") "" else old?.photoUrl ?: "")
+                photoPath = photoPath ?: old?.photoPath ?: "", photoUrl = if (photoPath == "") "" else old?.photoUrl ?: "",
+                brandsJson = if (brands == null) old?.brandsJson ?: "[]" else supplierBrandsJson(brands))
             dao.putSupplier(s)
             enqueue("UPSERT_SUPPLIER", s.id, JSONObject().put("id", s.id).put("name", s.name).put("mobile", s.mobile)
-                .put("address", s.address).put("notes", s.notes).put("active", s.active).put("created_at", iso(s.createdAt)))
+                .put("address", s.address).put("notes", s.notes).put("active", s.active).put("created_at", iso(s.createdAt))
+                .put("brands", supplierBrandsArray(parseSupplierBrands(s.brandsJson))))
             val removing = photoPath != null && photoPath.isBlank() && !old?.photoUrl.isNullOrBlank()
             if (photoPath != null && (photoPath != old?.photoPath || removing)) {   // after the supplier itself is saved on the server
                 enqueue("SET_SUPPLIER_PHOTO", s.id, JSONObject().put("id", s.id).put("photo_local", photoPath))
@@ -1461,6 +1463,19 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun paymentRejected(id: String) = dao.paymentRejectedCount(id) > 0
     suspend fun staffSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPSERT_STAFF") == 0) dao.staffSynced(id) }
     suspend fun posCustomerSyncedIfIdle(mobile: String) { if (dao.pendingCountFor(mobile, "UPSERT_CUSTOMER") == 0) dao.posCustomerSynced(mobile) }
+    /** Changes only the brands (and margins) of a supplier; the rest of the supplier stays as it is. */
+    suspend fun setSupplierBrands(id: String, brands: List<SupplierBrand>) {
+        db.withTransaction {
+            val old = dao.supplier(id) ?: return@withTransaction
+            val s = old.copy(brandsJson = supplierBrandsJson(brands), pendingSync = true)
+            dao.putSupplier(s)
+            enqueue("UPSERT_SUPPLIER", s.id, JSONObject().put("id", s.id).put("name", s.name).put("mobile", s.mobile)
+                .put("address", s.address).put("notes", s.notes).put("active", s.active).put("created_at", iso(s.createdAt))
+                .put("brands", supplierBrandsArray(brands)))
+        }
+        onChanged()
+    }
+
     suspend fun supplierSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPSERT_SUPPLIER") == 0) dao.supplierSynced(id) }
     suspend fun purchaseSynced(id: String) = dao.purchaseSynced(id)
     /** A purchase bill changed on the phone stays "pending" until no change for it is still waiting to be sent. */
@@ -1733,7 +1748,8 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val old = dao.supplier(id)
             list.add(SupplierE(id, o.str("name"), o.str("mobile"), o.str("address"), o.str("notes"),
                 if (o.isNull("active")) true else o.optBoolean("active", true), parseTime(o.str("created_at")), false,
-                photoPath = old?.photoPath ?: "", photoUrl = o.str("photo_url").ifBlank { old?.photoUrl ?: "" }))
+                photoPath = old?.photoPath ?: "", photoUrl = o.str("photo_url").ifBlank { old?.photoUrl ?: "" },
+                brandsJson = o.optJSONArray("brands")?.toString() ?: "[]"))
         }
         dao.putSuppliers(list)
     }

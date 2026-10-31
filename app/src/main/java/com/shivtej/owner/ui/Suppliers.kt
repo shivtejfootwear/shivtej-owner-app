@@ -142,6 +142,11 @@ fun SupplierDialog(app: App, s: SupplierE?, onDone: () -> Unit) {
     // null = photo unchanged, "" = photo removed, otherwise the path of the new picture
     var photoChange by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val products by app.repo.products.collectAsStateWithLifecycle(emptyList())
+    // brands this supplier gives; the margin of each brand is set on the supplier's info screen and is kept here
+    var brandList by remember { mutableStateOf(if (s == null) emptyList() else parseSupplierBrands(s.brandsJson)) }
+    val brandOptions = (products.map { it.brand.trim().uppercase() } + brandList.map { it.brand })
+        .filter { it.isNotEmpty() }.distinct().sorted()
     AlertDialog(
         onDismissRequest = onDone,
         title = { Text(if (s == null) "Add supplier" else "Edit supplier") },
@@ -155,6 +160,15 @@ fun SupplierDialog(app: App, s: SupplierE?, onDone: () -> Unit) {
                     singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
                 OutlinedTextField(address, { address = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
                 OutlinedTextField(notes, { notes = it }, label = { Text("Notes (terms, GST no. ...)") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                Text("Brands this supplier gives", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                if (brandOptions.isEmpty()) Text("Add products first. Their brands show here.", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    brandOptions.forEach { b ->
+                        val on = brandList.any { it.brand == b }
+                        Chip(b, on) { brandList = if (on) brandList.filterNot { it.brand == b } else brandList + SupplierBrand(b, 0.0) }
+                    }
+                }
                 if (s != null) Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Active", modifier = Modifier.weight(1f)); Switch(checked = active, onCheckedChange = { active = it })
                 }
@@ -164,7 +178,7 @@ fun SupplierDialog(app: App, s: SupplierE?, onDone: () -> Unit) {
         confirmButton = {
             TextButton(enabled = name.isNotBlank(), onClick = {
                 scope.launch {
-                    try { app.repo.saveSupplier(s?.id, name, mobile, address, notes, active, photoChange); onDone() }
+                    try { app.repo.saveSupplier(s?.id, name, mobile, address, notes, active, photoChange, brandList); onDone() }
                     catch (e: Exception) { error = e.message ?: "Could not save" }
                 }
             }) { Text("Save") }
@@ -180,7 +194,6 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     val purchases by app.repo.purchases.collectAsStateWithLifecycle(emptyList())
     val payments by app.repo.supplierPayments.collectAsStateWithLifecycle(emptyList())
     val s = suppliers.firstOrNull { it.id == supplierId }
-    var tab by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf(false) }
     var payOpen by remember { mutableStateOf(false) }
     var editPay by remember { mutableStateOf<SupplierPaymentE?>(null) }
@@ -208,8 +221,6 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                         Column(Modifier.weight(1f)) {
                             Text(s.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                             Text(s.mobile.ifBlank { "No mobile" }, fontSize = 13.sp)
-                            if (s.address.isNotBlank()) Text(s.address, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (s.notes.isNotBlank()) Text(s.notes, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, "Edit supplier") }
                     }
@@ -228,115 +239,64 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
                 }
             }
         }
+        // date-wise history: every bill and every payment, with what is still owed after each line
         item {
-            TabRow(selectedTabIndex = tab, modifier = Modifier.padding(top = 8.dp)) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Purchase bills (${myBills.size})") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("History (${myBills.size + myPays.size})") })
-            }
+            Text("History (${myBills.size + myPays.size})", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+            Text("Tap a bill to see its items. Tap a payment to change it.", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (tab == 0) {
-            if (myBills.isEmpty()) item { EmptyState("No purchase bills yet.") }
-            items(myBills, key = { it.id }) { b ->
-                val bal = alloc.balance[b.id] ?: 0.0
-                val paidHere = alloc.billPaid[b.id] ?: 0.0
-                val lines = parsePurchaseLines(b.itemsJson)
-                var open by remember(b.id) { mutableStateOf(false) }
-                Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(b.billNo.ifBlank { "Purchase bill" }, fontWeight = FontWeight.SemiBold)
-                            Text(dateFmt.format(Date(b.billDate)) + when {
-                                b.status == "REJECTED" -> " · rejected"
-                                b.addStock -> " · stock added"
-                                else -> " · money only"
-                            }, fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(moneyG(app, b.amount), fontWeight = FontWeight.Bold)
-                            if (b.status == "REJECTED") Text("REJECTED by server: ${b.rejectReason}", fontSize = 12.sp, color = RedOut)
-                            else {
-                                if (paidHere > 0.0) Text("Paid ${moneyG(app, paidHere)}", fontSize = 12.sp, color = GreenOk)
-                                Text(if (bal > 0) "Balance ${moneyG(app, bal)}" else "Paid in full", fontSize = 12.sp,
-                                    color = if (bal > 0) RedOut else GreenOk)
-                            }
-                        }
+        val rejectedBills = myBills.filter { it.status == "REJECTED" }
+        val rejectedPays = myPays.filter { it.status == "REJECTED" }
+        val ledger = SupplierMath.ledger(pa, pay).reversed()
+        val payById = myPays.associateBy { it.id }
+        val billById = myBills.associateBy { it.id }
+        if (ledger.isEmpty() && rejectedBills.isEmpty() && rejectedPays.isEmpty()) item { EmptyState("No history yet.") }
+        items(rejectedBills, key = { "rejb-" + it.id }) { b ->
+            Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                Text("Bill ${b.billNo.ifBlank { "Purchase" }} · ${moneyG(app, b.amount)}", fontWeight = FontWeight.SemiBold, color = RedOut)
+                Text(dateFmt.format(Date(b.billDate)) + " · REJECTED by server, not counted: ${b.rejectReason}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            HorizontalDivider()
+        }
+        items(rejectedPays, key = { "rej-" + it.id }) { p ->
+            Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                Text("Payment ${moneyG(app, p.amount)} · ${p.method}", fontWeight = FontWeight.SemiBold, color = RedOut)
+                Text(dateFmt.format(Date(p.paidAt)) + " · REJECTED by server, not counted: ${p.rejectReason}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            HorizontalDivider()
+        }
+        items(ledger, key = { (if (it.isBill) "b" else "p") + it.refId }) { line ->
+            if (line.isBill) {
+                val b = billById[line.refId]
+                if (b != null) BillLedgerRow(app, nav, supplierId, b, line.amount, line.balanceAfter, dateFmt) { askDeleteBill = it }
+            } else {
+                val p = payById[line.refId]
+                val cheque = p?.chequeNo.orEmpty()
+                val split = alloc.splits[line.refId].orEmpty()
+                    .joinToString(" · ") { (bid, amt) -> "${billNames[bid] ?: "Bill"} ${moneyG(app, amt)}" }
+                val goods = if (p == null) emptyList() else parsePurchaseLines(p.itemsJson)
+                Row(Modifier.fillMaxWidth().clickable(enabled = p != null) { editPay = p }.padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Payment · " + (p?.method ?: "") + (if (cheque.isNotBlank()) " · Cheque no. $cheque" else ""),
+                            fontWeight = FontWeight.SemiBold)
+                        Text(dateFmt.format(Date(line.time)) + " · " + (if (split.isNotBlank()) split else "on account"),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (p != null && p.note.isNotBlank()) Text("Reason: " + p.note, fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (goods.isNotEmpty()) Text("Goods sent back: " + goods.joinToString(", ") {
+                            "${it.article.ifBlank { it.name }} ${it.colour} / ${it.size} × ${it.qty}" },
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    if (open) {
-                        if (lines.isEmpty()) Text("No items (amount only).", fontSize = 12.sp)
-                        lines.forEach { l ->
-                            Text("${l.article.ifBlank { l.name }} · ${l.colour} / ${l.size} × ${l.qty} @ ${moneyG(app, l.cost)}",
-                                fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-                        }
-                        if (b.note.isNotBlank()) Text("Note: " + b.note, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (b.billFile.isNotBlank() || b.billFileUrl.isNotBlank()) {
-                            Text("Bill photo / PDF attached", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            TextButton(onClick = { openBill(ctx, b.billFile, b.billFileUrl) }) { Text("View bill photo / PDF") }
-                        }
-                        if (b.status != "REJECTED") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { nav.go(Route.PurchaseForm(supplierId, b.id)) }) { Text("Edit bill") }
-                            TextButton(onClick = { askDeleteBill = b }) { Text("Delete bill", color = RedOut) }
-                        }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("- ${moneyG(app, line.amount)}", fontWeight = FontWeight.Bold, color = GreenOk)
+                        Text("Owed ${moneyG(app, line.balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                HorizontalDivider()
             }
-        } else {
-            // date-wise history: every bill and every payment, with what is still owed after each line
-            val rejected = myPays.filter { it.status == "REJECTED" }
-            val ledger = SupplierMath.ledger(pa, pay).reversed()
-            val payById = myPays.associateBy { it.id }
-            if (ledger.isEmpty() && rejected.isEmpty()) item { EmptyState("No history yet.") }
-            if (myPays.isNotEmpty()) item { Text("Tap a payment to change or delete it.", fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp)) }
-            items(rejected, key = { "rej-" + it.id }) { p ->
-                Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-                    Text("Payment ${moneyG(app, p.amount)} · ${p.method}", fontWeight = FontWeight.SemiBold, color = RedOut)
-                    Text(dateFmt.format(Date(p.paidAt)) + " · REJECTED by server, not counted: ${p.rejectReason}",
-                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                HorizontalDivider()
-            }
-            items(ledger, key = { (if (it.isBill) "b" else "p") + it.refId }) { line ->
-                if (line.isBill) {
-                    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Bill ${billNames[line.refId] ?: ""}", fontWeight = FontWeight.SemiBold)
-                            Text(dateFmt.format(Date(line.time)) + " · purchase", fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("+ ${moneyG(app, line.amount)}", fontWeight = FontWeight.Bold, color = RedOut)
-                            Text("Owed ${moneyG(app, line.balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                } else {
-                    val p = payById[line.refId]
-                    val cheque = p?.chequeNo.orEmpty()
-                    val split = alloc.splits[line.refId].orEmpty()
-                        .joinToString(" · ") { (bid, amt) -> "${billNames[bid] ?: "Bill"} ${moneyG(app, amt)}" }
-                    val goods = if (p == null) emptyList() else parsePurchaseLines(p.itemsJson)
-                    Row(Modifier.fillMaxWidth().clickable(enabled = p != null) { editPay = p }.padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Payment · " + (p?.method ?: "") + (if (cheque.isNotBlank()) " · Cheque no. $cheque" else ""),
-                                fontWeight = FontWeight.SemiBold)
-                            Text(dateFmt.format(Date(line.time)) + " · " + (if (split.isNotBlank()) split else "on account"),
-                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (p != null && p.note.isNotBlank()) Text("Reason: " + p.note, fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (goods.isNotEmpty()) Text("Goods sent back: " + goods.joinToString(", ") {
-                                "${it.article.ifBlank { it.name }} ${it.colour} / ${it.size} × ${it.qty}" },
-                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("- ${moneyG(app, line.amount)}", fontWeight = FontWeight.Bold, color = GreenOk)
-                            Text("Owed ${moneyG(app, line.balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                HorizontalDivider()
-            }
+            HorizontalDivider()
         }
     }
 
@@ -365,6 +325,110 @@ fun SupplierDetailScreen(app: App, nav: Nav, supplierId: String) {
     }
     // when changing a payment, the money it already took counts as still owed for this change
     editPay?.let { p -> PaymentDialog(app, supplierId, t.outstanding + p.amount, p) { editPay = null } }
+}
+
+/** One purchase bill in the history: tap to see its items, note and bill photo, then change or delete it. */
+@Composable
+private fun BillLedgerRow(app: App, nav: Nav, supplierId: String, b: PurchaseE, amount: Double, balanceAfter: Double,
+                          dateFmt: SimpleDateFormat, onDelete: (PurchaseE) -> Unit) {
+    val ctx = LocalContext.current
+    var open by remember(b.id) { mutableStateOf(false) }
+    val lines = parsePurchaseLines(b.itemsJson)
+    Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Bill ${b.billNo.ifBlank { "Purchase" }}", fontWeight = FontWeight.SemiBold)
+                Text(dateFmt.format(Date(b.billDate)) + " · purchase" + (if (b.addStock) " · stock added" else " · money only"),
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("+ ${moneyG(app, amount)}", fontWeight = FontWeight.Bold, color = RedOut)
+                Text("Owed ${moneyG(app, balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (open) {
+            if (lines.isEmpty()) Text("No items (amount only).", fontSize = 12.sp)
+            lines.forEach { l ->
+                Text("${l.article.ifBlank { l.name }} · ${l.colour} / ${l.size} × ${l.qty} @ ${moneyG(app, l.cost)}",
+                    fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            }
+            if (b.note.isNotBlank()) Text("Note: " + b.note, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (b.billFile.isNotBlank() || b.billFileUrl.isNotBlank()) {
+                Text("Bill photo / PDF attached", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { openBill(ctx, b.billFile, b.billFileUrl) }) { Text("View bill photo / PDF") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { nav.go(Route.PurchaseForm(supplierId, b.id)) }) { Text("Edit bill") }
+                TextButton(onClick = { onDelete(b) }) { Text("Delete bill", color = RedOut) }
+            }
+        }
+    }
+}
+
+// ================================================================== SUPPLIER INFO (About)
+@Composable
+fun SupplierAboutScreen(app: App, nav: Nav, supplierId: String) {
+    val suppliers by app.repo.suppliers.collectAsStateWithLifecycle(emptyList())
+    val s = suppliers.firstOrNull { it.id == supplierId }
+    var editing by remember { mutableStateOf(false) }
+    var marginFor by remember { mutableStateOf<SupplierBrand?>(null) }
+    if (s == null) { EmptyState("This supplier is not on this phone yet."); return }
+    val brands = parseSupplierBrands(s.brandsJson)
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SoftGrey)) {
+            Column(Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(s.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                        Text(s.mobile.ifBlank { "No mobile" }, fontSize = 13.sp)
+                        if (s.address.isNotBlank()) Text(s.address, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (s.notes.isNotBlank()) Text(s.notes, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (s.active) "Active" else "INACTIVE", fontSize = 12.sp,
+                            color = if (s.active) GreenOk else RedOut, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, "Edit supplier") }
+                }
+            }
+        }
+        SectionTitle("Brands and margin")
+        Text("Items of these brands are bought at MRP minus the margin. Tap a brand to change its margin.", fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (brands.isEmpty()) Text("No brands yet. Tap the edit icon to tick the brands this supplier gives.", fontSize = 13.sp)
+        brands.forEach { b ->
+            Card(Modifier.fillMaxWidth().clickable { marginFor = b }, colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(b.brand, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text("${BillMath.plain(b.margin)}% margin", fontWeight = FontWeight.Bold, color = BrandRed)
+                }
+            }
+        }
+    }
+    if (editing) SupplierDialog(app, s) { editing = false }
+    marginFor?.let { b -> MarginDialog(app, supplierId, brands, b) { marginFor = null } }
+}
+
+@Composable
+private fun MarginDialog(app: App, supplierId: String, brands: List<SupplierBrand>, b: SupplierBrand, onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var text by remember { mutableStateOf(BillMath.plain(b.margin)) }
+    val value = BillMath.parseAmount(text)
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Margin for ${b.brand}") },
+        text = {
+            OutlinedTextField(text, { text = it.filter { c -> c.isDigit() || c == '.' }.take(5) },
+                label = { Text("Margin %") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+        },
+        confirmButton = {
+            TextButton(enabled = value != null && value >= 0.0 && value < 100.0, onClick = {
+                val updated = brands.map { if (it.brand == b.brand) it.copy(margin = value ?: 0.0) else it }
+                scope.launch { app.repo.setSupplierBrands(supplierId, updated); onDone() }
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -549,6 +613,7 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
     var pickedProduct by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var selBrand by remember { mutableStateOf<String?>(null) }
     // the supplier's bill photo or PDF (a copy kept on this phone and sent with the bill)
     var billPath by remember { mutableStateOf("") }
     var billBusy by remember { mutableStateOf(false) }
@@ -572,6 +637,7 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
 
     if (s == null) { EmptyState("Supplier not found."); return }
     if (editing && existing == null) { EmptyState("Loading the bill..."); return }
+    val brands = parseSupplierBrands(s.brandsJson)
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(if (editing) "Change purchase bill from ${s.name}" else "Purchase from ${s.name}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -603,8 +669,35 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
                 }
             }
         }
-        OutlinedButton(onClick = { pickProduct = true }, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text("Add item")
+        if (brands.isEmpty()) {
+            OutlinedButton(onClick = { pickProduct = true }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text("Add item")
+            }
+            Text("No brands set for this supplier yet. Edit the supplier and tick its brands, then the items of those brands show here.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            val brandNow = brands.firstOrNull { it.brand == selBrand }?.brand ?: brands.first().brand
+            val margin = brands.first { it.brand == brandNow }.margin
+            Text("Brand", fontWeight = FontWeight.SemiBold)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                brands.forEach { b -> Chip(b.brand, b.brand == brandNow) { selBrand = b.brand } }
+            }
+            val brandItems = products.filter { it.brand.trim().equals(brandNow, ignoreCase = true) }.sortedBy { it.article }
+            if (brandItems.isEmpty()) Text("No items of $brandNow in the shop yet.", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            brandItems.forEach { p ->
+                val inBill = lines.filter { it.productId == p.id }.sumOf { it.qty }
+                Row(Modifier.fillMaxWidth().clickable { pickedProduct = p }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(p.article.ifBlank { p.name }, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text("MRP ${moneyG(app, p.mrp)} · rate ${moneyG(app, purchaseRateFor(p.mrp, margin))}" +
+                            (if (inBill > 0) " · in bill: $inBill pcs" else ""), fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Filled.Add, "Add")
+                }
+                HorizontalDivider()
+            }
         }
 
         if (lines.isEmpty()) OutlinedTextField(amountOnly, { amountOnly = it.filter { c -> c.isDigit() || c == '.' }.take(10) },
@@ -676,7 +769,8 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
         pickProduct = false; pickedProduct = p
     }
     pickedProduct?.let { p ->
-        PurchaseLinePicker(app, p, onDismiss = { pickedProduct = null }) { line ->
+        val m = brands.firstOrNull { it.brand.equals(p.brand.trim(), ignoreCase = true) }?.margin
+        PurchaseLinePicker(app, p, onDismiss = { pickedProduct = null }, defaultCost = m?.let { purchaseRateFor(p.mrp, it) }) { line ->
             lines.add(line); pickedProduct = null
         }
     }
@@ -687,11 +781,11 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
  * withCost = false (goods sent back to the supplier): colour, size and quantity only.
  */
 @Composable
-private fun PurchaseLinePicker(app: App, p: Product, onDismiss: () -> Unit, withCost: Boolean = true, onAdd: (PurchaseLine) -> Unit) {
+private fun PurchaseLinePicker(app: App, p: Product, onDismiss: () -> Unit, withCost: Boolean = true, defaultCost: Double? = null, onAdd: (PurchaseLine) -> Unit) {
     var colour by remember(p.id) { mutableStateOf(p.variants.firstOrNull()?.colour ?: "") }
     var size by remember(p.id) { mutableStateOf<String?>(null) }
     var qty by remember(p.id) { mutableIntStateOf(1) }
-    var costText by remember(p.id) { mutableStateOf("") }
+    var costText by remember(p.id) { mutableStateOf(defaultCost?.let { BillMath.plain(it) } ?: "") }
     val variant = p.variants.firstOrNull { it.colour == colour }
     val cost = BillMath.parseAmount(costText)
     AlertDialog(
