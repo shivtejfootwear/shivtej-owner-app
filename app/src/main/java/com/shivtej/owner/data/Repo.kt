@@ -143,7 +143,8 @@ data class BillExtra(
     val customerAddress: String = "",
     val customerGender: String = "",      // "M" / "F" / ""
     val taxPercent: Double = 0.0,
-    val amountPaid: Double? = null        // null = paid in full
+    val amountPaid: Double? = null,       // null = paid in full
+    val billDate: Long? = null            // null = now; set when the owner changed the bill date
 )
 
 /** One line of a supplier purchase bill. */
@@ -559,7 +560,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         require(lines.isNotEmpty()) { "Bill is empty" }
         val id = UUID.randomUUID().toString()
         val no = nextBillNo()
-        val now = System.currentTimeMillis()
+        val now = extra.billDate ?: System.currentTimeMillis()
         val t = BillMath.compute(lines.map { MathLine(it.mrp, it.price, it.qty) }, extra.taxPercent)
         val total = t.grandTotal
         val paid = BillMath.round2((extra.amountPaid ?: total).coerceAtLeast(0.0))

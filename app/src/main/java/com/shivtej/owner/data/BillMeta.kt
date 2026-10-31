@@ -56,10 +56,10 @@ object BillMeta {
 
     // ------------------------------------------------------------------ what is saved today
     fun currentShop(p: Prefs): ShopInfo = ShopInfo(
-        name = p.storeName.ifBlank { "Shivtej Footwear" }, tagline = p.shopTagline, address = p.storeAddress, phone = p.storePhone,
-        email = p.shopEmail, website = p.shopWebsite, instagram = p.shopInstagram, whatsapp = p.shopWhatsapp, gstin = p.shopGstin,
-        footer = p.billFooter, thanks = p.billThanks,
-        notes = p.billNotes.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
+        name = p.storeName.ifBlank { "Shivtej Footwear" }.uppercase(), tagline = p.shopTagline.uppercase(), address = p.storeAddress.uppercase(), phone = p.storePhone,
+        email = p.shopEmail.uppercase(), website = p.shopWebsite.uppercase(), instagram = p.shopInstagram.uppercase(), whatsapp = p.shopWhatsapp, gstin = p.shopGstin.uppercase(),
+        footer = p.billFooter.uppercase(), thanks = p.billThanks.uppercase(),
+        notes = p.billNotes.split("\n").map { it.trim().uppercase() }.filter { it.isNotEmpty() },
         logoPath = p.shopLogoPath, currency = p.currency.ifBlank { "₹" }
     )
 

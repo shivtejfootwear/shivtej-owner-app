@@ -329,7 +329,7 @@ fun PosScreen(app: App, nav: Nav) {
                                         salesPersonId = d.salesPersonId, salesPerson = d.salesPersonName,
                                         customerName = d.customerName, customerMobile = d.customerMobile,
                                         customerAddress = d.customerAddress, customerGender = d.customerGender,
-                                        taxPercent = taxPct, amountPaid = paidTyped
+                                        taxPercent = taxPct, amountPaid = paidTyped, billDate = d.billDateMillis
                                     )
                                     if (editingId.isNotBlank()) {
                                         // editing a saved bill: replaceBill checks the stock itself (old items come back first)
@@ -647,6 +647,7 @@ private fun customerMatches(mobileText: String, nameText: String, posCustomers: 
 }
 
 /** Bill number, date and the sales person who made this sale. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BillInfoCard(app: App, staff: List<StaffE>) {
     val cart = app.cart
@@ -654,6 +655,51 @@ private fun BillInfoCard(app: App, staff: List<StaffE>) {
     val active = staff.filter { it.active }
     var open by remember { mutableStateOf(false) }
     val now = remember { System.currentTimeMillis() }
+    var showDatePick by remember { mutableStateOf(false) }
+    var showTimePick by remember { mutableStateOf(false) }
+    if (showDatePick) {
+        val shownNow = d.billDateMillis ?: now
+        val dpState = rememberDatePickerState(initialSelectedDateMillis = shownNow)
+        DatePickerDialog(
+            onDismissRequest = { showDatePick = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    val picked = dpState.selectedDateMillis
+                    showDatePick = false
+                    if (picked != null) {
+                        // the picker gives the day in UTC; keep the time of day already shown
+                        val day = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = picked }
+                        val c = java.util.Calendar.getInstance().apply { timeInMillis = shownNow }
+                        c.set(day.get(java.util.Calendar.YEAR), day.get(java.util.Calendar.MONTH), day.get(java.util.Calendar.DAY_OF_MONTH))
+                        cart.updateDraft { it.copy(billDateMillis = c.timeInMillis) }
+                        showTimePick = true
+                    }
+                }) { Text("आगे") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePick = false }) { Text("रद्द") } }
+        ) { DatePicker(state = dpState) }
+    }
+    if (showTimePick) {
+        val base = java.util.Calendar.getInstance().apply { timeInMillis = d.billDateMillis ?: now }
+        val tState = rememberTimePickerState(initialHour = base.get(java.util.Calendar.HOUR_OF_DAY), initialMinute = base.get(java.util.Calendar.MINUTE), is24Hour = false)
+        AlertDialog(
+            onDismissRequest = { showTimePick = false },
+            title = { Text("समय चुनें") },
+            text = { TimePicker(state = tState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val c = java.util.Calendar.getInstance().apply {
+                        timeInMillis = d.billDateMillis ?: now
+                        set(java.util.Calendar.HOUR_OF_DAY, tState.hour); set(java.util.Calendar.MINUTE, tState.minute)
+                        set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    cart.updateDraft { it.copy(billDateMillis = c.timeInMillis) }
+                    showTimePick = false
+                }) { Text("ठीक है") }
+            },
+            dismissButton = { TextButton(onClick = { showTimePick = false }) { Text("रद्द") } }
+        )
+    }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row {
@@ -662,8 +708,12 @@ private fun BillInfoCard(app: App, staff: List<StaffE>) {
                     Text(app.repo.peekBillNo(), fontWeight = FontWeight.Bold)
                 }
                 Column(Modifier.weight(1.3f)) {
-                    Text("Date & time", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(Fmt.dateTime(now), fontWeight = FontWeight.Bold)
+                    Text("Date & time (tap to change)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Fmt.dateTime(d.billDateMillis ?: now), fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { showDatePick = true })
+                    if (d.billDateMillis != null) {
+                        TextButton(onClick = { cart.updateDraft { it.copy(billDateMillis = null) } }) { Text("Use current date") }
+                    }
                 }
             }
             Text("Sales person", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

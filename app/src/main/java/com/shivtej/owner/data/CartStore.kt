@@ -20,7 +20,8 @@ data class BillDraft(
     val salesPersonName: String = "",
     val method: String = "Cash",
     val taxText: String = "",        // "" = the GST % saved in Shop settings
-    val paidText: String = ""        // "" = the customer pays the full grand total
+    val paidText: String = "",       // "" = the customer pays the full grand total
+    val billDateMillis: Long? = null // null = the current date and time; the owner can change it
 )
 
 /** Current POS bill. Saved locally on every change, so a draft bill survives app restarts. */
