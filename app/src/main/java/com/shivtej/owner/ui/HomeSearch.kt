@@ -50,7 +50,7 @@ private val SEARCH_INDEX: List<SearchEntry> by lazy {
 
 /** Search bar on the home screen. Typing shows matching screens and settings; tapping opens it. */
 @Composable
-fun HomeSearchBar(nav: Nav) {
+fun HomeSearchBar(onOpen: (Route) -> Unit) {
     var q by remember { mutableStateOf("") }
     val hits = remember(q) {
         val t = q.trim().lowercase()
@@ -71,7 +71,7 @@ fun HomeSearchBar(nav: Nav) {
             Card(Modifier.fillMaxWidth()) {
                 Column {
                     hits.forEach { e ->
-                        Column(Modifier.fillMaxWidth().clickable { q = ""; nav.go(e.route) }
+                        Column(Modifier.fillMaxWidth().clickable { q = ""; onOpen(e.route) }
                             .padding(horizontal = 14.dp, vertical = 10.dp)) {
                             Text(e.label, fontWeight = FontWeight.SemiBold)
                             Text(e.where, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -113,8 +113,6 @@ fun DashboardScreen(app: App, nav: Nav) {
             if (failed > 0) Banner("$failed change(s) could not be synced. Open Settings > Sync status.", Color(0xFFFFCDD2))
         }
 
-        item { HomeSearchBar(nav) }
-
         // ---------------- quick actions (the owner chooses and orders them with the pencil)
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -335,6 +335,9 @@ fun Shell(app: App) {
                     Text("Shivtej Footwear", fontSize = 22.sp, fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(20.dp))
                     StorageCard(app, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                    Box(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                        HomeSearchBar { r -> nav.top(r); scope.launch { drawer.close() } }
+                    }
                     sections.forEach { section ->
                         Text(section.title.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
                             letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
