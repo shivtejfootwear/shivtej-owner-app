@@ -78,6 +78,8 @@ sealed interface Route {
     object StaffBills : Route
     // ---- stock check (scan all stock pieces; unscanned = sold / missing)
     object StockCheck : Route
+    // ---- shop returns (POS bills only, never online orders)
+    object Returns : Route
     // ---- pieces in stock that still have no barcode (scan a label to give it one)
     object NoBarcode : Route
 }

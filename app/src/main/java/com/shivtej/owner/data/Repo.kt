@@ -522,10 +522,10 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     }
 
     /** A sold barcode comes back (customer returned it): stock +1, the barcode is in stock again, the sale record is cleared. */
-    suspend fun restockSold(code: String): Boolean {
+    suspend fun restockSold(code: String, reason: String = "वापसी (बारकोड स्कैन)", refund: Double = 0.0): Boolean {
         val info = soldInfo(code) ?: return false
         if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) { unmarkSold(code); return true }
-        processReturn("BILL", info.billId, "RETURN", "वापसी (बारकोड स्कैन): बिल ${info.bill}", true, 0.0,
+        processReturn("BILL", info.billId, "RETURN", "$reason: बिल ${info.bill}", true, refund,
             listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price)), emptyList())
         returnPiece(info.pid, info.colour, info.size, code)
         unmarkSold(code)
@@ -1414,6 +1414,9 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     }
 
     suspend fun returnSynced(id: String) = dao.returnSynced(id)
+
+    /** Every return and exchange on this phone, newest first (for the Returns screen). */
+    suspend fun returnsAll(): List<ReturnE> = dao.allReturns().sortedByDescending { it.createdAt }
 
     /**
      * The server refused this return: it stays on this phone with status REJECTED and its reason (history kept).

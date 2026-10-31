@@ -315,6 +315,7 @@ fun Shell(app: App) {
         Route.Settings -> "Settings"
         Route.ThemeSettings -> "Theme & Wallpaper"
         Route.Tasks -> "Tasks & Reminders"
+        Route.Returns -> "Returns (वापसी)"
         Route.Dues -> "Customer dues"
         Route.AdminPortal -> "Admin Portal"
         Route.CustomerNumbers -> "Customer numbers"
@@ -423,6 +424,7 @@ fun Shell(app: App) {
                     Route.Settings -> SettingsScreen(app) { nav.go(it) }
                     Route.ThemeSettings -> ThemeSettingsScreen(app)
                     Route.Tasks -> TasksScreen(app)
+                    Route.Returns -> ReturnsScreen(app, nav)
                     Route.Dues -> CustomersScreen(app, nav, initialStatus = "owes")
                     Route.AdminPortal -> AdminPortalScreen(app, nav)
                     Route.CustomerNumbers -> CustomerNumbersScreen(app)

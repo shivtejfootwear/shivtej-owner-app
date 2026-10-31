@@ -379,19 +379,7 @@ fun PosScreen(app: App, nav: Nav) {
     // ---- unknown barcode
     // a sold piece was scanned at the counter: is it a return to stock, or only a look?
     soldScan?.let { s ->
-        AlertDialog(
-            onDismissRequest = { soldScan = null },
-            title = { Text("यह माल बिका हुआ है") },
-            text = { Text("${s.article} · ${s.colour} · साइज़ ${s.size}\nबिल: ${s.bill}\nकिसी ग्राहक का वापस किया हुआ है तो स्टॉक में जोड़ें।") },
-            confirmButton = { TextButton(onClick = {
-                val code = s.code; soldScan = null
-                scope.launch {
-                    val ok = runCatching { app.repo.restockSold(code) }.getOrDefault(false)
-                    toast(ctx, if (ok) "वापसी: स्टॉक में जोड़ा गया" else "स्टॉक में नहीं जुड़ पाया")
-                }
-            }) { Text("हाँ, वापसी है: स्टॉक में जोड़ें") } },
-            dismissButton = { TextButton(onClick = { soldScan = null }) { Text("नहीं, बस देखा") } }
-        )
+        ReturnBillDialog(app, s, onClose = { soldScan = null })
     }
 
     unknownCode?.let { code ->
