@@ -73,6 +73,9 @@ sealed interface Route {
     object CustomerNumbers : Route
     // ---- deleted bills (history of every deleted bill; they can be restored, never erased)
     object DeletedBills : Route
+    // ---- item history: who bought an article (article -> colour -> size -> customers)
+    object ItemHistory : Route
+    data class ItemSales(val article: String, val colour: String, val size: String) : Route
     // ---- catalog (website products with MRP only, to show customers)
     object Catalog : Route
     // ---- staff bills (pending bills the managers sent from the Shivtej Managers app)

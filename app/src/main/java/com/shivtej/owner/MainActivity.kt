@@ -317,6 +317,8 @@ fun Shell(app: App) {
         Route.ThemeSettings -> "Theme & Wallpaper"
         Route.Tasks -> "Tasks & Reminders"
         Route.Returns -> "Returns (वापसी)"
+        Route.ItemHistory -> "Item History"
+        is Route.ItemSales -> "Sales of this size"
         Route.Dues -> "Customer dues"
         Route.AdminPortal -> "Admin Portal"
         Route.CustomerNumbers -> "Customer numbers"
@@ -433,6 +435,8 @@ fun Shell(app: App) {
                     Route.ThemeSettings -> ThemeSettingsScreen(app)
                     Route.Tasks -> TasksScreen(app)
                     Route.Returns -> ReturnsScreen(app, nav)
+                    Route.ItemHistory -> ItemHistoryScreen(app, nav)
+                    is Route.ItemSales -> ItemSalesScreen(app, nav, route.article, route.colour, route.size)
                     Route.Dues -> CustomersScreen(app, nav, initialStatus = "owes")
                     Route.AdminPortal -> AdminPortalScreen(app, nav)
                     Route.CustomerNumbers -> CustomerNumbersScreen(app)

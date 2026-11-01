@@ -41,7 +41,8 @@ val QUICK_CATALOG: List<QuickActionDef> = listOf(
     QuickActionDef("staff_bills", "Staff Bills", Icons.Filled.Inbox, Color(0xFF283593), Route.StaffBills),
     QuickActionDef("stock_check", "Stock check", Icons.Filled.QrCodeScanner, Color(0xFF2E7D32), Route.StockCheck),
     QuickActionDef("no_barcode", "No barcode pieces", Icons.Filled.LabelOff, Color(0xFFEF6C00), Route.NoBarcode),
-    QuickActionDef("returns", "Returns (वापसी)", Icons.Filled.Undo, Color(0xFFC62828), Route.Returns)
+    QuickActionDef("returns", "Returns (वापसी)", Icons.Filled.Undo, Color(0xFFC62828), Route.Returns),
+    QuickActionDef("item_history", "Item History", Icons.Filled.ManageSearch, Color(0xFF3949AB), Route.ItemHistory)
 )
 
 /** The shortcuts for a saved list of ids, in that order. Unknown and repeated ids are ignored. */
