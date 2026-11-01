@@ -146,9 +146,12 @@ fun DashboardScreen(app: App, nav: Nav) {
 
         // ---------------- sales trend
         item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()) {
+            Card(onClick = { nav.go(Route.SalesTrend) }, modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), border = cardBorder()) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.ShowChart, null, tint = BrandRed, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text("Sales trend", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                         Text("Last 7 days", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

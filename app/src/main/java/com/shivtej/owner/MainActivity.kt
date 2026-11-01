@@ -318,6 +318,7 @@ fun Shell(app: App) {
         Route.Tasks -> "Tasks & Reminders"
         Route.Returns -> "Returns (वापसी)"
         Route.ItemHistory -> "Item History"
+        Route.SalesTrend -> "Sales trend"
         is Route.ItemSales -> "Sales of this size"
         Route.Dues -> "Customer dues"
         Route.AdminPortal -> "Admin Portal"
@@ -436,6 +437,7 @@ fun Shell(app: App) {
                     Route.Tasks -> TasksScreen(app)
                     Route.Returns -> ReturnsScreen(app, nav)
                     Route.ItemHistory -> ItemHistoryScreen(app, nav)
+                    Route.SalesTrend -> SalesTrendScreen(app, nav)
                     is Route.ItemSales -> ItemSalesScreen(app, nav, route.article, route.colour, route.size)
                     Route.Dues -> CustomersScreen(app, nav, initialStatus = "owes")
                     Route.AdminPortal -> AdminPortalScreen(app, nav)

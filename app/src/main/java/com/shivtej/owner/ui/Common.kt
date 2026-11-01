@@ -75,6 +75,8 @@ sealed interface Route {
     object DeletedBills : Route
     // ---- item history: who bought an article (article -> colour -> size -> customers)
     object ItemHistory : Route
+    // ---- sales trend detail (Day / Week / Month / Year), opened from the dashboard card
+    object SalesTrend : Route
     data class ItemSales(val article: String, val colour: String, val size: String) : Route
     // ---- catalog (website products with MRP only, to show customers)
     object Catalog : Route

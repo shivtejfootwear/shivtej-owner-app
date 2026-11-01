@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -83,84 +84,120 @@ private fun ColourDot(name: String, size: Int) {
     Box(Modifier.size(size.dp).clip(CircleShape).background(colourDot(name)).border(1.dp, Color(0x33000000), CircleShape))
 }
 
+/**
+ * The choices of the Item History flow. It is kept outside the screen, so when the user comes back
+ * from a size's sales, the same article, colour and size are still chosen.
+ * step: 0 = article, 1 = colour, 2 = size.
+ */
+object ItemHistoryFlow {
+    var step by mutableIntStateOf(0)
+    var query by mutableStateOf("")
+    var productId by mutableStateOf("")
+    var colour by mutableStateOf("")
+    var size by mutableStateOf("")
+
+    fun clear() { step = 0; query = ""; productId = ""; colour = ""; size = "" }
+}
+
 // ================================================================== ITEM HISTORY (who bought an item)
 @Composable
 fun ItemHistoryScreen(app: App, nav: Nav) {
     val products by app.repo.products.collectAsStateWithLifecycle(emptyList())
     val bills by app.repo.bills.collectAsStateWithLifecycle(emptyList())
     val orders by app.repo.orders.collectAsStateWithLifecycle(emptyList())
-    var query by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf<Product?>(null) }
-    var colour by remember { mutableStateOf("") }
+    val flow = ItemHistoryFlow
+    val q = flow.query.trim()
     val sales = remember(bills, orders, products) { salesOf(bills, orders, products) }
-    val q = query.trim()
     val matches = remember(q, products) {
         if (q.isBlank()) emptyList() else products.filter { it.article.contains(q, true) || it.name.contains(q, true) }.take(8)
     }
-    val current = picked ?: products.firstOrNull { it.article.equals(q, ignoreCase = true) }
+    val current = products.firstOrNull { it.id == flow.productId }
+
+    fun backOneStep() {
+        when (flow.step) {
+            2 -> flow.step = 1
+            1 -> { flow.step = 0; flow.productId = ""; flow.colour = ""; flow.size = "" }
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Type the article, pick the colour and the size. You will see who bought it.", fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(query, { query = it; picked = null; colour = "" }, label = { Text("Article code") }, singleLine = true,
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Find who bought an item: article, colour, then size.", fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            if (flow.step > 0 || flow.query.isNotBlank()) TextButton(onClick = { flow.clear() }) { Text("Clear") }
+        }
+        OutlinedTextField(flow.query, { flow.query = it; flow.step = 0; flow.productId = ""; flow.colour = ""; flow.size = "" },
+            label = { Text("Article code") }, singleLine = true,
             leadingIcon = { Icon(Icons.Filled.Search, null) }, modifier = Modifier.fillMaxWidth())
 
-        if (picked == null) matches.forEach { p ->
-            Card(Modifier.fillMaxWidth().clickable { picked = p; colour = p.variants.firstOrNull()?.colour ?: "" }) {
-                Column(Modifier.padding(10.dp)) {
-                    Text(p.article.ifBlank { p.name }, fontWeight = FontWeight.Bold)
-                    Text("${p.name} · ${p.variants.size} colour(s)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (flow.step == 0) {
+            matches.forEach { p ->
+                Card(Modifier.fillMaxWidth().clickable {
+                    flow.productId = p.id
+                    flow.colour = p.variants.firstOrNull()?.colour ?: ""
+                    flow.size = ""
+                    flow.step = 1
+                }) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text(p.article.ifBlank { p.name }, fontWeight = FontWeight.Bold)
+                        Text("${p.name} · ${p.variants.size} colour(s)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
-        }
-
-        if (current == null) {
             if (q.isBlank()) EmptyState("Start typing an article code.")
             else if (matches.isEmpty()) EmptyState("No article found with this code.")
-        } else {
+        } else if (current != null) {
             val colours = current.variants.map { it.colour }
-            val selColour = if (colour in colours) colour else colours.firstOrNull().orEmpty()
+            val selColour = if (flow.colour in colours) flow.colour else colours.firstOrNull().orEmpty()
             val soldHere = sales.filter { it.article.equals(current.article, true) }
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(current.article.ifBlank { current.name }, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Text("${soldHere.sumOf { it.qty }} pcs sold in ${soldHere.size} sales", fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (picked != null) TextButton(onClick = { picked = null }) { Text("Change") }
+                Column(Modifier.padding(12.dp)) {
+                    Text(current.article.ifBlank { current.name }, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("${soldHere.sumOf { it.qty }} pcs sold in ${soldHere.size} sales", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
-            Text("Colour", fontWeight = FontWeight.SemiBold)
+            Text(if (flow.step == 1) "Choose colour" else "Colour", fontWeight = FontWeight.SemiBold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 colours.forEach { c ->
-                    FilterChip(selected = selColour == c, onClick = { colour = c }, label = { Text(c) },
-                        leadingIcon = { ColourDot(c, 12) })
+                    FilterChip(selected = selColour == c, onClick = {
+                        flow.colour = c; flow.size = ""; flow.step = 2
+                    }, label = { Text(c) }, leadingIcon = { ColourDot(c, 12) })
                 }
             }
 
-            Text("Size (tap to see who bought it)", fontWeight = FontWeight.SemiBold)
-            val variantSizes = current.variants.firstOrNull { it.colour == selColour }?.sizes.orEmpty()
-            val soldSizes = soldHere.filter { it.colour.equals(selColour, true) }.map { it.size }
-            val sizes = (variantSizes.map { it.size } + soldSizes).filter { it.isNotBlank() }.distinct()
-                .sortedWith(compareBy<String>({ it.toIntOrNull() ?: Int.MAX_VALUE }, { it }))
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                sizes.forEach { sz ->
-                    val sold = soldHere.filter { it.colour.equals(selColour, true) && it.size == sz }.sumOf { it.qty }
-                    val stock = variantSizes.firstOrNull { it.size == sz }?.qty
-                    FilterChip(selected = false,
-                        onClick = { nav.go(Route.ItemSales(current.article, selColour, sz)) },
-                        label = {
-                            Column {
-                                Text(sz, fontWeight = FontWeight.Bold)
-                                Text("sold $sold" + (if (stock != null) " · stock $stock" else ""), fontSize = 10.sp)
-                            }
-                        },
-                        leadingIcon = { ColourDot(selColour, 10) })
+            if (flow.step == 2) {
+                Text("Size (tap to see who bought it)", fontWeight = FontWeight.SemiBold)
+                val variantSizes = current.variants.firstOrNull { it.colour == selColour }?.sizes.orEmpty()
+                val soldSizes = soldHere.filter { it.colour.equals(selColour, true) }.map { it.size }
+                val sizes = (variantSizes.map { it.size } + soldSizes).filter { it.isNotBlank() }.distinct()
+                    .sortedWith(compareBy<String>({ it.toIntOrNull() ?: Int.MAX_VALUE }, { it }))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    sizes.forEach { sz ->
+                        val sold = soldHere.filter { it.colour.equals(selColour, true) && it.size == sz }.sumOf { it.qty }
+                        val stock = variantSizes.firstOrNull { it.size == sz }?.qty
+                        FilterChip(selected = flow.size == sz,
+                            onClick = {
+                                flow.size = sz
+                                nav.go(Route.ItemSales(current.article, selColour, sz))
+                            },
+                            label = {
+                                Column {
+                                    Text(sz, fontWeight = FontWeight.Bold)
+                                    Text("sold $sold" + (if (stock != null) " · stock $stock" else ""), fontSize = 10.sp)
+                                }
+                            },
+                            leadingIcon = { ColourDot(selColour, 10) })
+                    }
                 }
+                if (sizes.isEmpty()) EmptyState("No size for this colour yet.")
             }
-            if (sizes.isEmpty()) EmptyState("No size for this colour yet.")
+
+            OutlinedButton(onClick = { backOneStep() }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, null); Spacer(Modifier.width(6.dp))
+                Text(if (flow.step == 2) "Back to colour" else "Back to article")
+            }
         }
     }
 }
