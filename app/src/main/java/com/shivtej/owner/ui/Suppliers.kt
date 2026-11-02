@@ -4,8 +4,12 @@ package com.shivtej.owner.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -613,7 +617,10 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
     var pickedProduct by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selBrand by remember { mutableStateOf<String?>(null) }
+    // brands tapped on this bill (null = all brands of the supplier, the default)
+    var pickedBrands by remember(supplierId) { mutableStateOf<Set<String>?>(null) }
+    // size groups saved by the owner: 6-10 and 11-12 become two ovals
+    val groups = remember { app.repo.sizePresets().map { it.sizes } }
     // the supplier's bill photo or PDF (a copy kept on this phone and sent with the bill)
     var billPath by remember { mutableStateOf("") }
     var billBusy by remember { mutableStateOf(false) }
@@ -635,9 +642,37 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
     val total = if (lines.isNotEmpty()) itemsTotal else (typedAmount ?: 0.0)
     val paid = BillMath.parseAmount(paidText) ?: 0.0
 
+    // first time a brand is used for this supplier: its sets that no other supplier of the brand has come in here
+    LaunchedEffect(s?.id, products.size, suppliers.size, pickedBrands) {
+        val me = s ?: return@LaunchedEffect
+        var cur = suppliers.map { it.id to parseSupplierBrands(it.brandsJson) }
+        val mine = parseSupplierBrands(me.brandsJson)
+        (pickedBrands ?: mine.map { it.brand }.toSet()).forEach { brand ->
+            val keys = products.filter { it.brand.trim().equals(brand, ignoreCase = true) }.flatMap { p ->
+                productSets(p.id, p.variants.flatMap { v -> v.sizes.map { it.size } }, groups).map { it.key }
+            }
+            initialBrandSets(cur, me.id, brand, keys)?.let { list ->
+                app.repo.setSupplierBrands(me.id, list)
+                cur = cur.map { if (it.first == me.id) it.first to list else it }
+            }
+        }
+    }
+
     if (s == null) { EmptyState("Supplier not found."); return }
     if (editing && existing == null) { EmptyState("Loading the bill..."); return }
     val brands = parseSupplierBrands(s.brandsJson)
+    val brandMode = brands.isNotEmpty()
+    val chosenBrands = pickedBrands ?: brands.map { it.brand }.toSet()
+
+    // untick / tick a set (or all sets of an article): the set moves to the supplier that ticks it
+    fun applyMove(brand: String, keys: List<String>, on: Boolean) {
+        val all = suppliers.map { it.id to parseSupplierBrands(it.brandsJson) }
+        val changes = moveSets(all, s.id, brand, keys, on)
+        scope.launch {
+            try { changes.forEach { (id, list) -> app.repo.setSupplierBrands(id, list) } }
+            catch (e: Exception) { error = e.message ?: "Could not save the change" }
+        }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(if (editing) "Change purchase bill from ${s.name}" else "Purchase from ${s.name}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -646,7 +681,8 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
             OutlinedTextField(dateText, { dateText = it.take(10) }, label = { Text("Bill date dd-mm-yyyy") }, singleLine = true,
                 isError = date == null, modifier = Modifier.weight(1f))
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // brand bills only record which supplier gives an article or size; they never change stock
+        if (!brandMode) Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Add items to stock", fontWeight = FontWeight.SemiBold)
                 Text(if (addStock) "Quantities below go into your inventory now." else "Money entry only - stock is not changed.",
@@ -655,9 +691,11 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
             Switch(checked = addStock, onCheckedChange = { addStock = it }, enabled = !editing)
         }
 
-        Text("Items", fontWeight = FontWeight.SemiBold)
-        if (lines.isEmpty()) Text("No items added. Enter the bill amount below, or add the items you received.", fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (!brandMode) {
+            Text("Items", fontWeight = FontWeight.SemiBold)
+            if (lines.isEmpty()) Text("No items added. Enter the bill amount below, or add the items you received.", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         lines.forEachIndexed { i, l ->
             Card(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -676,27 +714,48 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
             Text("No brands set for this supplier yet. Edit the supplier and tick its brands, then the items of those brands show here.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            val brandNow = brands.firstOrNull { it.brand == selBrand }?.brand ?: brands.first().brand
-            val margin = brands.first { it.brand == brandNow }.margin
-            Text("Brand", fontWeight = FontWeight.SemiBold)
+            Text("Brands (tap one or more)", fontWeight = FontWeight.SemiBold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                brands.forEach { b -> Chip(b.brand, b.brand == brandNow) { selBrand = b.brand } }
-            }
-            val brandItems = products.filter { it.brand.trim().equals(brandNow, ignoreCase = true) }.sortedBy { it.article }
-            if (brandItems.isEmpty()) Text("No items of $brandNow in the shop yet.", fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            brandItems.forEach { p ->
-                val inBill = lines.filter { it.productId == p.id }.sumOf { it.qty }
-                Row(Modifier.fillMaxWidth().clickable { pickedProduct = p }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(p.article.ifBlank { p.name }, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        Text("MRP ${moneyG(app, p.mrp)} · rate ${moneyG(app, purchaseRateFor(p.mrp, margin))}" +
-                            (if (inBill > 0) " · in bill: $inBill pcs" else ""), fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                brands.forEach { b ->
+                    Chip(b.brand, b.brand in chosenBrands) {
+                        pickedBrands = if (b.brand in chosenBrands) chosenBrands - b.brand else chosenBrands + b.brand
                     }
-                    Icon(Icons.Filled.Add, "Add")
                 }
-                HorizontalDivider()
+            }
+            Text("Every article of the chosen brands comes in. Untick an article or an oval to move it to the other supplier of the same brand.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            brands.filter { it.brand in chosenBrands }.forEach { b ->
+                val mine = brandEntry(brands, b.brand)?.sets.orEmpty()
+                Text(b.brand, fontWeight = FontWeight.Bold, color = BrandRed, modifier = Modifier.padding(top = 6.dp))
+                val brandItems = products.filter { it.brand.trim().equals(b.brand, ignoreCase = true) }.sortedBy { it.article }
+                if (brandItems.isEmpty()) Text("No items of ${b.brand} in the shop yet.", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                brandItems.forEach { p ->
+                    val sets = productSets(p.id, p.variants.flatMap { v -> v.sizes.map { it.size } }, groups)
+                    val colours = p.variants.map { it.colour }.filter { it.isNotBlank() }.joinToString(" · ")
+                    val allOn = sets.isNotEmpty() && sets.all { it.key in mine }
+                    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                        Row(Modifier.fillMaxWidth().clickable(enabled = sets.isNotEmpty()) {
+                            applyMove(b.brand, sets.map { it.key }, !allOn)
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if (allOn) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank, null,
+                                tint = if (allOn) BrandRed else MaterialTheme.colorScheme.outline)
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(p.article.ifBlank { p.name }, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                if (colours.isNotBlank()) Text(colours, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                            }
+                        }
+                        Row(Modifier.horizontalScroll(rememberScrollState()).padding(start = 32.dp, top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            sets.forEach { st ->
+                                val on = st.key in mine
+                                SetOval(st.label, on) { applyMove(b.brand, listOf(st.key), !on) }
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                }
             }
         }
 
@@ -752,7 +811,7 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
                         } else {
                             app.repo.createPurchase(
                                 supplierId = supplierId, billNo = billNo, billDate = date!!, lines = lines.toList(),
-                                amountIfNoItems = typedAmount ?: 0.0, addStock = addStock, note = note,
+                                amountIfNoItems = typedAmount ?: 0.0, addStock = addStock && !brandMode, note = note,
                                 paidNow = paid, method = method, billFile = billPath
                             )
                         }
@@ -769,10 +828,23 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
         pickProduct = false; pickedProduct = p
     }
     pickedProduct?.let { p ->
-        val m = brands.firstOrNull { it.brand.equals(p.brand.trim(), ignoreCase = true) }?.margin
-        PurchaseLinePicker(app, p, onDismiss = { pickedProduct = null }, defaultCost = m?.let { purchaseRateFor(p.mrp, it) }) { line ->
+        PurchaseLinePicker(app, p, onDismiss = { pickedProduct = null }) { line ->
             lines.add(line); pickedProduct = null
         }
+    }
+}
+
+/** A size set on the purchase bill: an oval with the set label only (no price, no quantity). */
+@Composable
+private fun SetOval(label: String, on: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier.clip(shape).border(2.dp, if (on) BrandRed else MaterialTheme.colorScheme.outline, shape)
+            .background(if (on) BrandRed.copy(alpha = 0.10f) else Color.Transparent)
+            .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Text(label, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+            color = if (on) BrandRed else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
