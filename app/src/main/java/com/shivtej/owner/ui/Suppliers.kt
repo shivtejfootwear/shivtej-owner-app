@@ -342,12 +342,25 @@ private fun BillLedgerRow(app: App, nav: Nav, supplierId: String, b: PurchaseE, 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Bill ${b.billNo.ifBlank { "Purchase" }}", fontWeight = FontWeight.SemiBold)
-                Text(dateFmt.format(Date(b.billDate)) + " · purchase" + (if (b.addStock) " · stock added" else " · money only"),
+                Text(dateFmt.format(Date(b.billDate)) + " · purchase" + (if (b.addStock) " · stock added" else " · money only") +
+                    (if (lines.isEmpty()) " · no items" else ""),
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text("+ ${moneyG(app, amount)}", fontWeight = FontWeight.Bold, color = RedOut)
                 Text("Owed ${moneyG(app, balanceAfter)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (b.billFile.isNotBlank() || b.billFileUrl.isNotBlank()) Row(
+            Modifier.padding(top = 6.dp).clip(RoundedCornerShape(8.dp)).clickable { openBill(ctx, b.billFile, b.billFileUrl) }
+                .padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(6.dp)).border(1.5.dp, BrandRed, RoundedCornerShape(6.dp)),
+                contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Description, "Supplier bill", tint = BrandRed, modifier = Modifier.size(18.dp))
+            }
+            Column(Modifier.padding(start = 8.dp)) {
+                Text("Supplier bill", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("Tap the small icon to open the photo or PDF", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (open) {
@@ -357,10 +370,6 @@ private fun BillLedgerRow(app: App, nav: Nav, supplierId: String, b: PurchaseE, 
                     fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
             }
             if (b.note.isNotBlank()) Text("Note: " + b.note, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (b.billFile.isNotBlank() || b.billFileUrl.isNotBlank()) {
-                Text("Bill photo / PDF attached", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                TextButton(onClick = { openBill(ctx, b.billFile, b.billFileUrl) }) { Text("View bill photo / PDF") }
-            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { nav.go(Route.PurchaseForm(supplierId, b.id)) }) { Text("Edit bill") }
                 TextButton(onClick = { onDelete(b) }) { Text("Delete bill", color = RedOut) }
@@ -376,6 +385,10 @@ fun SupplierAboutScreen(app: App, nav: Nav, supplierId: String) {
     val s = suppliers.firstOrNull { it.id == supplierId }
     var editing by remember { mutableStateOf(false) }
     var marginFor by remember { mutableStateOf<SupplierBrand?>(null) }
+    // (brand, article) being added (article = null) or changed
+    var articleFor by remember { mutableStateOf<Pair<String, ArticleMargin?>?>(null) }
+    var askDeleteArticle by remember { mutableStateOf<Pair<String, ArticleMargin>?>(null) }
+    val scope = rememberCoroutineScope()
     if (s == null) { EmptyState("This supplier is not on this phone yet."); return }
     val brands = parseSupplierBrands(s.brandsJson)
 
@@ -396,20 +409,94 @@ fun SupplierAboutScreen(app: App, nav: Nav, supplierId: String) {
             }
         }
         SectionTitle("Brands and margin")
-        Text("Items of these brands are bought at MRP minus the margin. Tap a brand to change its margin.", fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("A note of the margin each brand and article gets. An article margin overrides the brand margin. " +
+            "It is never used on the purchase bill.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (brands.isEmpty()) Text("No brands yet. Tap the edit icon to tick the brands this supplier gives.", fontSize = 13.sp)
         brands.forEach { b ->
-            Card(Modifier.fillMaxWidth().clickable { marginFor = b }, colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(b.brand, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    Text("${BillMath.plain(b.margin)}% margin", fontWeight = FontWeight.Bold, color = BrandRed)
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(Modifier.fillMaxWidth().clickable { marginFor = b }, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Brand: ${b.brand} · default margin ${BillMath.plain(b.margin)}%", fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f))
+                        Icon(Icons.Filled.Edit, "Change brand margin", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
+                    }
+                    b.articles.forEach { a ->
+                        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(a.article, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Text("${BillMath.plain(a.margin)}%", fontWeight = FontWeight.Bold, color = BrandRed)
+                            IconButton(onClick = { articleFor = b.brand to a }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.Edit, "Change margin", modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(onClick = { askDeleteArticle = b.brand to a }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.Delete, "Remove article", tint = RedOut, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                    OutlinedButton(onClick = { articleFor = b.brand to null }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BrandRed)) {
+                        Icon(Icons.Filled.Add, null, tint = BrandRed); Spacer(Modifier.width(6.dp)); Text("Add article", color = BrandRed)
+                    }
                 }
             }
         }
+        if (brands.isNotEmpty()) Text("Edit (✎) changes the margin, delete (🗑) removes the article.", fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (editing) SupplierDialog(app, s) { editing = false }
     marginFor?.let { b -> MarginDialog(app, supplierId, brands, b) { marginFor = null } }
+    articleFor?.let { (brand, a) ->
+        ArticleMarginDialog(brand, a, brands.firstOrNull { it.brand == brand }?.margin ?: 0.0, onDismiss = { articleFor = null }) { name, margin ->
+            val updated = brands.map { b ->
+                if (b.brand != brand) b
+                else b.copy(articles = (b.articles.filterNot { it.article == name || it.article == a?.article } +
+                    ArticleMargin(name, margin)).sortedBy { it.article })
+            }
+            scope.launch { app.repo.setSupplierBrands(supplierId, updated) }
+            articleFor = null
+        }
+    }
+    askDeleteArticle?.let { (brand, a) ->
+        AlertDialog(
+            onDismissRequest = { askDeleteArticle = null },
+            title = { Text("Remove ${a.article}?") },
+            text = { Text("Its margin note is removed from ${brand}. The brand margin stays.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val updated = brands.map { b -> if (b.brand != brand) b else b.copy(articles = b.articles.filterNot { it.article == a.article }) }
+                    scope.launch { app.repo.setSupplierBrands(supplierId, updated) }
+                    askDeleteArticle = null
+                }) { Text("Remove", color = RedOut) }
+            },
+            dismissButton = { TextButton(onClick = { askDeleteArticle = null }) { Text("Cancel") } })
+    }
+}
+
+/** Add or change one article's margin note: article name (CAPITAL letters) and margin %. */
+@Composable
+private fun ArticleMarginDialog(brand: String, a: ArticleMargin?, brandMargin: Double, onDismiss: () -> Unit,
+                                onSave: (String, Double) -> Unit) {
+    var name by remember { mutableStateOf(a?.article.orEmpty()) }
+    var text by remember { mutableStateOf(a?.let { BillMath.plain(it.margin) } ?: BillMath.plain(brandMargin)) }
+    val value = BillMath.parseAmount(text)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (a == null) "Add article in $brand" else "Margin for ${a.article}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it.uppercase().take(40) }, label = { Text("Article name: e.g. VERTEX") },
+                    singleLine = true, enabled = a == null, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(text, { text = it.filter { c -> c.isDigit() || c == '.' }.take(5) },
+                    label = { Text("Margin %: e.g. 35") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank() && value != null && value >= 0.0 && value < 100.0,
+                onClick = { onSave(name.trim(), value ?: 0.0) }) { Text("SAVE", color = BrandRed) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", color = BrandRed) } }
+    )
 }
 
 @Composable
@@ -707,20 +794,42 @@ fun PurchaseFormScreen(app: App, nav: Nav, supplierId: String, billId: String? =
                 }
             }
         }
+        // brands of the shop that this supplier does not give yet: tapping one adds it to this supplier
+        val otherBrands = products.map { it.brand.trim().uppercase() }.filter { it.isNotEmpty() && brands.none { b -> b.brand == it } }
+            .distinct().sorted()
+        fun addBrand(name: String) {
+            pickedBrands = (pickedBrands ?: brands.map { it.brand }.toSet()) + name
+            scope.launch {
+                try { app.repo.setSupplierBrands(s.id, brands + SupplierBrand(name, 0.0)) }
+                catch (e: Exception) { error = e.message ?: "Could not add the brand" }
+            }
+        }
         if (brands.isEmpty()) {
-            OutlinedButton(onClick = { pickProduct = true }, modifier = Modifier.fillMaxWidth()) {
+            // an old bill with item lines can still get items; a new bill starts with the brand
+            if (editing && lines.isNotEmpty()) OutlinedButton(onClick = { pickProduct = true }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text("Add item")
             }
-            Text("No brands set for this supplier yet. Edit the supplier and tick its brands, then the items of those brands show here.",
+            Text("Brand (tap one or more)", fontWeight = FontWeight.SemiBold)
+            if (otherBrands.isEmpty()) Text("Add products first. Their brands show here.", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                otherBrands.forEach { b -> Chip(b, false) { addBrand(b) } }
+            }
+            Text("Tap the brands ${s.name} gives. All their articles come in by themselves.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            Text("Brands (tap one or more)", fontWeight = FontWeight.SemiBold)
+            var moreBrands by remember { mutableStateOf(false) }
+            Text("Brand (tap one or more)", fontWeight = FontWeight.SemiBold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 brands.forEach { b ->
                     Chip(b.brand, b.brand in chosenBrands) {
                         pickedBrands = if (b.brand in chosenBrands) chosenBrands - b.brand else chosenBrands + b.brand
                     }
                 }
+                if (otherBrands.isNotEmpty()) Chip(if (moreBrands) "× Close" else "+ Brand", moreBrands) { moreBrands = !moreBrands }
+            }
+            if (moreBrands) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                otherBrands.forEach { b -> Chip(b, false) { addBrand(b); moreBrands = false } }
             }
             Text("Every article of the chosen brands comes in. Untick an article or an oval to move it to the other supplier of the same brand.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -10,13 +10,19 @@ import org.json.JSONObject
  * sets:   the size sets of this brand that this supplier supplies, as keys "productId|6,7,8,9,10".
  *         A set belongs to one supplier only: ticking it here takes it away from the other supplier of the same brand.
  * setsReady: true once the owner's first auto-selection for this brand has been done.
+ * articles: article-wise margin notes (e.g. VERTEX 30%, STIMULUS 35%). An article margin overrides the brand
+ *           margin. Only a note in the supplier notebook, never used on the purchase bill.
  */
 data class SupplierBrand(
     val brand: String,
     val margin: Double = 0.0,
     val sets: List<String> = emptyList(),
-    val setsReady: Boolean = false
+    val setsReady: Boolean = false,
+    val articles: List<ArticleMargin> = emptyList()
 )
+
+/** One article's margin % in the supplier notebook. */
+data class ArticleMargin(val article: String, val margin: Double)
 
 fun parseSupplierBrands(json: String): List<SupplierBrand> = runCatching {
     val a = JSONArray(json)
@@ -27,7 +33,14 @@ fun parseSupplierBrands(json: String): List<SupplierBrand> = runCatching {
             brand = o.optString("brand").trim().uppercase(),
             margin = o.optDouble("margin", 0.0),
             sets = (0 until sa.length()).map { sa.optString(it) }.filter { it.isNotBlank() },
-            setsReady = o.optBoolean("setsReady", false)
+            setsReady = o.optBoolean("setsReady", false),
+            articles = (o.optJSONArray("articles") ?: JSONArray()).let { aa ->
+                (0 until aa.length()).mapNotNull { j ->
+                    val m = aa.optJSONObject(j) ?: return@mapNotNull null
+                    val name = m.optString("article").trim().uppercase()
+                    if (name.isEmpty()) null else ArticleMargin(name, m.optDouble("margin", 0.0))
+                }
+            }
         )
     }.filter { it.brand.isNotEmpty() }
 }.getOrDefault(emptyList())
@@ -36,7 +49,10 @@ fun supplierBrandsArray(list: List<SupplierBrand>): JSONArray {
     val a = JSONArray()
     list.forEach {
         a.put(JSONObject().put("brand", it.brand).put("margin", it.margin)
-            .put("sets", JSONArray(it.sets)).put("setsReady", it.setsReady))
+            .put("sets", JSONArray(it.sets)).put("setsReady", it.setsReady)
+            .put("articles", JSONArray().also { aa ->
+                it.articles.forEach { m -> aa.put(JSONObject().put("article", m.article).put("margin", m.margin)) }
+            }))
     }
     return a
 }
