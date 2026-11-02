@@ -74,6 +74,10 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf<SProduct?>(null) }
     var scanning by remember { mutableStateOf(false) }
+    // "Customer return": the scanned pieces go to the owner as a return (own list, no stock check)
+    var returnMode by remember { mutableStateOf(false) }
+    val retCart = remember { mutableStateListOf<MBItem>() }
+    val shown = if (returnMode) retCart else cart
     val withCamera = rememberWithCamera()
 
     fun refresh() {
@@ -95,11 +99,12 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
 
     // never add more than the stock of that colour and size
     fun addItem(it: MBItem) {
-        val i = cart.indexOfFirst { c -> c.key() == it.key() }
-        val have = if (i >= 0) cart[i].qty else 0
-        if (it.stock >= 0 && have + it.qty > it.stock) { toast(ctx, "स्टॉक में सिर्फ ${it.stock} है"); return }
-        if (i >= 0) cart[i] = cart[i].copy(qty = have + it.qty, stock = if (it.stock >= 0) it.stock else cart[i].stock)
-        else cart.add(it)
+        val list = if (returnMode) retCart else cart
+        val i = list.indexOfFirst { c -> c.key() == it.key() }
+        val have = if (i >= 0) list[i].qty else 0
+        if (!returnMode && it.stock >= 0 && have + it.qty > it.stock) { toast(ctx, "स्टॉक में सिर्फ ${it.stock} है"); return }
+        if (i >= 0) list[i] = list[i].copy(qty = have + it.qty, stock = if (it.stock >= 0) it.stock else list[i].stock)
+        else list.add(it)
     }
 
     // resolve a barcode on the server and add it to the bill
@@ -128,18 +133,21 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
     }
 
     fun send() {
-        if (cart.isEmpty()) { toast(ctx, "Add at least one item"); return }
+        val list = shown
+        if (list.isEmpty()) { toast(ctx, "Add at least one item"); return }
         val t = store.token ?: return onClosed()
         busy = true
-        val items = JSONArray().apply { cart.forEach { put(it.json()) } }
-        val ed = editingId
+        val items = JSONArray().apply { list.forEach { put(it.json()) } }
+        val ret = returnMode
+        val ed = if (ret) null else editingId
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    if (ed == null) Api.billSend(t, store.deviceId, items) else Api.billUpdate(t, store.deviceId, ed, items)
+                    if (ret) Api.returnSend(t, store.deviceId, items)
+                    else if (ed == null) Api.billSend(t, store.deviceId, items) else Api.billUpdate(t, store.deviceId, ed, items)
                 }
-                toast(ctx, if (ed == null) "Bill sent to owner" else "Bill updated")
-                cart.clear(); editingId = null; query = ""
+                toast(ctx, if (ret) "Return sent to owner" else if (ed == null) "Bill sent to owner" else "Bill updated")
+                list.clear(); if (!ret) editingId = null; query = ""
                 refresh()
             } catch (e: NotAllowed) { onClosed() }
             catch (e: ApiFail) {
@@ -158,7 +166,7 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(PanelBg)) {
         PremiumHeader(
-            title = if (editingId != null) "Edit Bill" else "Make Bill",
+            title = if (returnMode) "Customer Return" else if (editingId != null) "Edit Bill" else "Make Bill",
             subtitle = "प्रोडक्ट जोड़ें और मालिक को भेजें",
             onBack = onBack
         )
@@ -184,6 +192,12 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
             ) { Icon(Icons.Filled.QrCodeScanner, "Scan barcode", tint = Color.White, modifier = Modifier.size(30.dp)) }
         }
 
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !returnMode, onClick = { returnMode = false }, label = { Text("Bill") })
+            FilterChip(selected = returnMode, onClick = { if (!returnMode) editingId = null; returnMode = true },
+                label = { Text("Customer return") })
+        }
+
         LazyColumn(Modifier.weight(1f).padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (results.isNotEmpty()) item {
                 Card {
@@ -202,13 +216,15 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
                 }
             }
 
-            item { Text("Items in this bill (${cart.size})", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp)) }
-            if (cart.isEmpty()) item {
-                Text("Search or scan a product to add it. The owner will set the rate and make the final bill.",
+            item { Text(if (returnMode) "Returned pieces (${shown.size})" else "Items in this bill (${shown.size})",
+                fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp)) }
+            if (shown.isEmpty()) item {
+                Text(if (returnMode) "Scan the returned piece. It goes to the owner, who makes the return bill and adds the piece back to stock."
+                     else "Search or scan a product to add it. The owner will set the rate and make the final bill.",
                     fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            items(cart, key = { it.key() }) { it ->
-                val i = cart.indexOf(it)
+            items(shown, key = { it.key() }) { it ->
+                val i = shown.indexOf(it)
                 Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -216,11 +232,11 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
                             Text("${it.article} · ${it.colour} / ${it.size} · MRP ${money(it.mrp)}${if (it.stock >= 0) " · स्टॉक ${it.stock}" else ""}", fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        IconButton(onClick = { if (i >= 0) cart[i] = it.copy(qty = (it.qty - 1).coerceAtLeast(1)) }) { Icon(Icons.Filled.Remove, "Less") }
+                        IconButton(onClick = { if (i >= 0) shown[i] = it.copy(qty = (it.qty - 1).coerceAtLeast(1)) }) { Icon(Icons.Filled.Remove, "Less") }
                         Text("${it.qty}", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                        IconButton(onClick = { if (i >= 0) cart[i] = it.copy(qty = it.qty + 1) },
-                            enabled = it.stock < 0 || it.qty < it.stock) { Icon(Icons.Filled.Add, "More") }
-                        IconButton(onClick = { if (i >= 0) cart.removeAt(i) }) { Icon(Icons.Filled.Delete, "Remove", tint = BrandRed) }
+                        IconButton(onClick = { if (i >= 0) shown[i] = it.copy(qty = it.qty + 1) },
+                            enabled = returnMode || it.stock < 0 || it.qty < it.stock) { Icon(Icons.Filled.Add, "More") }
+                        IconButton(onClick = { if (i >= 0) shown.removeAt(i) }) { Icon(Icons.Filled.Delete, "Remove", tint = BrandRed) }
                     }
                 }
             }
@@ -239,7 +255,7 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
                                 Text(b.items.joinToString(", ") { it.article.ifBlank { it.name } }.take(40), fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
-                            TextButton(onClick = { cart.clear(); cart.addAll(b.items); editingId = b.id }) { Text("Edit") }
+                            TextButton(onClick = { returnMode = false; cart.clear(); cart.addAll(b.items); editingId = b.id }) { Text("Edit") }
                             IconButton(onClick = {
                                 val t = store.token ?: return@IconButton
                                 scope.launch {
@@ -260,10 +276,11 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
         Row(Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (editingId != null) OutlinedButton(onClick = { cart.clear(); editingId = null; query = "" },
                 modifier = Modifier.weight(1f).height(52.dp)) { Text("Cancel edit") }
-            Button(onClick = { send() }, enabled = cart.isNotEmpty() && !busy,
+            Button(onClick = { send() }, enabled = shown.isNotEmpty() && !busy,
                 colors = ButtonDefaults.buttonColors(containerColor = StaffBlue),
                 modifier = Modifier.weight(2f).height(52.dp)) {
-                Text(if (busy) "Please wait..." else if (editingId != null) "Update bill (${cart.size})" else "Send bill to owner (${cart.size})",
+                Text(if (busy) "Please wait..." else if (returnMode) "Send return to owner (${shown.size})"
+                     else if (editingId != null) "Update bill (${cart.size})" else "Send bill to owner (${cart.size})",
                     fontWeight = FontWeight.Bold)
             }
         }

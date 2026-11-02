@@ -61,6 +61,10 @@ object Api {
     fun billSend(token: String, device: String, items: JSONArray): JSONObject =
         rpc("staff_bill_send", JSONObject().put("p_token", token).put("p_device", device).put("p_items", items)) as JSONObject
 
+    /** Customer return: the scanned pieces go to the owner's Staff Bills as a return (no stock check). */
+    fun returnSend(token: String, device: String, items: JSONArray): JSONObject =
+        rpc("staff_return_send", JSONObject().put("p_token", token).put("p_device", device).put("p_items", items)) as JSONObject
+
     fun billUpdate(token: String, device: String, id: String, items: JSONArray): JSONObject =
         rpc("staff_bill_update", JSONObject().put("p_token", token).put("p_device", device).put("p_id", id).put("p_items", items)) as JSONObject
 

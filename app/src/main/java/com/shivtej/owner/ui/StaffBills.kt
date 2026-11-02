@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shivtej.owner.App
+import com.shivtej.owner.data.Repo
 import com.shivtej.owner.net.Api
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -38,7 +39,7 @@ import java.time.format.DateTimeFormatter
  * Tap "Bill" to open one in POS Billing with its items already in - set the customer and rate, then complete it.
  * When completed it disappears here and the manager's list moves up.
  */
-private data class SBill(val id: String, val staffName: String, val items: JSONArray, val at: String)
+private data class SBill(val id: String, val staffName: String, val items: JSONArray, val at: String, val kind: String = "bill")
 
 private val tFmt = DateTimeFormatter.ofPattern("d MMM, h:mm a")
 private fun whenText(iso: String): String = try {
@@ -63,6 +64,8 @@ fun StaffBillsScreen(app: App, nav: Nav) {
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var askDelete by remember { mutableStateOf<SBill?>(null) }
+    // a manager's customer return: the POS return bill is opened for each piece in turn
+    var returnQueue by remember { mutableStateOf<List<Repo.SoldInfo>>(emptyList()) }
 
     fun load(quiet: Boolean = false) {
         if (!quiet) { loading = true; error = null }
@@ -71,7 +74,7 @@ fun StaffBillsScreen(app: App, nav: Nav) {
                 val a = withContext(Dispatchers.IO) { Api.rpc("owner_staff_bills_list", JSONObject().put("p_code", code)) } as? JSONArray ?: JSONArray()
                 bills = (0 until a.length()).mapNotNull { i ->
                     val o = a.optJSONObject(i) ?: return@mapNotNull null
-                    SBill(o.optString("id"), o.optString("staff_name", "Manager"), o.optJSONArray("items") ?: JSONArray(), o.optString("at"))
+                    SBill(o.optString("id"), o.optString("staff_name", "Manager"), o.optJSONArray("items") ?: JSONArray(), o.optString("at"), o.optString("kind", "bill"))
                 }
             } catch (e: Exception) {
                 val m = e.message.orEmpty()
@@ -95,6 +98,26 @@ fun StaffBillsScreen(app: App, nav: Nav) {
                 app.cart.startFromPending(b.id, lines)
                 nav.go(Route.Pos)
             } catch (e: Exception) { toast(ctx, e.message ?: "Could not open") }
+        }
+    }
+
+    fun openReturn(b: SBill) {
+        val found = (0 until b.items.length()).mapNotNull { b.items.optJSONObject(it) }
+            .mapNotNull { app.repo.soldInfo(it.optString("barcode")) }
+        if (found.isEmpty()) toast(ctx, "इस बारकोड की POS बिक्री नहीं मिली। बिल नंबर से वापसी बनाएँ, फिर \"हो गया\" दबाएँ।")
+        else returnQueue = found
+    }
+
+    // the return is made (or not needed): the request leaves the list, and the manager's phone is not affected
+    fun markReturnDone(b: SBill) {
+        bills = bills?.filterNot { it.id == b.id }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    Api.rpc("owner_staff_bill_done", JSONObject().put("p_code", code).put("p_id", b.id).put("p_pos_bill_id", "return"))
+                }
+                load(quiet = true)
+            } catch (e: Exception) { toast(ctx, "फिर कोशिश करें"); load(quiet = true) }
         }
     }
 
@@ -161,7 +184,11 @@ fun StaffBillsScreen(app: App, nav: Nav) {
                                             Text("${it.optString("article")} · ${it.optString("colour")} · साइज़ ${it.optString("size")} × ${it.optInt("qty", 1)}",
                                                 fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, top = 2.dp))
                                         }
-                                        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (b.kind == "return") Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text("वापसी", fontWeight = FontWeight.Bold, color = BrandRed, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                            Button(onClick = { openReturn(b) }, colors = ButtonDefaults.buttonColors(containerColor = BrandRed)) { Text("वापसी बनाएँ", fontSize = 12.sp) }
+                                            OutlinedButton(onClick = { markReturnDone(b) }) { Text("हो गया", fontSize = 12.sp) }
+                                        } else Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                             Button(onClick = { openInPos(b) }, colors = ButtonDefaults.buttonColors(containerColor = BrandRed), modifier = Modifier.weight(1f)) { Text("बिल बनाएँ", fontSize = 12.sp) }
                                             OutlinedButton(onClick = { openInPos(b) }, modifier = Modifier.weight(1f)) { Text("एडिट", fontSize = 12.sp) }
                                             OutlinedButton(onClick = { askDelete = b }, modifier = Modifier.weight(1f)) {
@@ -178,6 +205,10 @@ fun StaffBillsScreen(app: App, nav: Nav) {
         } else if (error == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
+    }
+
+    returnQueue.firstOrNull()?.let { sold ->
+        ReturnBillDialog(app, sold, onClose = { returnQueue = returnQueue.drop(1); load(quiet = true) })
     }
 
     askDelete?.let { b ->
