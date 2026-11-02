@@ -13,6 +13,8 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         val app = applicationContext as App
         if (app.prefs.ownerCode.isBlank()) return Result.success()
         val ok = app.sync.syncNow()
+        // a manager sent a bill or a return: phone notification
+        runCatching { com.shivtej.owner.util.StaffBillAlert.check(applicationContext, app.prefs.ownerCode) }
         runCatching { com.shivtej.owner.ui.PhotoCache.syncAll(applicationContext, app.repo.products.first()) }
         return if (ok) Result.success() else Result.retry()
     }

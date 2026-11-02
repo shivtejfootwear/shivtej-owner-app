@@ -437,7 +437,7 @@ internal fun suggestionsFor(typed: String, known: List<String>): List<String> {
 
 /** A text field with its suggestion list under it. Nothing is forced: after a tap the text can still be changed (2001 to 2002). */
 @Composable
-private fun SuggestField(label: String, value: String, matches: List<String>, onChange: (String) -> Unit) {
+internal fun SuggestField(label: String, value: String, matches: List<String>, onChange: (String) -> Unit) {
     Column {
         Field(label, value, onChange = onChange)
         if (matches.isNotEmpty()) {
@@ -469,7 +469,7 @@ private fun TypeField(value: String, known: List<String>, onChange: (String) -> 
     // suggestions are English only (the Hindi / Marathi starter names are not offered)
     val english = known.filter { t -> t.none { it in '\u0900'..'\u097F' } }
     val matches = suggestionsFor(value, english)
-    SuggestField("Product type (चप्पल / सैंडल / शूज़ ...)", value, matches, onChange)
+    SuggestField("Product type", value, matches, onChange)
 }
 
 /** Category under the product type: the suggestions are the categories saved for that type (CATEGORY button on the Products screen). */

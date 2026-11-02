@@ -129,6 +129,9 @@ fun AdminPortalScreen(app: App, nav: Nav) {
     var storeMapLink by remember { mutableStateOf("") }
     var storeTiming by remember { mutableStateOf("") }
     var featuredArticles by remember { mutableStateOf("") }
+    // article codes already saved on products: the brand-film article field suggests them (tap = exact code)
+    var articleOptions by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(Unit) { articleOptions = app.repo.knownArticles() }
     var lowStockOn by remember { mutableStateOf(false) }
     var lowStockLimit by remember { mutableStateOf("3") }
     var sliderAuto by remember { mutableStateOf(false) }
@@ -618,7 +621,7 @@ fun AdminPortalScreen(app: App, nav: Nav) {
                                         TextButton(onClick = { films[i] = FilmDraft() }, enabled = ready && uploadingSlot == null) { Text("हटाएँ") }
                                     }
                                 }
-                                Field("आर्टिकल कोड (इस लाइन को खोलने के लिए)", f.article) { films[i] = films[i].copy(article = it.trim()) }
+                                SuggestField("आर्टिकल कोड (इस लाइन को खोलने के लिए)", f.article, suggestionsFor(f.article, articleOptions)) { films[i] = films[i].copy(article = it.trim()) }
                                 if (f.article.isNotBlank()) {
                                     TextButton(onClick = { filmOpen = i }) { Text("${f.article} खोलें ›") }
                                 }
