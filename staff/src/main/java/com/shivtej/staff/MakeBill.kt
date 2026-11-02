@@ -98,13 +98,15 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
     LaunchedEffect(Unit) { refresh() }
 
     // never add more than the stock of that colour and size
-    fun addItem(it: MBItem) {
+    // returns true when the piece was added (false = over the stock, nothing added)
+    fun addItem(it: MBItem): Boolean {
         val list = if (returnMode) retCart else cart
         val i = list.indexOfFirst { c -> c.key() == it.key() }
         val have = if (i >= 0) list[i].qty else 0
-        if (!returnMode && it.stock >= 0 && have + it.qty > it.stock) { toast(ctx, "स्टॉक में सिर्फ ${it.stock} है"); return }
+        if (!returnMode && it.stock >= 0 && have + it.qty > it.stock) { toast(ctx, "स्टॉक में सिर्फ ${it.stock} है"); return false }
         if (i >= 0) list[i] = list[i].copy(qty = have + it.qty, stock = if (it.stock >= 0) it.stock else list[i].stock)
         else list.add(it)
+        return true
     }
 
     // resolve a barcode on the server and add it to the bill
@@ -116,11 +118,17 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
             try {
                 val r = withContext(Dispatchers.IO) { Api.lookup(tok, store.deviceId, t) }
                 if (r.optBoolean("found")) {
-                    addItem(MBItem(r.optString("productId"), r.optString("article"), r.optString("name"),
+                    val item = MBItem(r.optString("productId"), r.optString("article"), r.optString("name"),
                         r.optString("colour"), r.optString("size"), r.optString("barcode"), 1, r.optDouble("mrp", 0.0),
-                        r.optInt("stock", -1)))
-                    query = ""; toast(ctx, "जोड़ा: ${r.optString("article")} ${r.optString("size")}")
-                } else if (!quiet) toast(ctx, "यह बारकोड नहीं मिला")
+                        r.optInt("stock", -1))
+                    // same sounds as the owner app: already in the bill = "again", new = "ok", over the stock = "fail"
+                    val list = if (returnMode) retCart else cart
+                    val already = list.any { c -> c.key() == item.key() }
+                    if (addItem(item)) {
+                        if (!quiet) { if (already) Beeps.again(ctx) else Beeps.ok(ctx) }
+                        query = ""; toast(ctx, "जोड़ा: ${r.optString("article")} ${r.optString("size")}")
+                    } else if (!quiet) Beeps.fail(ctx)
+                } else if (!quiet) { Beeps.fail(ctx); toast(ctx, "यह बारकोड नहीं मिला") }
             } catch (e: NotAllowed) { onClosed() } catch (_: Exception) { if (!quiet) toast(ctx, "फिर कोशिश करें") }
         }
     }
