@@ -55,6 +55,25 @@ private fun dayOf(iso: String): String = try {
     when (d) { today -> "आज"; today.minusDays(1) -> "कल"; else -> d.format(DateTimeFormatter.ofPattern("d MMM yyyy")) }
 } catch (e: Exception) { "" }
 
+/**
+ * Closes the managers' bills whose every piece is already sold on a bill here (the owner billed them at the
+ * counter), so the same pieces are never billed twice. Returns the ids that were closed. Returns are not touched.
+ */
+suspend fun closeStaffBillsAlreadySold(app: App, list: JSONArray? = null): Set<String> {
+    val a = list ?: (Api.rpc("owner_staff_bills_list", JSONObject().put("p_code", app.prefs.ownerCode)) as? JSONArray ?: JSONArray())
+    val closed = HashSet<String>()
+    for (i in 0 until a.length()) {
+        val o = a.optJSONObject(i) ?: continue
+        if (o.optString("kind", "bill") == "return") continue
+        val id = o.optString("id")
+        if (id.isBlank()) continue
+        val sold = app.repo.pendingAlreadyBilled(o.optJSONArray("items") ?: continue) ?: continue
+        app.repo.markStaffBillDone(id, sold.billId)
+        closed.add(id)
+    }
+    return closed
+}
+
 @Composable
 fun StaffBillsScreen(app: App, nav: Nav) {
     val ctx = LocalContext.current
@@ -64,6 +83,7 @@ fun StaffBillsScreen(app: App, nav: Nav) {
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var askDelete by remember { mutableStateOf<SBill?>(null) }
+    var soldNote by remember { mutableStateOf<String?>(null) }
     // a manager's customer return: the POS return bill is opened for each piece in turn
     var returnQueue by remember { mutableStateOf<List<Repo.SoldInfo>>(emptyList()) }
 
@@ -72,8 +92,12 @@ fun StaffBillsScreen(app: App, nav: Nav) {
         scope.launch {
             try {
                 val a = withContext(Dispatchers.IO) { Api.rpc("owner_staff_bills_list", JSONObject().put("p_code", code)) } as? JSONArray ?: JSONArray()
+                // a bill whose pieces were already billed at the counter is closed, not shown to be billed again
+                val closed = withContext(Dispatchers.IO) { runCatching { closeStaffBillsAlreadySold(app, a) }.getOrDefault(emptySet()) }
+                if (closed.isNotEmpty()) toast(ctx, "${closed.size} स्टाफ बिल के पीस पहले ही बिक चुके थे, वे अपने आप बंद हो गए")
                 bills = (0 until a.length()).mapNotNull { i ->
                     val o = a.optJSONObject(i) ?: return@mapNotNull null
+                    if (o.optString("id") in closed) return@mapNotNull null
                     SBill(o.optString("id"), o.optString("staff_name", "Manager"), o.optJSONArray("items") ?: JSONArray(), o.optString("at"), o.optString("kind", "bill"))
                 }
             } catch (e: Exception) {
@@ -93,9 +117,20 @@ fun StaffBillsScreen(app: App, nav: Nav) {
     fun openInPos(b: SBill) {
         scope.launch {
             try {
-                val lines = withContext(Dispatchers.IO) { app.repo.cartLinesFromPending(b.items) }
-                if (lines.isEmpty()) { toast(ctx, "This bill has no items"); return@launch }
-                app.cart.startFromPending(b.id, lines)
+                val r = withContext(Dispatchers.IO) { app.repo.cartLinesFromPending(b.items) }
+                val soldText = r.alreadySold.joinToString("\n") { "• ${it.article} ${it.colour}/${it.size} (बारकोड ${it.code}) → बिल ${it.bill}" }
+                if (r.lines.isEmpty()) {
+                    if (r.alreadySold.isNotEmpty()) {
+                        // already billed: this staff bill is closed so it does not stay in the list
+                        withContext(Dispatchers.IO) { app.repo.markStaffBillDone(b.id, r.alreadySold.first().billId) }
+                        soldNote = "इस बिल के सारे पीस पहले ही बिक चुके हैं:\n$soldText\n\nयह बिल दोबारा नहीं बनेगा, इसे बंद कर दिया गया है।"
+                    }
+                    else toast(ctx, "This bill has no items")
+                    return@launch
+                }
+                if (r.alreadySold.isNotEmpty()) android.widget.Toast.makeText(ctx,
+                    "पहले से बिके पीस बिल में नहीं जोड़े गए:\n$soldText", android.widget.Toast.LENGTH_LONG).show()
+                app.cart.startFromPending(b.id, r.lines)
                 nav.go(Route.Pos)
             } catch (e: Exception) { toast(ctx, e.message ?: "Could not open") }
         }
@@ -209,6 +244,14 @@ fun StaffBillsScreen(app: App, nav: Nav) {
 
     returnQueue.firstOrNull()?.let { sold ->
         ReturnBillDialog(app, sold, onClose = { returnQueue = returnQueue.drop(1); load(quiet = true) })
+    }
+
+    soldNote?.let { t ->
+        AlertDialog(
+            onDismissRequest = { soldNote = null },
+            title = { Text("पीस पहले ही बिक चुके हैं") },
+            text = { Text(t) },
+            confirmButton = { TextButton(onClick = { soldNote = null; load(quiet = true) }) { Text("ठीक है") } })
     }
 
     askDelete?.let { b ->

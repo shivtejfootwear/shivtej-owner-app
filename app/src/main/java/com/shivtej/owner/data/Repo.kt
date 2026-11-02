@@ -558,6 +558,12 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
 
     suspend fun createBill(lines: List<CartLine>, method: String, extra: BillExtra = BillExtra()): BillE {
         require(lines.isNotEmpty()) { "Bill is empty" }
+        // a piece already sold on another bill is never sold again (no other piece is taken in its place)
+        for (l in lines) for (c in l.barcode.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+            soldAndGone(c)?.let { sold ->
+                throw IllegalArgumentException("${l.article} ${l.colour}/${l.size}: यह पीस (बारकोड $c) पहले ही बिल ${sold.bill} में बिक चुका है। इसे बिल से हटाएँ।")
+            }
+        }
         val id = UUID.randomUUID().toString()
         val no = nextBillNo()
         val now = extra.billDate ?: System.currentTimeMillis()
@@ -639,11 +645,19 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val b = dao.bill(billId) ?: throw IllegalArgumentException("This bill was not found")
             require(!b.deleted) { "This bill is already deleted" }
             val now = System.currentTimeMillis()
+            // the barcodes this bill really took out of stock (it may differ from the line's barcode)
+            val mine = soldAll().filter { it.billId == billId }.toMutableList()
             parseBillItems(b.itemsJson).forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size)
                 if (before == null) { notRestored++; return@forEachIndexed }
                 dao.adjust(l.productId, l.colour, l.size, l.qty)
-                l.barcode.split(',').forEach { returnPiece(l.productId, l.colour, l.size, it.trim()) }
+                val took = mine.filter { it.pid == l.productId && it.colour == l.colour && it.size == l.size }.take(l.qty)
+                mine.removeAll(took)
+                val codes = if (took.isNotEmpty()) took.map { it.code }
+                    else l.barcode.split(',').map { it.trim() }.filter { c ->
+                        c.isNotEmpty() && (soldInfo(c)?.billId ?: billId) == billId   // sold on another bill: stays sold
+                    }
+                codes.forEach { returnPiece(l.productId, l.colour, l.size, it) }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$billId#del${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_DELETE", now, false))
@@ -690,21 +704,61 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     }
 
     /** Build cart lines from a manager's sent (pending) bill items, for the owner to finish. Rate starts at the MRP. */
-    suspend fun cartLinesFromPending(items: org.json.JSONArray): List<CartLine> {
+    /** A manager's bill turned into cart lines. Pieces already sold on a bill here are left out and listed in alreadySold. */
+    data class PendingLines(val lines: List<CartLine>, val alreadySold: List<SoldInfo>)
+
+    /**
+     * The sold record of a barcode that went out on a bill and is not in stock now (it can not be sold again).
+     * Null when the barcode is still in stock (as a piece or as a size's barcode) or was never sold.
+     */
+    suspend fun soldAndGone(code: String): SoldInfo? {
+        val c = code.trim()
+        if (c.isEmpty()) return null
+        val s = soldInfo(c) ?: return null
+        if (dao.pieceByBarcode(c) != null || dao.sizesByBarcode(c).isNotEmpty()) return null
+        return s
+    }
+
+    suspend fun cartLinesFromPending(items: org.json.JSONArray): PendingLines {
         val out = ArrayList<CartLine>()
+        val sold = ArrayList<SoldInfo>()
         for (i in 0 until items.length()) {
             val o = items.optJSONObject(i) ?: continue
             val pid = o.str("productId"); val colour = o.str("colour"); val size = o.str("size")
             if (pid.isBlank() || size.isBlank()) continue
+            // a piece the manager scanned that was already billed (for example at the counter) is not billed again
+            val codes = o.str("barcode").split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            val goneHere = codes.mapNotNull { soldAndGone(it) }
+            sold.addAll(goneHere)
+            val keepCodes = codes.filter { c -> goneHere.none { it.code == c } }
+            val qty = o.optInt("qty", 1).coerceAtLeast(1) - goneHere.size
+            if (qty <= 0) continue
             val prod = dao.product(pid)
             val mrp = o.optDouble("mrp", 0.0).takeIf { it > 0.0 } ?: (prod?.mrp ?: 0.0)
             val price = (prod?.price ?: 0.0).takeIf { it > 0.0 } ?: mrp
             val maxQ = dao.qtyOf(pid, colour, size) ?: 0
             out.add(CartLine(pid, o.str("article").ifBlank { prod?.article ?: "" },
-                o.str("name").ifBlank { prod?.name ?: "" }, colour, size, o.str("barcode"),
-                o.optInt("qty", 1).coerceAtLeast(1), maxOf(mrp, price), maxQ, mrp))
+                o.str("name").ifBlank { prod?.name ?: "" }, colour, size, keepCodes.joinToString(","),
+                qty, maxOf(mrp, price), maxQ, mrp))
         }
-        return out
+        return PendingLines(out, sold)
+    }
+
+    /**
+     * True when every piece of a manager's bill (each with its scanned barcode) is already sold on a bill here,
+     * so the bill was already made (for example at the counter). Returns that sold record, else null.
+     */
+    suspend fun pendingAlreadyBilled(items: org.json.JSONArray): SoldInfo? {
+        var first: SoldInfo? = null
+        var any = false
+        for (i in 0 until items.length()) {
+            val o = items.optJSONObject(i) ?: continue
+            val codes = o.str("barcode").split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            if (codes.size < o.optInt("qty", 1).coerceAtLeast(1)) return null   // a piece without its barcode: can not tell
+            for (c in codes) { val s = soldAndGone(c) ?: return null; if (first == null) first = s }
+            any = true
+        }
+        return if (any) first else null
     }
 
     /** Mark a manager's pending bill as done on the server (after the owner made the real bill). */

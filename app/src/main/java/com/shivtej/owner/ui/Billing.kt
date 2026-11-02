@@ -351,6 +351,8 @@ fun PosScreen(app: App, nav: Nav) {
                                             val pendingId = cart.fromPendingId   // set when this came from a manager's Staff Bill
                                             val bill = app.repo.createBill(cart.lines.toList(), d.method, extra)
                                             if (pendingId.isNotBlank()) app.repo.markStaffBillDone(pendingId, bill.id)
+                                            // a manager's bill with these same pieces is closed, so it is never billed again
+                                            else app.scope.launch { runCatching { closeStaffBillsAlreadySold(app) } }
                                             cart.clear()
                                             nav.replace(Route.Receipt(bill.id))
                                         }
