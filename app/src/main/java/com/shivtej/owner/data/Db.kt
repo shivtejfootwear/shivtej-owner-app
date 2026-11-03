@@ -348,6 +348,7 @@ interface AppDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putOrders(o: List<OrderE>)
     @Query("SELECT * FROM orders ORDER BY createdAt DESC") fun observeOrders(): Flow<List<OrderE>>
     @Query("SELECT * FROM orders WHERE id = :id") suspend fun order(id: String): OrderE?
+    @Query("DELETE FROM orders WHERE id = :id") suspend fun deleteOrder(id: String)
     @Query("UPDATE orders SET pendingSync = 0 WHERE id = :id") suspend fun orderSynced(id: String)
     @Query("SELECT id FROM orders WHERE pendingSync = 1") suspend fun pendingOrderIds(): List<String>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCustomers(c: List<CustomerE>)

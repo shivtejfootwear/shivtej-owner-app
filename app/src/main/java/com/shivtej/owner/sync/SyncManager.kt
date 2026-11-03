@@ -208,6 +208,8 @@ class SyncManager(
                 val refused = e.status == 400 || e.status == 409 || e.status == 422
                 val why = e.message ?: "Refused by the server"
                 when {
+                    // a website order deleted on the server (old test orders): nothing to update, so it is dropped here too
+                    op.type == "UPDATE_ORDER" && why.contains("ORDER_NOT_FOUND") -> repo.dropMissingOrder(op.id, op.refId)
                     refused && op.type == "RETURN_EXCHANGE" -> repo.markRejectedReturn(op.id, op.refId, why)
                     refused && op.type == "CREATE_PURCHASE" -> repo.markRejectedPurchase(op.id, op.refId, why)
                     refused && op.type == "ADD_SUPPLIER_PAYMENT" -> repo.markRejectedPayment(op.id, op.refId, why)

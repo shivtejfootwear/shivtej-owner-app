@@ -556,14 +556,37 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         onChanged()
     }
 
+    /**
+     * The barcodes a bill really took out of stock for one line (they may differ from the line's barcode).
+     * [pool] starts as every sold record of the bill and is used up line by line. When the bill has no sold
+     * record here, the line's own barcodes are used, but never one that is sold on another bill.
+     */
+    private fun codesTakenBy(billId: String, l: BillItem, pool: MutableList<SoldInfo>): List<String> {
+        val took = pool.filter { it.pid == l.productId && it.colour == l.colour && it.size == l.size }.take(l.qty)
+        pool.removeAll(took)
+        if (took.isNotEmpty()) return took.map { it.code }
+        return l.barcode.split(',').map { it.trim() }.filter { c -> c.isNotEmpty() && (soldInfo(c)?.billId ?: billId) == billId }
+    }
+
+    /** Refuses a line whose scanned barcode is already sold on a bill (other than [exceptBill]) and not back in stock. */
+    private suspend fun refuseSoldCodes(lines: List<CartLine>, exceptBill: String = "") =
+        refuseSold(lines.map { Triple("${it.article} ${it.colour}/${it.size}", it.barcode, it.productId) }, exceptBill)
+
+    private suspend fun refuseSoldItems(lines: List<BillItem>, exceptBill: String = "") =
+        refuseSold(lines.map { Triple("${it.article} ${it.colour}/${it.size}", it.barcode, it.productId) }, exceptBill)
+
+    private suspend fun refuseSold(lines: List<Triple<String, String, String>>, exceptBill: String) {
+        for ((label, barcode, _) in lines) for (c in barcode.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+            val sold = soldAndGone(c) ?: continue
+            if (sold.billId == exceptBill) continue
+            throw IllegalArgumentException("$label: यह पीस (बारकोड $c) पहले ही बिल ${sold.bill} में बिक चुका है। इसे बिल से हटाएँ।")
+        }
+    }
+
     suspend fun createBill(lines: List<CartLine>, method: String, extra: BillExtra = BillExtra()): BillE {
         require(lines.isNotEmpty()) { "Bill is empty" }
         // a piece already sold on another bill is never sold again (no other piece is taken in its place)
-        for (l in lines) for (c in l.barcode.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
-            soldAndGone(c)?.let { sold ->
-                throw IllegalArgumentException("${l.article} ${l.colour}/${l.size}: यह पीस (बारकोड $c) पहले ही बिल ${sold.bill} में बिक चुका है। इसे बिल से हटाएँ।")
-            }
-        }
+        refuseSoldCodes(lines)
         val id = UUID.randomUUID().toString()
         val no = nextBillNo()
         val now = extra.billDate ?: System.currentTimeMillis()
@@ -651,13 +674,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 val before = dao.qtyOf(l.productId, l.colour, l.size)
                 if (before == null) { notRestored++; return@forEachIndexed }
                 dao.adjust(l.productId, l.colour, l.size, l.qty)
-                val took = mine.filter { it.pid == l.productId && it.colour == l.colour && it.size == l.size }.take(l.qty)
-                mine.removeAll(took)
-                val codes = if (took.isNotEmpty()) took.map { it.code }
-                    else l.barcode.split(',').map { it.trim() }.filter { c ->
-                        c.isNotEmpty() && (soldInfo(c)?.billId ?: billId) == billId   // sold on another bill: stays sold
-                    }
-                codes.forEach { returnPiece(l.productId, l.colour, l.size, it) }
+                codesTakenBy(billId, l, mine).forEach { returnPiece(l.productId, l.colour, l.size, it) }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$billId#del${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_DELETE", now, false))
@@ -687,11 +704,15 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     ?: throw IllegalArgumentException("${l.article} ${l.colour} ${l.size}: यह प्रोडक्ट या साइज़ अब मौजूद नहीं है")
                 require(have >= l.qty) { "${l.article} ${l.colour} ${l.size}: स्टॉक सिर्फ़ $have बचा है, ${l.qty} चाहिए" }
             }
+            // a piece of this bill that was sold again on another bill can not come back on this bill
+            refuseSoldItems(items, exceptBill = billId)
             val now = System.currentTimeMillis()
             items.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
-                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode) { code ->
+                    SoldInfo(code, b.billNo, billId, b.createdAt, l.productId, l.colour, l.size, l.article, l.price)
+                }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$billId#res${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_RESTORE", now, false))
@@ -790,12 +811,14 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             val old = dao.bill(oldBillId) ?: throw IllegalArgumentException("This bill was not found")
             require(!old.deleted) { "This bill is deleted - restore it first" }
             val now = System.currentTimeMillis()
-            // 1) return the old items to stock (same as a delete, but kept inside this edit)
+            // 1) return the old items to stock (same as a delete, but kept inside this edit):
+            //    exactly the pieces this bill took out, never a piece sold on another bill
+            val mine = soldAll().filter { it.billId == oldBillId }.toMutableList()
             parseBillItems(old.itemsJson).forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size)
                 if (before == null) return@forEachIndexed   // product removed later: nothing to return
                 dao.adjust(l.productId, l.colour, l.size, l.qty)
-                l.barcode.split(',').forEach { returnPiece(l.productId, l.colour, l.size, it.trim()) }
+                codesTakenBy(oldBillId, l, mine).forEach { returnPiece(l.productId, l.colour, l.size, it) }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$oldBillId#eu${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "BILL_EDIT_UNDO", now, false))
@@ -806,11 +829,15 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 if (l.qty > have) "${l.name} ${l.colour}/${l.size}: only $have left" else null
             }
             if (short.isNotEmpty()) throw IllegalArgumentException(short.joinToString("\n"))
-            // 3) take the new items out of stock
+            // a piece sold on another bill can not be put on this bill (the whole edit is undone)
+            refuseSoldCodes(lines)
+            // 3) take the new items out of stock; each piece is remembered as sold on this bill
             lines.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
-                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode) { code ->
+                    SoldInfo(code, old.billNo, oldBillId, old.createdAt, l.productId, l.colour, l.size, l.article, l.price)
+                }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: before
                 dao.putLog(StockLogE("$oldBillId#ev${i + 1}:$now", l.productId, l.article, l.colour, l.size,
                     after - before, after, "POS_SALE", now, false))
@@ -1510,6 +1537,13 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun pendingOps() = dao.pendingOps()
     suspend fun openOps() = dao.openOps()
     suspend fun markOp(id: Long, status: String, err: String?) = dao.markOp(id, status, err)
+
+    /** The server no longer has this website order (it was deleted there): its waiting change is dropped and the order leaves this phone. */
+    suspend fun dropMissingOrder(opId: Long, orderId: String) {
+        dao.markOp(opId, "DONE", "Order no longer on the server")
+        dao.deleteOrder(orderId)
+        onChanged()
+    }
     suspend fun retryFailed() { dao.retryFailed(); onChanged() }
     suspend fun billSynced(id: String) = dao.billSynced(id)
     suspend fun billSyncedIfIdle(id: String) { if (dao.pendingCountFor(id, "UPDATE_POS_BILL") == 0) dao.billSynced(id) }
@@ -1757,6 +1791,26 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 ))
             }
             dao.putBills(list)
+            // a bill made on ANOTHER phone: its pieces are sold here too, so this phone can never sell them again
+            for (b in list) {
+                // a bill deleted on ANOTHER phone: its pieces are back in stock there, so they are not "sold" here either
+                if (b.deleted && local[b.id]?.deleted == false) {
+                    soldAll().filter { it.billId == b.id }.forEach { sold ->
+                        returnPiece(sold.pid, sold.colour, sold.size, sold.code)
+                        unmarkSold(sold.code)
+                    }
+                    continue
+                }
+                if (b.deleted || local.containsKey(b.id)) continue
+                parseBillItems(b.itemsJson).forEach { line ->
+                    line.barcode.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { code ->
+                        if (soldInfo(code) == null) {
+                            dao.delPiece(code)
+                            markSold(SoldInfo(code, b.billNo, b.id, b.createdAt, line.productId, line.colour, line.size, line.article, line.price))
+                        }
+                    }
+                }
+            }
         }
     }
 
