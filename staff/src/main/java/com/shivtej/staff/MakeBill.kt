@@ -117,7 +117,10 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
         scope.launch {
             try {
                 val r = withContext(Dispatchers.IO) { Api.lookup(tok, store.deviceId, t) }
-                if (r.optBoolean("found")) {
+                if (r.optBoolean("found") && r.optBoolean("sold") && !returnMode) {
+                    // one barcode = one piece: a piece already on a shop bill can not be billed again
+                    if (!quiet) { Beeps.fail(ctx); toast(ctx, "यह पीस बिल ${r.optString("bill")} में पहले ही बिक चुका है") }
+                } else if (r.optBoolean("found")) {
                     val item = MBItem(r.optString("productId"), r.optString("article"), r.optString("name"),
                         r.optString("colour"), r.optString("size"), r.optString("barcode"), 1, r.optDouble("mrp", 0.0),
                         r.optInt("stock", -1))
@@ -160,7 +163,11 @@ fun MakeBillScreen(store: Store, onBack: () -> Unit, onClosed: () -> Unit) {
             } catch (e: NotAllowed) { onClosed() }
             catch (e: ApiFail) {
                 val m = e.message.orEmpty()
-                toast(ctx, if (m.contains("OVER_STOCK")) m.substringAfter("OVER_STOCK: ") else "Could not send. Check internet.")
+                toast(ctx, when {
+                    m.contains("OVER_STOCK") -> m.substringAfter("OVER_STOCK: ")
+                    m.contains("ALREADY_SOLD") -> m.substringAfter("ALREADY_SOLD: ")
+                    else -> "Could not send. Check internet."
+                })
             }
             catch (e: Exception) { toast(ctx, "Could not send. Check internet.") }
             finally { busy = false }

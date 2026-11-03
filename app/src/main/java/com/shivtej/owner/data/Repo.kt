@@ -93,7 +93,9 @@ val ALL_ORDER_STATUSES = ORDER_STATUSES + listOf("Returned", "Exchanged")
 /** One line of a return / exchange (items coming back, or replacement items handed out). */
 data class RetLine(
     val productId: String, val article: String, val name: String,
-    val colour: String, val size: String, val qty: Int, val price: Double
+    val colour: String, val size: String, val qty: Int, val price: Double,
+    /** the returned piece's barcode (when it was scanned), so the server knows that piece is back in stock */
+    val barcode: String = ""
 )
 
 fun retLineKey(l: RetLine): String = l.productId + "|" + l.colour.lowercase() + "|" + l.size
@@ -104,7 +106,8 @@ fun parseRetLines(json: String): List<RetLine> = try {
         val o = a.optJSONObject(i) ?: return@mapNotNull null
         RetLine(
             o.str("productId").ifBlank { o.str("id") }, o.str("article"), o.str("name"), o.str("colour"), o.str("size"),
-            if (o.has("qty")) o.optInt("qty", 1) else o.optInt("q", 1), o.optDouble("price", 0.0)
+            if (o.has("qty")) o.optInt("qty", 1) else o.optInt("q", 1), o.optDouble("price", 0.0),
+            o.str("barcode")
         )
     }
 } catch (e: Exception) { emptyList() }
@@ -527,7 +530,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
         val info = soldInfo(code) ?: return false
         if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) { unmarkSold(code); return true }
         processReturn("BILL", info.billId, "RETURN", "$reason: बिल ${info.bill}", true, refund,
-            listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price)), emptyList())
+            listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price, code)), emptyList())
         returnPiece(info.pid, info.colour, info.size, code)
         unmarkSold(code)
         return true
@@ -1432,6 +1435,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     // ---------------------------------------------------------- returns / exchanges
     private fun retJson(l: RetLine) = JSONObject().put("productId", l.productId).put("article", l.article)
         .put("name", l.name).put("colour", l.colour).put("size", l.size).put("qty", l.qty).put("price", l.price)
+        .put("barcode", l.barcode)
 
     /**
      * Saves a return or exchange on this phone at once (works offline) and queues it for the server.
