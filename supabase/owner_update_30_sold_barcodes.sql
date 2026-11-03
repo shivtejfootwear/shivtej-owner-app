@@ -11,6 +11,17 @@ language sql stable security definer set search_path = public as $$
          jsonb_array_elements(case when jsonb_typeof(b.items) = 'array' then b.items else '[]'::jsonb end) it
    where trim(coalesce(p_code, '')) <> ''
      and not coalesce(b.deleted, false)
+     -- an old shared barcode (one code for every piece of a size, e.g. SW... or the company's own code) is never
+     -- "sold" while that size still has stock: only a one-piece barcode is blocked after its sale
+     and not exists (
+       select 1
+         from products p,
+              jsonb_array_elements(case when jsonb_typeof(to_jsonb(p.colours)) = 'array' then to_jsonb(p.colours) else '[]'::jsonb end) cc,
+              jsonb_array_elements(case when jsonb_typeof(cc->'sizes') = 'array' then cc->'sizes' else '[]'::jsonb end) ss
+        where ( (ss->>'barcode') = trim(p_code)
+             or (jsonb_typeof(ss->'barcodes') = 'array' and ss->'barcodes' ? trim(p_code)) )
+          and jsonb_array_length(case when jsonb_typeof(ss->'barcodes') = 'array' then ss->'barcodes' else '[]'::jsonb end) <= 1
+          and coalesce(nullif(ss->>'qty', '')::numeric, 0) > 0)
      and trim(p_code) = any (string_to_array(replace(coalesce(it->>'barcode', ''), ' ', ''), ','))
      and not exists (
        select 1
