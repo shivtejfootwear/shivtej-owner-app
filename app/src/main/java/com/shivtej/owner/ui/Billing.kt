@@ -57,10 +57,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** The WhatsApp / share text of a bill: the first line, then the bill's Notes (the same points printed on the bill). */
-fun withBillNotes(first: String, notes: List<String>): String {
+/**
+ * The WhatsApp / share text of a bill: (1) the bill line, (2) the shop's Instagram link, (3) the bill's Notes
+ * (the same points printed on the bill).
+ */
+fun withBillNotes(first: String, notes: List<String>, instagram: String = ""): String {
+    val sb = StringBuilder(first)
+    val insta = com.shivtej.owner.util.Links.instagram(instagram.trim().lowercase())
+    if (insta.isNotEmpty()) sb.append("\n\n📸 Follow us on Instagram:\n").append(insta)
     val ns = notes.map { it.trim() }.filter { it.isNotEmpty() }
-    return if (ns.isEmpty()) first else first + "\n\nNotes:\n" + ns.joinToString("\n")
+    if (ns.isNotEmpty()) sb.append("\n\nNotes:\n").append(ns.joinToString("\n"))
+    return sb.toString()
 }
 
 // ================================================================== POS BILLING
@@ -237,20 +244,22 @@ fun PosScreen(app: App, nav: Nav) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             TotalRow("Total MRP", moneyG(app, totals.totalMrp))
                             TotalRow("Total Discount", "-" + moneyG(app, totals.totalDiscount), GreenOk)
-                            TotalRow("Sub Total (after discount)", moneyG(app, totals.subTotal), bold = true)
+                            // GST is inside the rate (MRP is inclusive of all taxes): the customer pays the same, the bill splits the tax
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("GST / Tax", modifier = Modifier.weight(1f))
-                                OutlinedTextField(
-                                    value = draft.taxText, onValueChange = { v ->
-                                        cart.updateDraft { it.copy(taxText = v.filter { c -> c.isDigit() || c == '.' }.take(5)) }
-                                    },
-                                    singleLine = true, modifier = Modifier.width(110.dp),
-                                    placeholder = { Text(BillMath.plain(app.prefs.taxPercent)) },
-                                    suffix = { Text("%") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                                )
-                                Text(moneyG(app, totals.taxAmount), fontWeight = FontWeight.SemiBold, modifier = Modifier.width(96.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                                Text("GST %", modifier = Modifier.weight(1f))
+                                listOf("0", "5", "18").forEach { g ->
+                                    val on = BillMath.plain(taxPct) == g
+                                    FilterChip(selected = on, onClick = { cart.updateDraft { it.copy(taxText = g) } },
+                                        label = { Text("$g%", fontWeight = FontWeight.Bold) },
+                                        modifier = Modifier.padding(start = 6.dp))
+                                }
+                            }
+                            if (totals.taxAmount > 0.0) {
+                                val cgst = BillMath.round2(totals.taxAmount / 2.0)
+                                TotalRow("Taxable value", moneyG(app, BillMath.round2(totals.grandTotal - totals.taxAmount)))
+                                TotalRow("CGST " + BillMath.plain(taxPct / 2.0) + "%", moneyG(app, cgst))
+                                TotalRow("SGST " + BillMath.plain(taxPct / 2.0) + "%", moneyG(app, BillMath.round2(totals.taxAmount - cgst)))
+                                Text("GST bill: GSTIN and TAX INVOICE show on the bill", fontSize = 12.sp, color = GreenOk)
                             }
                             HorizontalDivider()
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -952,11 +961,6 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                     border = BorderStroke(1.dp, ColBlue.copy(alpha = 0.6f))) {
                     Icon(Icons.Filled.Edit, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Edit bill", fontSize = 14.sp)
                 }
-                OutlinedButton(onClick = { reopen() }, modifier = Modifier.weight(1f).height(ActBtnH),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ColTeal),
-                    border = BorderStroke(1.dp, ColTeal.copy(alpha = 0.6f))) {
-                    Icon(Icons.Filled.AddShoppingCart, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Add item", fontSize = 14.sp)
-                }
             }
         }
 
@@ -974,14 +978,10 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                 if (!printOk) TextButton(onClick = { nav.go(Route.Printer) }) { Text("Printer") }
             }
         }
+        val billShop = r.data?.shop ?: BillMeta.currentShop(app.prefs)
         val billText = withBillNotes("Bill ${b.billNo} - ${Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, b.total)}. Thank you for shopping with " +
-            app.prefs.storeName + ".", (r.data?.shop ?: BillMeta.currentShop(app.prefs)).notes)
+            app.prefs.storeName + ".", billShop.notes, billShop.instagram.ifBlank { BillMeta.currentShop(app.prefs).instagram })
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            Button(onClick = { Receipt.share(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo)) },
-                colors = ButtonDefaults.buttonColors(containerColor = ColPurple),
-                modifier = Modifier.weight(1f).height(ActBtnH)) {
-                Icon(Icons.Filled.Share, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Share PDF", fontSize = 14.sp)
-            }
             Button(onClick = {
                 val mobile = BillMath.normMobile(b.customerMobile)
                 val file = Receipt.savePdf(ctx, r.bmp, b.billNo)
@@ -1001,22 +1001,6 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
             }, colors = ButtonDefaults.buttonColors(containerColor = ColWhatsApp),
                 modifier = Modifier.weight(1f).height(ActBtnH)) {
                 Icon(Icons.Filled.Chat, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("WhatsApp", fontSize = 14.sp)
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            OutlinedButton(onClick = { Receipt.print(ctx, r.bmp, "Receipt ${b.billNo}") },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = ColOrange),
-                border = BorderStroke(1.dp, ColOrange.copy(alpha = 0.6f)),
-                modifier = Modifier.weight(1f).height(ActBtnH)) {
-                Icon(Icons.Filled.Print, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Print (other)", fontSize = 14.sp)
-            }
-            OutlinedButton(onClick = {
-                Receipt.savePdf(ctx, r.bmp, b.billNo)
-                toast(ctx, "Saved: Receipt-${b.billNo}.pdf")
-            }, colors = ButtonDefaults.outlinedButtonColors(contentColor = ColTeal),
-                border = BorderStroke(1.dp, ColTeal.copy(alpha = 0.6f)),
-                modifier = Modifier.weight(1f).height(ActBtnH)) {
-                Icon(Icons.Filled.Save, null, Modifier.size(ActIcon)); Spacer(Modifier.width(6.dp)); Text("Save PDF", fontSize = 14.sp)
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {

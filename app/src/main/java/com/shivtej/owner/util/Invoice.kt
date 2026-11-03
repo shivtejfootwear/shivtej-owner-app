@@ -248,11 +248,26 @@ object Invoice {
             if (site.isNotEmpty()) Links.shown(site) else ""
         ).filter { it.isNotBlank() }
         for (l in wrap(contact.joinToString("  ·  "), cp, colW)) if (l.isNotBlank()) { c.drawText(l, cx, yy + 22f, cp); yy += 29f }
-        if (d.shop.gstin.isNotBlank()) { c.drawText("GSTIN: " + d.shop.gstin, cx, yy + 22f, cp); yy += 29f }
+        // the GSTIN shows only on a GST bill
+        if (d.isGst) {
+            val gp = paint(24f, ink, true, Paint.Align.CENTER)
+            val txt = "GSTIN: " + d.gstinShown
+            val tw = gp.measureText(txt)
+            c.drawRoundRect(RectF(cx - tw / 2f - 12f, yy + 2f, cx + tw / 2f + 12f, yy + 34f), 6f, 6f,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 2f })
+            c.drawText(txt, cx, yy + 26f, gp); yy += 40f
+        }
         y = maxOf(yy, qrBottom) + 10f
         c.drawLine(m, y, W - m, y, redLine)
         y += 12f
 
+        // ---------------- TAX INVOICE band (GST bill)
+        if (d.isGst) {
+            c.drawRoundRect(RectF(m, y, W - m, y + 50f), 8f, 8f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink })
+            val bp = paint(30f, Color.WHITE, true, Paint.Align.CENTER); bp.letterSpacing = 0.2f
+            c.drawText("TAX INVOICE", W / 2f, y + 36f, bp)
+            y += 62f
+        }
         // ---------------- EXCHANGE / RETURN band
         if (d.kind == "EXCHANGE" || d.kind == "RETURN") {
             val bandP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (d.kind == "EXCHANGE") blue else t.accent }
@@ -371,10 +386,31 @@ object Invoice {
             else -> {
                 trow("Total MRP", Fmt.moneyG(cur, d.totalMrp))
                 trow("Discount", "− " + Fmt.moneyG(cur, d.totalDiscount), t.accent)
-                trow(if (d.taxPercent > 0.0) "Tax (GST " + BillMath.plain(d.taxPercent) + "%)" else "Tax (GST)", Fmt.moneyG(cur, d.taxAmount))
+                if (d.isGst) {
+                    trow("Taxable Value", Fmt.moneyG(cur, d.taxableValue))
+                    trow("CGST @" + d.halfRate + "%", Fmt.moneyG(cur, d.cgst))
+                    trow("SGST @" + d.halfRate + "%", Fmt.moneyG(cur, d.sgst))
+                }
                 grand("Grand Total", Fmt.moneyG(cur, d.grandTotal), t.accent)
                 trow("Paid", Fmt.moneyG(cur, d.amountPaid))
                 trow("Balance", Fmt.moneyG(cur, d.balance), if (d.balance <= 0.005) green else t.accent)
+                // GST summary (like the supplier's bill): taxable value, CGST, SGST, total tax
+                if (d.isGst) {
+                    y += 8f
+                    val sw = inner / 4f
+                    val heads2 = listOf("Taxable Value", "CGST " + d.halfRate + "%", "SGST " + d.halfRate + "%", "Total Tax")
+                    val vals2 = listOf(Fmt.indian(d.taxableValue), Fmt.indian(d.cgst), Fmt.indian(d.sgst), Fmt.indian(d.taxAmount))
+                    val box = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(150, 150, 150); style = Paint.Style.STROKE; strokeWidth = 1.5f }
+                    c.drawRect(m, y, W - m, y + 84f, box)
+                    c.drawLine(m, y + 40f, W - m, y + 40f, box)
+                    for (i in 0 until 4) {
+                        val x0 = m + i * sw
+                        if (i > 0) c.drawLine(x0, y, x0, y + 84f, box)
+                        c.drawText(heads2[i], x0 + sw / 2f, y + 28f, paint(21f, ink, true, Paint.Align.CENTER))
+                        c.drawText(vals2[i], x0 + sw / 2f, y + 70f, paint(22f, ink, false, Paint.Align.CENTER))
+                    }
+                    y += 96f
+                }
             }
         }
         y += 10f
@@ -452,7 +488,10 @@ object Invoice {
         for (l in wrap(d.shop.address, cen, w - 2 * m)) if (l.isNotBlank()) { c.drawText(l, w / 2f, y + 22f, cen); y += 28f }
         if (d.shop.phone.isNotBlank()) { c.drawText("Ph: " + d.shop.phone, w / 2f, y + 22f, cen); y += 28f }
         if (d.shop.email.isNotBlank()) { c.drawText(fit(d.shop.email, cen, w - 2 * m), w / 2f, y + 22f, cen); y += 28f }
-        if (d.shop.gstin.isNotBlank()) { c.drawText("GSTIN: " + d.shop.gstin, w / 2f, y + 22f, cen); y += 28f }
+        if (d.isGst) {
+            c.drawText("GSTIN: " + d.gstinShown, w / 2f, y + 22f, paint(24f, ink, true, Paint.Align.CENTER)); y += 30f
+            c.drawText("TAX INVOICE", w / 2f, y + 30f, paint(32f, ink, true, Paint.Align.CENTER)); y += 42f
+        }
         rule()
 
         if (d.kind == "EXCHANGE" || d.kind == "RETURN") {
@@ -496,8 +535,11 @@ object Invoice {
         } else {
         lr("Total MRP", Fmt.moneyG(cur, d.totalMrp))
         lr("Total Discount", "-" + Fmt.moneyG(cur, d.totalDiscount))
-        lr("Sub Total", Fmt.moneyG(cur, d.subTotal))
-        if (d.taxPercent > 0.0 || d.taxAmount > 0.0) lr("GST (" + BillMath.plain(d.taxPercent) + "%)", Fmt.moneyG(cur, d.taxAmount))
+        if (d.isGst) {
+            lr("Taxable Value", Fmt.moneyG(cur, d.taxableValue))
+            lr("CGST @" + d.halfRate + "%", Fmt.moneyG(cur, d.cgst))
+            lr("SGST @" + d.halfRate + "%", Fmt.moneyG(cur, d.sgst))
+        }
         rule()
         val gp = paint(32f, ink, true)
         val gr = paint(34f, ink, true, Paint.Align.RIGHT)

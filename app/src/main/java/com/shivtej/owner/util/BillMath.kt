@@ -20,8 +20,10 @@ data class BillTotals(
  *   Discount = MRP - Selling rate           (never negative)
  *   Sub total = sum(rate * qty)
  *   Total MRP = Total discount + Sub total
- *   Tax       = Sub total * tax% / 100
- *   Grand     = Sub total + Tax
+ *   GST is INSIDE the rate (MRP is "inclusive of all taxes"; nothing is charged above it):
+ *   Grand     = Sub total (what the customer pays)
+ *   Taxable   = Sub total / (1 + tax% / 100)
+ *   Tax       = Sub total - Taxable      (shown as CGST half + SGST half)
  *
  * Stock is never touched by this file.
  */
@@ -43,14 +45,14 @@ object BillMath {
         val totalMrp = round2(mrp)
         val subTotal = round2(sub)
         val tp = if (taxPercent < 0.0) 0.0 else taxPercent
-        val tax = round2(subTotal * tp / 100.0)
+        val tax = if (tp > 0.0) round2(subTotal - subTotal / (1.0 + tp / 100.0)) else 0.0
         return BillTotals(
             totalMrp = totalMrp,
             totalDiscount = round2(totalMrp - subTotal),
             subTotal = subTotal,
             taxPercent = tp,
             taxAmount = tax,
-            grandTotal = round2(subTotal + tax)
+            grandTotal = subTotal
         )
     }
 

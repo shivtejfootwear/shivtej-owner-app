@@ -275,7 +275,7 @@ fun ReturnReceiptScreen(app: App, nav: Nav, returnId: String) {
         ret.refund > 0.0 -> "$title bill ${data.billNo} - refund ${moneyG(app, ret.refund)}."
         else -> "$title bill ${data.billNo}."
     } + " Thank you for shopping with " + app.prefs.storeName + "."
-    val text = withBillNotes(first, data.shop.notes)
+    val text = withBillNotes(first, data.shop.notes, data.shop.instagram)
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Image(bmp.asImageBitmap(), contentDescription = "Bill", contentScale = ContentScale.FillWidth, modifier = Modifier.fillMaxWidth())

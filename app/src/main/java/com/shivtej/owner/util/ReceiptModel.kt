@@ -35,6 +35,9 @@ data class RLine(
     val amount: Double get() = BillMath.round2(rate * qty)
 }
 
+/** The shop's GSTIN, used on GST bills when Shop settings has none. */
+const val SHOP_GSTIN = "27ECIPS0222J1ZI"
+
 /** Everything a printed / shared bill shows. Built from a saved bill; both the invoice picture and the 80mm printer use it. */
 data class ReceiptData(
     val shop: ShopInfo,
@@ -63,6 +66,14 @@ data class ReceiptData(
     /** cash given back (positive) or, negative, the difference the customer paid (EXCHANGE / RETURN) */
     val refund: Double = 0.0
 ) {
+    /** A GST bill (TAX INVOICE): a normal sale with GST. Only then the GSTIN and CGST / SGST are shown. */
+    val isGst: Boolean get() = kind == "SALE" && (taxAmount > 0.005 || taxPercent > 0.0)
+    val gstinShown: String get() = shop.gstin.trim().ifBlank { SHOP_GSTIN }
+    /** GST is inside the rate: taxable value = what the customer pays - the tax. */
+    val taxableValue: Double get() = BillMath.round2(grandTotal - taxAmount)
+    val cgst: Double get() = BillMath.round2(taxAmount / 2.0)
+    val sgst: Double get() = BillMath.round2(taxAmount - cgst)
+    val halfRate: String get() = BillMath.plain(taxPercent / 2.0)
     val returnValue: Double get() = BillMath.round2(returnLines.sumOf { it.amount })
     val newValue: Double get() = BillMath.round2(lines.sumOf { it.amount })
 }
@@ -147,7 +158,7 @@ object ThermalText {
         if (s.tagline.isNotBlank()) out.add(center(s.tagline, cols))
         if (s.address.isNotBlank()) Fmt.wrap(s.address, cols).forEach { out.add(center(it, cols)) }
         if (s.phone.isNotBlank()) out.add(center("Ph: " + s.phone, cols))
-        if (s.gstin.isNotBlank()) out.add(center("GSTIN: " + s.gstin, cols))
+        if (d.isGst) { out.add(center("GSTIN: " + d.gstinShown, cols)); out.add(center("TAX INVOICE", cols)) }
         out.add(dash)
         val ret = d.kind == "EXCHANGE" || d.kind == "RETURN"
         if (ret) out.add(center(if (d.kind == "EXCHANGE") "EXCHANGE BILL" else "RETURN BILL", cols))
@@ -185,8 +196,11 @@ object ThermalText {
         } else {
         out.add(lr("Total MRP", money(d.totalMrp), cols))
         out.add(lr("Total Discount", "-" + money(d.totalDiscount), cols))
-        out.add(lr("Sub Total", money(d.subTotal), cols))
-        if (d.taxPercent > 0.0 || d.taxAmount > 0.0) out.add(lr("GST (" + BillMath.plain(d.taxPercent) + "%)", money(d.taxAmount), cols))
+        if (d.isGst) {
+            out.add(lr("Taxable Value", money(d.taxableValue), cols))
+            out.add(lr("CGST @" + d.halfRate + "%", money(d.cgst), cols))
+            out.add(lr("SGST @" + d.halfRate + "%", money(d.sgst), cols))
+        }
         out.add(dash)
         out.add(lr("GRAND TOTAL (Rs.)", money(d.grandTotal), cols))
         out.add(dash)
