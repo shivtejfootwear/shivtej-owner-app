@@ -1,5 +1,7 @@
 package com.shivtej.owner.ui
 
+import androidx.compose.foundation.clickable
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -56,7 +58,7 @@ fun ReturnsScreen(app: App, nav: Nav) {
             Column(Modifier.padding(12.dp)) {
                 Text("सार", fontWeight = FontWeight.Bold)
                 Text("वापसी बिल: ${list.size}")
-                Text("वापस की गई रकम: ${money(app, list.sumOf { it.refund })}")
+                Text("वापस की गई रकम: ${money(app, list.sumOf { maxOf(0.0, it.refund) })}")
                 Text("स्टॉक में जुड़े पीस: $restockedPieces")
             }
         }
@@ -65,11 +67,12 @@ fun ReturnsScreen(app: App, nav: Nav) {
         }
         list.forEach { r ->
             val lines = shopReturnLines(r.itemsInJson)
-            Card(Modifier.fillMaxWidth()) {
+            // a shop return / exchange opens its bill (A1 design)
+            Card(Modifier.fillMaxWidth().clickable(enabled = r.refType == "BILL") { nav.go(Route.ReturnReceipt(r.id)) }) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(if (r.kind == "EXCHANGE") "एक्सचेंज" else "वापसी", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        Text(money(app, r.refund), fontWeight = FontWeight.Bold)
+                        Text(if (r.refund < 0.0) "+ " + money(app, -r.refund) + " मिले" else money(app, r.refund), fontWeight = FontWeight.Bold)
                     }
                     Text(fmt.format(Date(r.createdAt)), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(r.reason, fontSize = 13.sp)

@@ -117,4 +117,35 @@ object BillMeta {
         )
         return data to theme
     }
+
+    // ------------------------------------------------------------------ return / exchange at the counter -> its bill
+    /** The number shown on a return or exchange bill: RT / EX + date + the first letters of its id (never a POS bill number). */
+    fun returnNo(r: ReturnE): String =
+        (if (r.kind == "EXCHANGE") "EX" else "RT") + java.text.SimpleDateFormat("yyMMdd", java.util.Locale.US).format(java.util.Date(r.createdAt)) +
+            "-" + r.id.replace("-", "").take(4).uppercase()
+
+    /** The payment / refund mode written in the reason ("साइज़ बड़ा · UPI: बिल ..."), Cash when none. */
+    fun returnMethod(r: ReturnE): String =
+        Regex(" · (Cash|UPI|Card|Bank)").findAll(r.reason).lastOrNull()?.groupValues?.get(1) ?: "Cash"
+
+    fun buildReturnReceipt(p: Prefs, r: ReturnE, old: BillE?): Pair<ReceiptData, BillTheme> {
+        fun rl(list: List<RetLine>) = list.mapIndexed { i, it ->
+            RLine(i + 1, it.article, it.name, it.colour, it.size, it.qty, if (it.mrp > 0.0) it.mrp else it.price, it.price)
+        }
+        val back = rl(parseRetLines(r.itemsInJson))
+        val out = if (r.kind == "EXCHANGE") rl(parseRetLines(r.itemsOutJson)) else emptyList()
+        val newValue = BillMath.round2(out.sumOf { it.amount })
+        val data = ReceiptData(
+            shop = currentShop(p), billNo = returnNo(r), dateMillis = r.createdAt,
+            customerName = old?.customerName.orEmpty(), customerMobile = old?.customerMobile.orEmpty(),
+            customerAddress = old?.customerAddress.orEmpty(), salesPerson = old?.salesPerson.orEmpty(),
+            lines = out, totalMrp = BillMath.round2(out.sumOf { it.mrp * it.qty }),
+            totalDiscount = BillMath.round2(out.sumOf { (it.mrp - it.rate) * it.qty }), subTotal = newValue,
+            taxPercent = 0.0, taxAmount = 0.0, grandTotal = if (r.refund < 0.0) -r.refund else 0.0,
+            method = returnMethod(r), amountPaid = if (r.refund < 0.0) -r.refund else 0.0, balance = 0.0,
+            kind = if (r.kind == "EXCHANGE") "EXCHANGE" else "RETURN",
+            oldBillNo = old?.billNo.orEmpty(), returnLines = back, refund = r.refund
+        )
+        return data to currentTheme(p)
+    }
 }

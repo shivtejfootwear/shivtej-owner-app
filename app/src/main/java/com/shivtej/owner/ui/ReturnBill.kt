@@ -29,11 +29,12 @@ private fun amountText(v: Double): String =
  * Only for barcodes sold at the counter. Online orders never reach this screen.
  */
 @Composable
-fun ReturnBillDialog(app: App, s: Repo.SoldInfo, onClose: () -> Unit) {
+fun ReturnBillDialog(app: App, s: Repo.SoldInfo, onClose: () -> Unit, onReturned: ((String) -> Unit)? = null) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var reason by remember { mutableStateOf(RETURN_REASONS[0]) }
     var refundText by remember { mutableStateOf(amountText(s.price)) }
+    var method by remember { mutableStateOf("Cash") }
     var busy by remember { mutableStateOf(false) }
     var slip by remember { mutableStateOf<String?>(null) }
 
@@ -54,6 +55,10 @@ fun ReturnBillDialog(app: App, s: Repo.SoldInfo, onClose: () -> Unit) {
                             }
                         }
                     }
+                    Text("पैसे कैसे दिए", fontWeight = FontWeight.SemiBold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("Cash", "UPI").forEach { m -> FilterChip(selected = method == m, onClick = { method = m }, label = { Text(m) }) }
+                    }
                     OutlinedTextField(value = refundText,
                         onValueChange = { t -> refundText = t.filter { it.isDigit() || it == '.' } },
                         label = { Text("वापस की जाने वाली रकम (₹)") },
@@ -72,10 +77,13 @@ fun ReturnBillDialog(app: App, s: Repo.SoldInfo, onClose: () -> Unit) {
                     val amount = BillMath.parseAmount(refundText) ?: 0.0
                     busy = true
                     scope.launch {
-                        val res = runCatching { app.repo.restockSold(s.code, reason, amount) }
+                        val res = runCatching { app.repo.restockSoldId(s.code, "$reason · $method", amount) }
                         busy = false
-                        res.onSuccess { ok ->
-                            if (ok) {
+                        res.onSuccess { id ->
+                            if (id != null && id.isNotEmpty() && onReturned != null) {
+                                Beeps.ok(ctx)
+                                onReturned(id)
+                            } else if (id != null) {
                                 Beeps.ok(ctx)
                                 slip = "वापसी बिल · ${s.article} ${s.colour} साइज़ ${s.size}\n" +
                                     "मूल बिल: ${s.bill}\n" +

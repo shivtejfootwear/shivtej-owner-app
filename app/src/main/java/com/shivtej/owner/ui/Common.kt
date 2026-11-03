@@ -86,6 +86,9 @@ sealed interface Route {
     object StockCheck : Route
     // ---- shop returns (POS bills only, never online orders)
     object Returns : Route
+    // ---- counter exchange (a sold piece scanned in POS) and the bill of a return / exchange
+    data class Exchange(val code: String) : Route
+    data class ReturnReceipt(val id: String) : Route
     // ---- pieces in stock that still have no barcode (scan a label to give it one)
     object NoBarcode : Route
 }

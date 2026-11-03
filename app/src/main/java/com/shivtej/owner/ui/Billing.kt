@@ -57,6 +57,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** The WhatsApp / share text of a bill: the first line, then the bill's Notes (the same points printed on the bill). */
+fun withBillNotes(first: String, notes: List<String>): String {
+    val ns = notes.map { it.trim() }.filter { it.isNotEmpty() }
+    return if (ns.isEmpty()) first else first + "\n\nNotes:\n" + ns.joinToString("\n")
+}
+
 // ================================================================== POS BILLING
 @Composable
 fun PosScreen(app: App, nav: Nav) {
@@ -75,6 +81,7 @@ fun PosScreen(app: App, nav: Nav) {
     var scanning by remember { mutableStateOf(false) }
     var unknownCode by remember { mutableStateOf<String?>(null) }
     var soldScan by remember { mutableStateOf<com.shivtej.owner.data.Repo.SoldInfo?>(null) }
+    var returnPick by remember { mutableStateOf<com.shivtej.owner.data.Repo.SoldInfo?>(null) }
     var assignCode by remember { mutableStateOf<String?>(null) }
     var picker by remember { mutableStateOf<Product?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -85,7 +92,7 @@ fun PosScreen(app: App, nav: Nav) {
     // The search box keeps focus while no dialog is open, so a scan always lands there.
     val searchFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    val idle = unknownCode == null && assignCode == null && picker == null && !scanning
+    val idle = unknownCode == null && assignCode == null && picker == null && !scanning && soldScan == null && returnPick == null
     LaunchedEffect(idle) { if (idle) { searchFocus.requestFocus(); keyboard?.hide() } }
 
     /** The scanner types the code and then stops: after a short pause the whole code is looked up (no Enter, no button). */
@@ -150,7 +157,10 @@ fun PosScreen(app: App, nav: Nav) {
                         scanJob.value = scope.launch { delay(500); handleCode(t) }
                 },
                 singleLine = true,
-                placeholder = { Text("Search product / type barcode") },
+                placeholder = { Text("Scan or search product") },
+                leadingIcon = {
+                    IconButton(onClick = { withCamera { scanning = true } }) { Icon(Icons.Filled.QrCodeScanner, "Scan with camera", tint = BrandRed) }
+                },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
                 trailingIcon = {
@@ -212,7 +222,7 @@ fun PosScreen(app: App, nav: Nav) {
             // ---------------- items
             item { SectionTitle("Items (${cart.lines.size})") }
             if (cart.lines.isEmpty()) item { EmptyState("Scan a barcode or search a product to start a bill.") }
-            items(cart.lines.size, key = { i -> cart.lines.getOrNull(i)?.let { it.productId + "|" + it.colour + "|" + it.size } ?: "x$i" }) { i ->
+            items(cart.lines.size, key = { i -> "$i|" + (cart.lines.getOrNull(i)?.let { it.productId + "|" + it.size + "|" + it.barcode } ?: "x") }) { i ->
                 val l = cart.lines.getOrNull(i)
                 if (l != null) CartLineCard(app, i, l, onRateDone = { keyboard?.hide(); searchFocus.requestFocus() })
             }
@@ -340,10 +350,12 @@ fun PosScreen(app: App, nav: Nav) {
                                         // new bill: refresh from the server first so we bill against the latest stock
                                         if (app.net.online.value) withTimeoutOrNull(6000) { app.sync.syncNow() }
                                         val fresh = app.repo.products.first()
-                                        val problems = cart.lines.mapNotNull { l ->
-                                            val q = fresh.firstOrNull { it.id == l.productId }?.variants?.firstOrNull { it.colour == l.colour }
-                                                ?.sizes?.firstOrNull { it.size == l.size }?.qty ?: 0
-                                            if (l.qty > q) "${l.name} ${l.colour}/${l.size}: only $q left" else null
+                                        // several lines can hold pieces of one size: their total must fit in the stock
+                                        val problems = cart.lines.groupBy { Triple(it.productId, it.colour, it.size) }.mapNotNull { (k, ls) ->
+                                            val q = fresh.firstOrNull { it.id == k.first }?.variants?.firstOrNull { it.colour == k.second }
+                                                ?.sizes?.firstOrNull { it.size == k.third }?.qty ?: 0
+                                            val want = ls.sumOf { it.qty }
+                                            if (want > q) "${ls.first().name} ${k.second}/${k.third}: only $q left" else null
                                         }
                                         if (problems.isNotEmpty()) {
                                             error = problems.joinToString("\n")
@@ -380,8 +392,15 @@ fun PosScreen(app: App, nav: Nav) {
 
     // ---- unknown barcode
     // a sold piece was scanned at the counter: is it a return to stock, or only a look?
+    // a sold piece scanned: small Return / Exchange / Cancel icons
     soldScan?.let { s ->
-        ReturnBillDialog(app, s, onClose = { soldScan = null })
+        SoldPieceDialog(app, s,
+            onReturn = { soldScan = null; returnPick = s },
+            onExchange = { soldScan = null; nav.go(Route.Exchange(s.code)) },
+            onCancel = { soldScan = null })
+    }
+    returnPick?.let { s ->
+        ReturnBillDialog(app, s, onClose = { returnPick = null }, onReturned = { id -> returnPick = null; nav.go(Route.ReturnReceipt(id)) })
     }
 
     unknownCode?.let { code ->
@@ -455,7 +474,7 @@ private fun TotalRow(label: String, value: String, color: Color = Color.Unspecif
 private fun CartLineCard(app: App, i: Int, l: CartLine, onRateDone: () -> Unit) {
     val ctx = LocalContext.current
     val cart = app.cart
-    var rateText by remember(l.productId, l.colour, l.size) { mutableStateOf(BillMath.plain(l.price)) }
+    var rateText by remember(l.productId, l.colour, l.size, l.barcode) { mutableStateOf(BillMath.plain(l.price)) }
     val mrp = BillMath.lineMrp(l.mrp, l.price)
     val discount = BillMath.lineDiscount(l.mrp, l.price, l.qty)
     Card(Modifier.fillMaxWidth()) {
@@ -468,13 +487,11 @@ private fun CartLineCard(app: App, i: Int, l: CartLine, onRateDone: () -> Unit) 
                 }
                 IconButton(onClick = { cart.remove(i) }) { Icon(Icons.Filled.Delete, "Remove") }
             }
+            // one barcode = one piece: no quantity buttons (scan the next piece to add it)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { cart.change(i, -1) }) { Icon(Icons.Filled.Remove, "Less") }
-                Text("${l.qty}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                IconButton(onClick = { cart.change(i, 1)?.let { toast(ctx, it) } }) { Icon(Icons.Filled.Add, "More") }
-                Spacer(Modifier.weight(1f))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("MRP ${moneyG(app, mrp)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(Modifier.weight(1f)) {
+                    Text("MRP ${moneyG(app, mrp)}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    if (l.qty > 1) Text("Qty ${l.qty}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.width(8.dp))
                 // the selling rate: a bigger, bold box so it is easy to see and tap (the owner sets it here)
@@ -957,8 +974,8 @@ fun ReceiptScreen(app: App, nav: Nav, billId: String) {
                 if (!printOk) TextButton(onClick = { nav.go(Route.Printer) }) { Text("Printer") }
             }
         }
-        val billText = "Bill ${b.billNo} - ${Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, b.total)}. Thank you for shopping with " +
-            app.prefs.storeName + "."
+        val billText = withBillNotes("Bill ${b.billNo} - ${Fmt.moneyG(app.prefs.currency.ifBlank { "₹" }, b.total)}. Thank you for shopping with " +
+            app.prefs.storeName + ".", (r.data?.shop ?: BillMeta.currentShop(app.prefs)).notes)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Button(onClick = { Receipt.share(ctx, Receipt.savePdf(ctx, r.bmp, b.billNo)) },
                 colors = ButtonDefaults.buttonColors(containerColor = ColPurple),

@@ -181,289 +181,226 @@ object Invoice {
         c.drawText(fit(value, vp, w - 250f - 10f), x + 250f, y, vp)
     }
 
+    /**
+     * Bill design A1 (chosen by the owner, Nov 2026): white and clean, shop name in the middle, the QR codes at the top
+     * right (same place as before), details in two columns, a lined item table, totals on the right, notes at the end.
+     * The same layout draws a normal bill, an EXCHANGE bill and a RETURN bill ([ReceiptData.kind]).
+     */
     private fun layoutInvoice(c: Canvas, d: ReceiptData, t: BillTheme, logo: Bitmap?, qrSite: Bitmap?, qrInsta: Bitmap?): Float {
-        val m = 28f
+        val m = 30f
         val inner = W - 2 * m
         val cur = d.shop.currency.ifBlank { "₹" }
         val ink = Color.BLACK
         val grey = Color.rgb(90, 90, 90)
-        var y = 26f
+        val green = Color.rgb(46, 125, 50)
+        val blue = Color.rgb(40, 53, 147)
+        val light = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(225, 225, 225); strokeWidth = 1.5f }
+        val heavy = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink; strokeWidth = 2.5f }
+        val redLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = t.accent; strokeWidth = 3f }
 
-        // ---------------- header: logo | contacts | QR codes
-        val headH = 205f
+        // red band at the very top
+        c.drawRect(0f, 0f, W.toFloat(), 12f, Paint().apply { color = t.accent })
+        var y = 28f
+
+        // ---------------- header: QR codes at the top right (as before), shop name / logo in the middle of the rest
         val site = Links.website(d.shop.website)
-        val insta = Links.instagram(d.shop.instagram)
-        val qrSize = 150f
+        val qrSize = 140f
         var qrRight = W - m
+        val qrTop = y
+        var qrBottom = y
         fun drawQr(b: Bitmap?, l1: String, l2: String) {
             if (b == null) return
             val x = qrRight - qrSize
             val box = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = t.accent; style = Paint.Style.FILL }
-            c.drawRoundRect(RectF(x - 6f, y, x + qrSize + 6f, y + qrSize + 56f), 14f, 14f, box)
-            c.drawBitmap(b, null, RectF(x, y + 6f, x + qrSize, y + 6f + qrSize), null)
-            val lp = paint(19f, Color.WHITE, true, Paint.Align.CENTER)
-            c.drawText(l1, x + qrSize / 2f, y + qrSize + 28f, lp)
-            c.drawText(l2, x + qrSize / 2f, y + qrSize + 50f, lp)
-            qrRight = x - 24f
+            c.drawRoundRect(RectF(x - 6f, qrTop, x + qrSize + 6f, qrTop + qrSize + 54f), 12f, 12f, box)
+            c.drawBitmap(b, null, RectF(x, qrTop + 6f, x + qrSize, qrTop + 6f + qrSize), null)
+            val lp = paint(18f, Color.WHITE, true, Paint.Align.CENTER)
+            c.drawText(l1, x + qrSize / 2f, qrTop + qrSize + 27f, lp)
+            c.drawText(l2, x + qrSize / 2f, qrTop + qrSize + 48f, lp)
+            qrRight = x - 22f
+            qrBottom = qrTop + qrSize + 54f
         }
-        drawQr(qrSite, "VISIT OUR", "WEBSITE")
         drawQr(qrInsta, "FOLLOW US ON", "INSTAGRAM")
+        drawQr(qrSite, "VISIT OUR", "WEBSITE")
         val rightEdge = qrRight
-
+        val cx = (m + rightEdge) / 2f
+        val colW = rightEdge - m
         val builtIn = usesBuiltInLogo(d.shop)
-        val nameP = paint(46f, t.accent, true)
-        if (t.centerHeader) {
-            // everything centred under each other
-            val cx = (m + rightEdge) / 2f
-            var yy = y
-            if (t.showLogo && logo != null) {
-                val r = scaleToFit(logo, 460f, 110f)
-                c.drawBitmap(logo, null, RectF(cx - r.width() / 2f, yy, cx + r.width() / 2f, yy + r.height()), null)
-                yy += r.height() + 8f
+        var yy = y
+        if (t.showLogo && logo != null) {
+            val r = scaleToFit(logo, minOf(420f, colW), 120f)
+            c.drawBitmap(logo, null, RectF(cx - r.width() / 2f, yy, cx + r.width() / 2f, yy + r.height()), null)
+            yy += r.height() + 6f
+        }
+        if (!(t.showLogo && logo != null && builtIn)) {
+            val np = paint(46f, t.accent, true, Paint.Align.CENTER)
+            c.drawText(fit(d.shop.name.uppercase(), np, colW), cx, yy + 42f, np); yy += 54f
+        }
+        if (t.showTagline && d.shop.tagline.isNotBlank()) {
+            val tp = paint(20f, grey, true, Paint.Align.CENTER); tp.letterSpacing = 0.25f
+            c.drawText(fit(d.shop.tagline.uppercase(), tp, colW), cx, yy + 22f, tp); yy += 30f
+        }
+        val cp = paint(23f, ink, false, Paint.Align.CENTER)
+        for (l in wrap(d.shop.address, cp, colW)) if (l.isNotBlank()) { c.drawText(l, cx, yy + 22f, cp); yy += 29f }
+        val contact = listOf(
+            if (d.shop.phone.isNotBlank()) "Ph: " + d.shop.phone else "",
+            d.shop.email,
+            if (site.isNotEmpty()) Links.shown(site) else ""
+        ).filter { it.isNotBlank() }
+        for (l in wrap(contact.joinToString("  ·  "), cp, colW)) if (l.isNotBlank()) { c.drawText(l, cx, yy + 22f, cp); yy += 29f }
+        if (d.shop.gstin.isNotBlank()) { c.drawText("GSTIN: " + d.shop.gstin, cx, yy + 22f, cp); yy += 29f }
+        y = maxOf(yy, qrBottom) + 10f
+        c.drawLine(m, y, W - m, y, redLine)
+        y += 12f
+
+        // ---------------- EXCHANGE / RETURN band
+        if (d.kind == "EXCHANGE" || d.kind == "RETURN") {
+            val bandP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (d.kind == "EXCHANGE") blue else t.accent }
+            c.drawRoundRect(RectF(m, y, W - m, y + 50f), 8f, 8f, bandP)
+            val bp = paint(30f, Color.WHITE, true, Paint.Align.CENTER); bp.letterSpacing = 0.2f
+            c.drawText(if (d.kind == "EXCHANGE") "EXCHANGE BILL" else "RETURN BILL", W / 2f, y + 36f, bp)
+            y += 62f
+        }
+
+        // ---------------- details in two columns
+        val isRet = d.kind == "EXCHANGE" || d.kind == "RETURN"
+        val rows = ArrayList<Pair<Pair<String, String>, Pair<String, String>>>()
+        rows.add(("Bill No" to d.billNo) to ("Date" to Fmt.dateTime(d.dateMillis)))
+        if (isRet && d.oldBillNo.isNotBlank()) rows.add(("Old Bill" to d.oldBillNo) to ("Sales Person" to d.salesPerson.ifBlank { "-" }))
+        rows.add(("Customer" to d.customerName.ifBlank { "Walk-in Customer" }) to ("Mobile" to d.customerMobile.ifBlank { "-" }))
+        if (isRet && d.oldBillNo.isNotBlank()) rows.add(("Address" to d.customerAddress.ifBlank { "-" }) to
+            ((if (d.kind == "RETURN") "Refund" else "Payment") to d.method.ifBlank { "-" }))
+        else {
+            rows.add(("Sales Person" to d.salesPerson.ifBlank { "-" }) to ("Payment" to d.method.ifBlank { "-" }))
+            if (d.customerAddress.isNotBlank()) rows.add(("Address" to d.customerAddress) to ("" to ""))
+        }
+        val kp = paint(24f, ink, true)
+        val vp = paint(24f, ink)
+        val half = inner / 2f
+        for ((l, r) in rows) {
+            val lk = l.first + ": "
+            c.drawText(lk, m, y + 26f, kp)
+            c.drawText(fit(l.second, vp, half - kp.measureText(lk) - 10f), m + kp.measureText(lk), y + 26f, vp)
+            if (r.first.isNotBlank()) {
+                val rk = r.first + ": "
+                val rv = fit(r.second, vp, half - kp.measureText(rk) - 10f)
+                val rvW = vp.measureText(rv)
+                c.drawText(rv, W - m - rvW, y + 26f, vp)
+                c.drawText(rk, W - m - rvW - kp.measureText(rk), y + 26f, kp)
             }
-            if (!(t.showLogo && logo != null && builtIn)) {
-                val np = paint(44f, t.accent, true, Paint.Align.CENTER)
-                c.drawText(fit(d.shop.name.uppercase(), np, rightEdge - m), cx, yy + 40f, np); yy += 52f
-            }
-            if (t.showTagline && d.shop.tagline.isNotBlank()) {
-                c.drawText(d.shop.tagline, cx, yy + 22f, paint(22f, grey, false, Paint.Align.CENTER)); yy += 32f
-            }
-            val cp = paint(23f, ink, false, Paint.Align.CENTER)
-            for (l in wrap(d.shop.address, cp, rightEdge - m)) { if (l.isNotBlank()) { c.drawText(l, cx, yy + 22f, cp); yy += 29f } }
-            val line2 = listOf(
-                if (d.shop.phone.isNotBlank()) "Ph: " + d.shop.phone else "",
-                d.shop.email,
-                if (site.isNotEmpty()) Links.shown(site) else ""
-            ).filter { it.isNotBlank() }.joinToString("   |   ")
-            if (line2.isNotBlank()) { c.drawText(fit(line2, cp, rightEdge - m), cx, yy + 22f, cp); yy += 29f }
-            if (d.shop.gstin.isNotBlank()) { c.drawText("GSTIN: " + d.shop.gstin, cx, yy + 22f, cp); yy += 29f }
-            y = maxOf(y + headH, yy + 10f)
-        } else {
-            var xText = m
-            if (t.showLogo && logo != null) {
-                val r = scaleToFit(logo, 340f, 150f)
-                c.drawBitmap(logo, null, RectF(m, y + (150f - r.height()) / 2f, m + r.width(), y + (150f - r.height()) / 2f + r.height()), null)
-                if (!builtIn) {
-                    val np = paint(26f, t.accent, true)
-                    c.drawText(fit(d.shop.name.uppercase(), np, 340f), m, y + 150f + 30f, np)
-                }
-                xText = m + 372f
-                val div = Paint().apply { color = Color.LTGRAY; strokeWidth = 2f }
-                c.drawLine(xText - 18f, y + 8f, xText - 18f, y + 150f, div)
-            } else {
-                val np = paint(44f, t.accent, true)
-                c.drawText(fit(d.shop.name.uppercase(), np, 560f), m, y + 60f, np)
-                if (t.showTagline && d.shop.tagline.isNotBlank()) c.drawText(d.shop.tagline, m, y + 96f, paint(22f, grey))
-                xText = m + 600f
-            }
-            val cp = paint(25f, ink)
-            val maxTextW = rightEdge - xText
-            var yy = y + 8f
-            if (maxTextW > 120f) {
-                if (d.shop.address.isNotBlank()) {
-                    drawIcon(c, ICON_PIN, xText, yy + 2f, 28f, t.accent)
-                    val lines = wrap(d.shop.address, cp, maxTextW - 40f).take(2)
-                    for (l in lines) { c.drawText(l, xText + 40f, yy + 24f, cp); yy += 31f }
-                    yy += 4f
-                }
-                if (d.shop.phone.isNotBlank()) { drawIcon(c, ICON_PHONE, xText, yy + 2f, 28f, t.accent); c.drawText(fit(d.shop.phone, cp, maxTextW - 40f), xText + 40f, yy + 24f, cp); yy += 35f }
-                if (d.shop.email.isNotBlank()) { drawIcon(c, ICON_MAIL, xText, yy + 2f, 28f, t.accent); c.drawText(fit(d.shop.email, cp, maxTextW - 40f), xText + 40f, yy + 24f, cp); yy += 35f }
-                if (site.isNotEmpty() && yy < y + 150f) { drawIcon(c, ICON_DOC, xText, yy + 2f, 28f, t.accent); c.drawText(fit(Links.shown(site), cp, maxTextW - 40f), xText + 40f, yy + 24f, cp); yy += 35f }
-                if (d.shop.gstin.isNotBlank() && yy < y + 175f) { c.drawText("GSTIN: " + d.shop.gstin, xText + 40f, yy + 24f, paint(23f, grey)) }
-            }
-            y += headH
+            y += 34f
         }
         y += 8f
 
-        // ---------------- bill no + date
-        val halfW = (inner - 16f) / 2f
-        fun pill(x: Float, label: String, icon: String, labelW: Float, value: String, vSize: Float) {
-            val box = RectF(x, y, x + halfW, y + 60f)
-            c.drawRoundRect(box, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(t.tint, 235); style = Paint.Style.FILL })
-            c.drawRoundRect(box, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(t.accent, 90); style = Paint.Style.STROKE; strokeWidth = 2f })
-            val lab = Path().apply { addRoundRect(RectF(x, y, x + labelW, y + 60f), floatArrayOf(12f, 12f, 0f, 0f, 0f, 0f, 12f, 12f), Path.Direction.CW) }
-            c.drawPath(lab, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = t.accent; style = Paint.Style.FILL })
-            drawIcon(c, icon, x + 12f, y + 15f, 30f, Color.WHITE)
-            c.drawText(label, x + 50f, y + 40f, paint(27f, Color.WHITE, true))
-            val vp = paint(vSize, ink, true)
-            c.drawText(fit(value, vp, halfW - labelW - 24f), x + labelW + 16f, y + 41f, vp)
-        }
-        pill(m, "Bill No.", ICON_DOC, 164f, d.billNo, 34f)
-        pill(m + halfW + 16f, "Date & Time", ICON_CAL, 218f, Fmt.dateTime(d.dateMillis), 26f)
-        y += 60f + 14f
-
-        // ---------------- customer + sales details
-        val leftW = 540f
-        val rightW = inner - leftW - 14f
-        val cardH = 46f + 3 * 44f + 14f
-        card(c, m, y, leftW, cardH, "Customer Details", ICON_PERSON, t)
-        card(c, m + leftW + 14f, y, rightW, cardH, "Sales Details", ICON_PERSON, t)
-        val cust = d.customerName.ifBlank { "Walk-in Customer" }
-        kv(c, m, y + 46f + 36f, leftW, ICON_PERSON, "Customer Name", cust, t)
-        kv(c, m, y + 46f + 80f, leftW, ICON_PHONE, "Mobile Number", d.customerMobile.ifBlank { "-" }, t)
-        kv(c, m, y + 46f + 124f, leftW, ICON_PIN, "City / Address", d.customerAddress.ifBlank { "-" }, t)
-        val rx = m + leftW + 14f
-        fun kv2(yy: Float, icon: String, key: String, value: String) {
-            drawIcon(c, icon, rx + 12f, yy - 22f, 24f, t.accent2)
-            c.drawText(key, rx + 44f, yy, paint(24f, ink, true))
-            c.drawText(":", rx + 200f, yy, paint(24f, ink))
-            val vp = paint(24f, ink)
-            c.drawText(fit(value, vp, rightW - 215f - 8f), rx + 214f, yy, vp)
-        }
-        kv2(y + 46f + 36f, ICON_PERSON, "Sales Person", d.salesPerson.ifBlank { "-" })
-        kv2(y + 46f + 80f, ICON_STORE, "Store", d.shop.name)
-        kv2(y + 46f + 124f, ICON_CART, "Payment Mode", d.method)
-        y += cardH + 14f
-
-        // ---------------- items table
-        val cols = floatArrayOf(62f, 200f, 170f, 92f, 80f, 122f, 122f, 120f)
-        val heads = listOf("Sr", "Article", "Colour", "Size", "Qty", "MRP ($cur)", "Rate ($cur)", "Amount ($cur)")
-        val rowH = 46f
-        val headRowH = 54f
-        val shown = maxOf(d.lines.size, 4)
-        val tableH = headRowH + rowH * shown
-        val tb = RectF(m, y, m + inner, y + tableH)
-        c.drawRoundRect(tb, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(Color.WHITE, 238); style = Paint.Style.FILL })
-        val headBg = Path().apply { addRoundRect(RectF(m, y, m + inner, y + headRowH), floatArrayOf(12f, 12f, 12f, 12f, 0f, 0f, 0f, 0f), Path.Direction.CW) }
-        c.drawPath(headBg, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(t.tint, 255); style = Paint.Style.FILL })
-        val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(190, 190, 190); strokeWidth = 1.5f }
-        var cx0 = m
-        val hp = paint(24f, ink, true, Paint.Align.CENTER)
-        for (i in cols.indices) {
-            if (i > 0) c.drawLine(cx0, y, cx0, y + tableH, grid)
-            c.drawText(fit(heads[i], hp, cols[i] - 8f), cx0 + cols[i] / 2f, y + 35f, hp)
-            cx0 += cols[i]
-        }
-        for (r in 0 until shown) {
-            val ry = y + headRowH + r * rowH
-            c.drawLine(m, ry, m + inner, ry, grid)
-            val l = d.lines.getOrNull(r) ?: continue
-            val tp = paint(25f, ink)
-            val tc = paint(25f, ink, false, Paint.Align.CENTER)
+        // ---------------- item tables (one for a sale; RETURNED + NEW ITEM for an exchange)
+        val cols = floatArrayOf(52f, 210f, 170f, 86f, 72f, 116f, 116f, 142f)
+        val heads = listOf("#", "Article", "Colour", "Size", "Qty", "MRP ($cur)", "Rate ($cur)", "Amount ($cur)")
+        fun table(title: String?, titleColor: Int, list: List<RLine>, sign: String, signColor: Int) {
+            if (title != null) {
+                c.drawText(title, m, y + 26f, paint(25f, titleColor, true)); y += 36f
+            }
+            c.drawLine(m, y, W - m, y, heavy)
             var x = m
-            val art = (l.article.ifBlank { l.name }).uppercase()
-            val cells = listOf(
-                l.sr.toString(), art, l.colour.uppercase(), l.size, l.qty.toString(),
-                Fmt.indian(l.mrp), Fmt.indian(l.rate), Fmt.indian(l.amount)
-            )
+            val hp = paint(22f, ink, true)
             for (i in cols.indices) {
-                if (i == 1 || i == 2) c.drawText(fit(cells[i], tp, cols[i] - 16f), x + 10f, ry + 32f, tp)
-                else c.drawText(fit(cells[i], tc, cols[i] - 8f), x + cols[i] / 2f, ry + 32f, tc)
+                if (i == cols.lastIndex) c.drawText(heads[i], x + cols[i] - 6f, y + 32f, paint(22f, ink, true, Paint.Align.RIGHT))
+                else c.drawText(fit(heads[i], hp, cols[i] - 8f), x + 6f, y + 32f, hp)
                 x += cols[i]
             }
+            y += 46f
+            c.drawLine(m, y, W - m, y, heavy)
+            for (l in list) {
+                val tp = paint(24f, ink)
+                val cells = listOf(l.sr.toString(), (l.article.ifBlank { l.name }).uppercase(), l.colour.uppercase(), l.size,
+                    l.qty.toString(), Fmt.indian(l.mrp), Fmt.indian(l.rate))
+                x = m
+                for (i in cells.indices) { c.drawText(fit(cells[i], tp, cols[i] - 10f), x + 6f, y + 33f, tp); x += cols[i] }
+                val ap = paint(24f, if (sign.isBlank()) ink else signColor, sign.isNotBlank(), Paint.Align.RIGHT)
+                c.drawText(sign + Fmt.indian(l.amount), W - m - 6f, y + 33f, ap)
+                y += 48f
+                c.drawLine(m, y, W - m, y, light)
+            }
+            y += 10f
         }
-        c.drawRoundRect(tb, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(190, 190, 190); style = Paint.Style.STROKE; strokeWidth = 2f })
-        y += tableH + 16f
+        when (d.kind) {
+            "EXCHANGE" -> {
+                table("↩ RETURNED", t.accent, d.returnLines, "− ", t.accent)
+                table("+ NEW ITEM", green, d.lines, "+ ", green)
+            }
+            "RETURN" -> table("↩ RETURNED", t.accent, d.returnLines, "− ", t.accent)
+            else -> table(null, ink, d.lines, "", ink)
+        }
 
-        // ---------------- tagline art (left) + totals (right)
-        val totW = 470f
+        // ---------------- totals on the right
+        val totW = 440f
         val tx = W - m - totW
-        val trows = ArrayList<Pair<String, String>>()
-        trows.add("Total MRP" to Fmt.moneyG(cur, d.totalMrp))
-        trows.add("Total Discount" to Fmt.moneyG(cur, d.totalDiscount))
-        trows.add("Sub Total (After Discount)" to Fmt.moneyG(cur, d.subTotal))
-        trows.add((if (d.taxPercent > 0.0) "Tax (GST " + BillMath.plain(d.taxPercent) + "%)" else "Tax (GST)") to Fmt.moneyG(cur, d.taxAmount))
-        val trH = 50f
-        val grandH = 68f
-        val totH = trH * trows.size + grandH
-        if (t.showTagline && d.shop.tagline.isNotBlank()) {
-            val tp = paint(46f, ink, true)
-            tp.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
-            val lines = wrap(d.shop.tagline.uppercase(), tp, tx - m - 40f).take(4)
-            c.save()
-            c.rotate(-6f, m + 20f, y + totH / 2f)
-            var ty = y + totH / 2f - (lines.size * 52f) / 2f + 40f
-            for ((i, l) in lines.withIndex()) {
-                tp.color = if (i == 1 || (lines.size == 1)) t.accent else ink
-                c.drawText(l, m + 26f, ty, tp); ty += 52f
-            }
-            c.drawRoundRect(RectF(m + 26f, ty - 30f, m + 190f, ty - 24f), 3f, 3f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = t.accent })
-            c.restore()
+        val lp = paint(25f, ink)
+        fun trow(label: String, value: String, color: Int = ink) {
+            c.drawText(label, tx, y + 28f, lp)
+            c.drawText(value, W - m, y + 28f, paint(25f, color, color != ink, Paint.Align.RIGHT))
+            y += 36f
         }
-        val tbox = RectF(tx, y, tx + totW, y + totH)
-        c.drawRoundRect(tbox, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(Color.WHITE, 238); style = Paint.Style.FILL })
-        for ((i, row) in trows.withIndex()) {
-            val ry = y + i * trH
-            if (i % 2 == 0) {
-                val lab = Path().apply {
-                    addRoundRect(RectF(tx, ry, tx + totW * 0.58f, ry + trH),
-                        floatArrayOf(if (i == 0) 12f else 0f, if (i == 0) 12f else 0f, 0f, 0f, 0f, 0f, 0f, 0f), Path.Direction.CW)
+        fun grand(label: String, value: String, color: Int) {
+            val lineP = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; strokeWidth = 3f }
+            y += 4f
+            c.drawLine(tx, y, W - m, y, lineP)
+            c.drawText(label, tx, y + 42f, paint(32f, color, true))
+            c.drawText(value, W - m, y + 42f, paint(34f, color, true, Paint.Align.RIGHT))
+            y += 58f
+            c.drawLine(tx, y, W - m, y, lineP)
+            y += 6f
+        }
+        when (d.kind) {
+            "EXCHANGE" -> {
+                trow("New items", Fmt.moneyG(cur, d.newValue))
+                trow("Return credit", "− " + Fmt.moneyG(cur, d.returnValue), t.accent)
+                when {
+                    d.refund < -0.005 -> grand("Customer pays", Fmt.moneyG(cur, -d.refund), t.accent)
+                    d.refund > 0.005 -> grand("Refund to customer", Fmt.moneyG(cur, d.refund), green)
+                    else -> grand("Difference", Fmt.moneyG(cur, 0.0), t.accent)
                 }
-                c.drawPath(lab, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(t.tint, 255); style = Paint.Style.FILL })
+                val left = BillMath.round2(d.newValue - d.returnValue + d.refund)
+                if (kotlin.math.abs(left) > 0.005) trow(if (left > 0) "Added to udhaar" else "Adjusted in udhaar", Fmt.moneyG(cur, kotlin.math.abs(left)))
             }
-            c.drawLine(tx, ry, tx + totW, ry, grid)
-            val lp = paint(25f, ink, true)
-            c.drawText(fit(row.first, lp, totW * 0.58f - 20f), tx + 14f, ry + 34f, lp)
-            c.drawText(row.second, tx + totW - 14f, ry + 34f, paint(27f, ink, true, Paint.Align.RIGHT))
+            "RETURN" -> {
+                trow("Return", "− " + Fmt.moneyG(cur, d.returnValue), t.accent)
+                grand("Refund to customer", Fmt.moneyG(cur, maxOf(0.0, d.refund)), green)
+                val adj = BillMath.round2(d.returnValue - maxOf(0.0, d.refund))
+                if (adj > 0.005) trow("Adjusted in udhaar", Fmt.moneyG(cur, adj))
+            }
+            else -> {
+                trow("Total MRP", Fmt.moneyG(cur, d.totalMrp))
+                trow("Discount", "− " + Fmt.moneyG(cur, d.totalDiscount), t.accent)
+                trow(if (d.taxPercent > 0.0) "Tax (GST " + BillMath.plain(d.taxPercent) + "%)" else "Tax (GST)", Fmt.moneyG(cur, d.taxAmount))
+                grand("Grand Total", Fmt.moneyG(cur, d.grandTotal), t.accent)
+                trow("Paid", Fmt.moneyG(cur, d.amountPaid))
+                trow("Balance", Fmt.moneyG(cur, d.balance), if (d.balance <= 0.005) green else t.accent)
+            }
         }
-        val gy = y + trH * trows.size
-        val grandBg = Path().apply { addRoundRect(RectF(tx, gy, tx + totW, gy + grandH), floatArrayOf(0f, 0f, 0f, 0f, 12f, 12f, 12f, 12f), Path.Direction.CW) }
-        c.drawPath(grandBg, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = t.accent; style = Paint.Style.FILL })
-        c.drawText("Grand Total", tx + 16f, gy + 46f, paint(33f, Color.WHITE, true))
-        c.drawText(Fmt.moneyG(cur, d.grandTotal), tx + totW - 16f, gy + 46f, paint(36f, Color.WHITE, true, Paint.Align.RIGHT))
-        c.drawRoundRect(tbox, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(190, 190, 190); style = Paint.Style.STROKE; strokeWidth = 2f })
-        y += totH + 18f
+        y += 10f
 
-        // ---------------- payment details + notes
-        val payW = if (t.showNotes && d.shop.notes.isNotEmpty()) 440f else inner
-        val notesW = inner - payW - 14f
-        val np = paint(23f, ink)
-        val noteLines = ArrayList<String>()
-        if (t.showNotes) for (n in d.shop.notes) noteLines.addAll(wrap(n, np, notesW - 70f).mapIndexed { i, s -> if (i == 0) "• $s" else "   $s" })
-        val payH = 46f + 3 * 52f + 14f
-        val notesH = 46f + noteLines.size * 31f + 22f
-        val blockH = maxOf(payH, if (t.showNotes && d.shop.notes.isNotEmpty()) notesH else 0f)
-        card(c, m, y, payW, blockH, "Payment Details", ICON_CARD, t)
-        fun payRow(yy: Float, icon: String, key: String, value: String, color: Int) {
-            drawIcon(c, icon, m + 14f, yy - 24f, 26f, t.accent2)
-            val kp = paint(25f, ink, true)
-            if (kp.measureText(key) > 170f) kp.textSize = 25f * 170f / kp.measureText(key)   // label stays inside its column
-            c.drawText(key, m + 52f, yy, kp)
-            c.drawText(":", m + 232f, yy, paint(25f, ink))
-            val vp = paint(26f, color, color != ink)
-            val vx = m + 252f
-            val vw = payW - 252f - 14f
-            c.drawRoundRect(RectF(vx - 6f, yy - 32f, vx + vw, yy + 10f), 8f, 8f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = Color.rgb(244, 244, 244); style = Paint.Style.FILL })
-            c.drawText(fit(value, vp, vw - 12f), vx + 4f, yy, vp)
-        }
-        payRow(y + 46f + 40f, ICON_CARD, "Payment Mode", d.method, ink)
-        payRow(y + 46f + 92f, ICON_CART, "Amount Paid", Fmt.moneyG(cur, d.amountPaid), ink)
-        payRow(y + 46f + 144f, ICON_DOC, "Balance", Fmt.moneyG(cur, d.balance), if (d.balance <= 0.0) Color.rgb(30, 130, 60) else t.accent)
+        // ---------------- notes (after a dashed line)
         if (t.showNotes && d.shop.notes.isNotEmpty()) {
-            val nx = m + payW + 14f
-            card(c, nx, y, notesW, blockH, "Notes", ICON_DOC, t)
-            var ny = y + 46f + 34f
-            for (l in noteLines) { c.drawText(l, nx + 18f, ny, np); ny += 31f }
+            val dash = Paint().apply { color = Color.rgb(170, 170, 170); strokeWidth = 2f; pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 7f), 0f) }
+            c.drawLine(m, y, W - m, y, dash)
+            y += 14f
+            val np = paint(22f, Color.rgb(50, 50, 50))
+            for (n in d.shop.notes) for (l in wrap(n, np, inner)) { c.drawText(l, m, y + 22f, np); y += 29f }
+            y += 6f
         }
-        y += blockH + 22f
 
         // ---------------- thank you
         if (t.showThanks) {
-            val th = d.shop.thanks.ifBlank { "Thank you!" }
-            val tp = paint(64f, t.accent, true, Paint.Align.CENTER)
-            tp.typeface = Typeface.create("cursive", Typeface.BOLD_ITALIC)
-            val tw = tp.measureText(th)
-            val lineP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = t.accent; strokeWidth = 3f }
-            val ly = y + 40f
-            val gap = 22f
-            val leftEnd = W / 2f - tw / 2f - gap
-            val rightStart = W / 2f + tw / 2f + gap
-            if (leftEnd - 60f > 40f) {
-                c.drawLine(60f, ly, leftEnd, ly, lineP)
-                c.drawLine(rightStart, ly, W - 60f, ly, lineP)
-            }
-            c.drawText(th, W / 2f, y + 62f, tp)
-            y += 86f
-            val vp = paint(27f, ink, false, Paint.Align.CENTER)
-            vp.letterSpacing = 0.45f
-            c.drawText("VISIT AGAIN.", W / 2f, y + 20f, vp)
-            y += 44f
+            val th = d.shop.thanks.ifBlank { "Thank you!" }.uppercase()
+            val tp = paint(34f, t.accent, true, Paint.Align.CENTER)
+            c.drawText(fit("$th VISIT AGAIN", tp, inner), W / 2f, y + 40f, tp)
+            y += 56f
         }
         if (t.showFooter && d.shop.footer.isNotBlank()) {
-            val fp = paint(23f, grey, false, Paint.Align.CENTER)
-            for (l in wrap(d.shop.footer, fp, inner - 40f)) { c.drawText(l, W / 2f, y + 22f, fp); y += 30f }
+            val fp = paint(22f, grey, false, Paint.Align.CENTER)
+            for (l in wrap(d.shop.footer, fp, inner - 40f)) { c.drawText(l, W / 2f, y + 22f, fp); y += 29f }
         }
-        return y + 28f
+        return y + 24f
     }
 
     // ------------------------------------------------------------------ 80mm thermal bill (black and white)
@@ -518,13 +455,26 @@ object Invoice {
         if (d.shop.gstin.isNotBlank()) { c.drawText("GSTIN: " + d.shop.gstin, w / 2f, y + 22f, cen); y += 28f }
         rule()
 
+        if (d.kind == "EXCHANGE" || d.kind == "RETURN") {
+            c.drawText(if (d.kind == "EXCHANGE") "EXCHANGE BILL" else "RETURN BILL", w / 2f, y + 30f, paint(32f, ink, true, Paint.Align.CENTER)); y += 42f
+        }
         lr("Bill No: " + d.billNo, "", bold)
+        if (d.oldBillNo.isNotBlank()) { c.drawText("Old Bill: " + d.oldBillNo, m, y + 22f, norm); y += 30f }
         c.drawText(Fmt.dateTime(d.dateMillis), m, y + 22f, norm); y += 30f
         val cust = d.customerName.ifBlank { "Walk-in Customer" } + (if (d.customerMobile.isNotBlank()) " (" + d.customerMobile + ")" else "")
         for (l in wrap("Customer: $cust", norm, w - 2 * m)) { c.drawText(l, m, y + 22f, norm); y += 29f }
         if (d.salesPerson.isNotBlank()) { c.drawText("Sales Person: " + d.salesPerson, m, y + 22f, norm); y += 29f }
         rule()
 
+        if (d.kind == "EXCHANGE" || d.kind == "RETURN") {
+            c.drawText("RETURNED", m, y + 22f, bold); y += 30f
+            for (l in d.returnLines) {
+                c.drawText(fit("${l.sr}. " + (l.article.ifBlank { l.name }).uppercase(), bold, w - 2 * m), m, y + 22f, bold); y += 29f
+                lr("   " + l.colour.uppercase() + " / " + l.size + "   " + l.qty + " x " + Fmt.indian(l.rate), "-" + Fmt.indian(l.amount))
+            }
+            rule()
+            if (d.kind == "EXCHANGE") { c.drawText("NEW ITEM", m, y + 22f, bold); y += 30f }
+        }
         for (l in d.lines) {
             val title = (l.article.ifBlank { l.name }).uppercase() +
                 (if (l.article.isNotBlank() && l.name.isNotBlank() && !l.name.equals(l.article, true)) "  " + l.name else "")
@@ -533,6 +483,17 @@ object Invoice {
             if (l.mrp > l.rate) { c.drawText("   MRP " + Fmt.indian(l.mrp), m, y + 20f, paint(21f, Color.rgb(60, 60, 60))); y += 26f }
         }
         rule()
+        if (d.kind == "EXCHANGE" || d.kind == "RETURN") {
+            if (d.kind == "EXCHANGE") lr("New items", Fmt.moneyG(cur, d.newValue))
+            lr("Return credit", "-" + Fmt.moneyG(cur, d.returnValue))
+            rule()
+            val gp2 = paint(30f, ink, true)
+            val gr2 = paint(32f, ink, true, Paint.Align.RIGHT)
+            val (label, value) = if (d.refund < -0.005) "CUSTOMER PAYS" to -d.refund else "REFUND" to maxOf(0.0, d.refund)
+            c.drawText(label, m, y + 30f, gp2); c.drawText(Fmt.moneyG(cur, value), w - m, y + 30f, gr2); y += 42f
+            rule()
+            lr(if (d.kind == "RETURN") "Refund Mode" else "Payment Mode", d.method)
+        } else {
         lr("Total MRP", Fmt.moneyG(cur, d.totalMrp))
         lr("Total Discount", "-" + Fmt.moneyG(cur, d.totalDiscount))
         lr("Sub Total", Fmt.moneyG(cur, d.subTotal))
@@ -546,6 +507,7 @@ object Invoice {
         lr("Payment Mode", d.method)
         lr("Amount Paid", Fmt.moneyG(cur, d.amountPaid))
         lr("Balance", Fmt.moneyG(cur, d.balance), bold, rightBold)
+        }
 
         if (t.showNotes && d.shop.notes.isNotEmpty()) {
             rule()

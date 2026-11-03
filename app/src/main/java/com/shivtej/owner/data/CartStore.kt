@@ -114,7 +114,17 @@ class CartStore(private val prefs: Prefs) {
     /** Returns an error message, or null when added. */
     fun add(line: CartLine): String? {
         if (line.maxQty <= 0) return "Out of stock"
-        val i = lines.indexOfFirst { it.productId == line.productId && it.colour == line.colour && it.size == line.size }
+        // every scanned piece has its own barcode: one scan = one line (no quantity to change)
+        if (line.barcode.isNotBlank()) {
+            val same = lines.filter { it.productId == line.productId && it.colour == line.colour && it.size == line.size }
+            if (same.sumOf { it.qty } + line.qty > line.maxQty) return "Only ${line.maxQty} in stock"
+            // the rate already typed for this article and size is used for the new piece too
+            val rate = same.lastOrNull()?.price ?: line.price
+            lines.add(line.copy(price = rate))
+            save()
+            return null
+        }
+        val i = lines.indexOfFirst { it.productId == line.productId && it.colour == line.colour && it.size == line.size && it.barcode.isBlank() }
         if (i >= 0) {
             val cur = lines[i]
             val q = cur.qty + line.qty

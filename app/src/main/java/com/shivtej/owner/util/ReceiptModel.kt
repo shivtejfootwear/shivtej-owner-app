@@ -53,8 +53,19 @@ data class ReceiptData(
     val grandTotal: Double,
     val method: String,
     val amountPaid: Double,
-    val balance: Double
-)
+    val balance: Double,
+    /** SALE (normal bill), EXCHANGE or RETURN. For EXCHANGE, [lines] are the new items given. */
+    val kind: String = "SALE",
+    /** the bill the returned pieces came from (EXCHANGE / RETURN) */
+    val oldBillNo: String = "",
+    /** the pieces that came back (EXCHANGE / RETURN), at the rate of the old bill */
+    val returnLines: List<RLine> = emptyList(),
+    /** cash given back (positive) or, negative, the difference the customer paid (EXCHANGE / RETURN) */
+    val refund: Double = 0.0
+) {
+    val returnValue: Double get() = BillMath.round2(returnLines.sumOf { it.amount })
+    val newValue: Double get() = BillMath.round2(lines.sumOf { it.amount })
+}
 
 object Fmt {
     fun money(cur: String, v: Double): String = cur + BillMath.plain(v)
@@ -138,12 +149,24 @@ object ThermalText {
         if (s.phone.isNotBlank()) out.add(center("Ph: " + s.phone, cols))
         if (s.gstin.isNotBlank()) out.add(center("GSTIN: " + s.gstin, cols))
         out.add(dash)
+        val ret = d.kind == "EXCHANGE" || d.kind == "RETURN"
+        if (ret) out.add(center(if (d.kind == "EXCHANGE") "EXCHANGE BILL" else "RETURN BILL", cols))
         out.add(lr("Bill No: " + d.billNo, "", cols))
+        if (d.oldBillNo.isNotBlank()) out.add("Old Bill: " + d.oldBillNo)
         out.add(Fmt.dateTime(d.dateMillis))
         val cust = (d.customerName.ifBlank { "Walk-in Customer" }) + (if (d.customerMobile.isNotBlank()) " (" + d.customerMobile + ")" else "")
         Fmt.wrap("Customer: $cust", cols).forEach { out.add(it) }
         if (d.salesPerson.isNotBlank()) out.add("Sales Person: " + d.salesPerson)
         out.add(dash)
+        if (ret) {
+            out.add("RETURNED")
+            for (l in d.returnLines) {
+                Fmt.wrap("${l.sr}. " + (l.article.ifBlank { l.name }).uppercase(), cols).forEach { out.add(it) }
+                out.add(lr("   " + l.colour.uppercase() + " / " + l.size + "  " + l.qty + " x " + money(l.rate), "-" + money(l.amount), cols))
+            }
+            out.add(dash)
+            if (d.kind == "EXCHANGE") out.add("NEW ITEM")
+        }
         for (l in d.lines) {
             val title = (l.article.ifBlank { l.name }).uppercase() + (if (l.article.isNotBlank() && l.name.isNotBlank() && !l.name.equals(l.article, true)) " " + l.name else "")
             Fmt.wrap("${l.sr}. $title", cols).forEach { out.add(it) }
@@ -152,6 +175,14 @@ object ThermalText {
             if (l.mrp > l.rate) out.add("   MRP " + money(l.mrp))
         }
         out.add(dash)
+        if (ret) {
+            if (d.kind == "EXCHANGE") out.add(lr("New items", money(d.newValue), cols))
+            out.add(lr("Return credit", "-" + money(d.returnValue), cols))
+            out.add(dash)
+            if (d.refund < -0.005) out.add(lr("CUSTOMER PAYS (Rs.)", money(-d.refund), cols))
+            else out.add(lr("REFUND (Rs.)", money(maxOf(0.0, d.refund)), cols))
+            out.add(lr(if (d.kind == "RETURN") "Refund Mode" else "Payment Mode", d.method, cols))
+        } else {
         out.add(lr("Total MRP", money(d.totalMrp), cols))
         out.add(lr("Total Discount", "-" + money(d.totalDiscount), cols))
         out.add(lr("Sub Total", money(d.subTotal), cols))
@@ -162,6 +193,7 @@ object ThermalText {
         out.add(lr("Payment Mode", d.method, cols))
         out.add(lr("Amount Paid", money(d.amountPaid), cols))
         out.add(lr("Balance", money(d.balance), cols))
+        }
         if (d.shop.notes.isNotEmpty()) {
             out.add(dash)
             d.shop.notes.forEach { n -> Fmt.wrap("* $n", cols).forEach { out.add(it) } }

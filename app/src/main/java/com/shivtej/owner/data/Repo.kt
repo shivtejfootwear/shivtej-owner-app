@@ -95,7 +95,9 @@ data class RetLine(
     val productId: String, val article: String, val name: String,
     val colour: String, val size: String, val qty: Int, val price: Double,
     /** the returned piece's barcode (when it was scanned), so the server knows that piece is back in stock */
-    val barcode: String = ""
+    val barcode: String = "",
+    /** the item's MRP (shown on the Exchange / Return bill); 0 = not known */
+    val mrp: Double = 0.0
 )
 
 fun retLineKey(l: RetLine): String = l.productId + "|" + l.colour.lowercase() + "|" + l.size
@@ -107,7 +109,7 @@ fun parseRetLines(json: String): List<RetLine> = try {
         RetLine(
             o.str("productId").ifBlank { o.str("id") }, o.str("article"), o.str("name"), o.str("colour"), o.str("size"),
             if (o.has("qty")) o.optInt("qty", 1) else o.optInt("q", 1), o.optDouble("price", 0.0),
-            o.str("barcode")
+            o.str("barcode"), o.optDouble("mrp", 0.0)
         )
     }
 } catch (e: Exception) { emptyList() }
@@ -526,14 +528,43 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     }
 
     /** A sold barcode comes back (customer returned it): stock +1, the barcode is in stock again, the sale record is cleared. */
-    suspend fun restockSold(code: String, reason: String = "वापसी (बारकोड स्कैन)", refund: Double = 0.0): Boolean {
-        val info = soldInfo(code) ?: return false
-        if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) { unmarkSold(code); return true }
-        processReturn("BILL", info.billId, "RETURN", "$reason: बिल ${info.bill}", true, refund,
-            listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price, code)), emptyList())
+    suspend fun restockSold(code: String, reason: String = "वापसी (बारकोड स्कैन)", refund: Double = 0.0): Boolean =
+        restockSoldId(code, reason, refund) != null
+
+    /** Same as [restockSold]; returns the id of the saved return ("" when the piece was already back in stock), null when it can not. */
+    suspend fun restockSoldId(code: String, reason: String = "वापसी (बारकोड स्कैन)", refund: Double = 0.0): String? {
+        val info = soldInfo(code) ?: return null
+        if (dao.pieceByBarcode(code) != null || dao.sizesByBarcode(code).isNotEmpty()) { unmarkSold(code); return "" }
+        val id = processReturn("BILL", info.billId, "RETURN", "$reason: बिल ${info.bill}", true, refund,
+            listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price, code, soldMrp(info))), emptyList())
         returnPiece(info.pid, info.colour, info.size, code)
         unmarkSold(code)
-        return true
+        return id
+    }
+
+    /** The MRP of a sold piece, from its bill (0 when not known). */
+    private suspend fun soldMrp(info: SoldInfo): Double =
+        dao.bill(info.billId)?.let { b -> parseBillItems(b.itemsJson).firstOrNull { it.productId == info.pid && it.colour == info.colour && it.size == info.size }?.mrp } ?: 0.0
+
+    /**
+     * Exchange at the counter: the sold piece [code] comes back (stock +1, at its old bill rate) and the new scanned
+     * pieces [newLines] go out (stock -1 each, at the rate typed). One saved exchange; the difference is
+     * paid by the customer (refund < 0) or given back (refund > 0, at most what the customer has paid).
+     * Returns the id of the exchange.
+     */
+    suspend fun exchangeSold(code: String, reason: String, method: String, newLines: List<CartLine>): String {
+        val info = soldInfo(code) ?: throw IllegalArgumentException("This piece is not on a bill")
+        require(newLines.isNotEmpty()) { "Scan the new piece first" }
+        require(dao.pieceByBarcode(code) == null && dao.sizesByBarcode(code).isEmpty()) { "This piece is already back in stock" }
+        val back = listOf(RetLine(info.pid, info.article, info.article, info.colour, info.size, 1, info.price, code, soldMrp(info)))
+        val out = newLines.map { l -> RetLine(l.productId, l.article, l.name, l.colour, l.size, l.qty, l.price, l.barcode, l.mrp) }
+        val diff = BillMath.round2(back.sumOf { it.qty * it.price } - out.sumOf { it.qty * it.price })
+        val cap = if (diff > 0.0) maxCashRefundIn("BILL", info.billId, back.sumOf { it.qty * it.price }, out.sumOf { it.qty * it.price }) else 0.0
+        val refund = if (diff > 0.0) minOf(diff, BillMath.round2(cap)) else diff
+        val id = processReturn("BILL", info.billId, "EXCHANGE", "$reason · $method: बिल ${info.bill}", true, refund, back, out)
+        returnPiece(info.pid, info.colour, info.size, code)
+        unmarkSold(code)
+        return id
     }
 
     /** Once per phone: every barcode on the bills already made is marked sold (and taken out of the piece list here).
@@ -827,9 +858,10 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                     after - before, after, "BILL_EDIT_UNDO", now, false))
             }
             // 2) check every new line has enough stock now (old stock is already back)
-            val short = lines.mapNotNull { l ->
-                val have = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
-                if (l.qty > have) "${l.name} ${l.colour}/${l.size}: only $have left" else null
+            val short = lines.groupBy { Triple(it.productId, it.colour, it.size) }.mapNotNull { (k, ls) ->
+                val have = dao.qtyOf(k.first, k.second, k.third) ?: 0
+                val want = ls.sumOf { it.qty }
+                if (want > have) "${ls.first().name} ${k.second}/${k.third}: only $have left" else null
             }
             if (short.isNotEmpty()) throw IllegalArgumentException(short.joinToString("\n"))
             // a piece sold on another bill can not be put on this bill (the whole edit is undone)
@@ -1435,7 +1467,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     // ---------------------------------------------------------- returns / exchanges
     private fun retJson(l: RetLine) = JSONObject().put("productId", l.productId).put("article", l.article)
         .put("name", l.name).put("colour", l.colour).put("size", l.size).put("qty", l.qty).put("price", l.price)
-        .put("barcode", l.barcode)
+        .put("barcode", l.barcode).put("mrp", l.mrp)
 
     /**
      * Saves a return or exchange on this phone at once (works offline) and queues it for the server.
@@ -1457,7 +1489,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
     suspend fun processReturn(
         refType: String, refId: String, kind: String, reason: String, restock: Boolean, refund: Double,
         inLines: List<RetLine>, outLines: List<RetLine>
-    ) {
+    ): String {
         require(inLines.isNotEmpty()) { "Choose at least one item to return" }
         require(kind != "EXCHANGE" || outLines.isNotEmpty()) { "Choose the replacement item" }
         val id = UUID.randomUUID().toString()
@@ -1471,10 +1503,16 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             require(refund <= cap + 0.005) {
                 "Cash refund can be at most ${BillMath.round2(cap)}. The rest of the value is adjusted in the customer's udhaar."
             }
-            for (l in outLines) {
-                val have = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
-                require(have >= l.qty) { "Only $have left of ${l.name} (${l.colour} / ${l.size})" }
+            for ((k, ls) in outLines.groupBy { Triple(it.productId, it.colour, it.size) }) {
+                val have = dao.qtyOf(k.first, k.second, k.third) ?: 0
+                val want = ls.sumOf { it.qty }
+                require(have >= want) { "Only $have left of ${ls.first().name} (${k.second} / ${k.third})" }
             }
+            // a new piece given out must not be a piece already sold on a bill
+            for (l in outLines) for (c in l.barcode.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+                soldAndGone(c)?.let { sold -> throw IllegalArgumentException("${l.article} ${l.colour}/${l.size}: यह पीस (बारकोड $c) पहले ही बिल ${sold.bill} में बिक चुका है") }
+            }
+            val oldBillNo = if (refType == "BILL") dao.bill(refId)?.billNo.orEmpty() else ""
             if (restock) inLines.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size)
                 if (before != null) {
@@ -1487,7 +1525,10 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
             outLines.forEachIndexed { i, l ->
                 val before = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.adjust(l.productId, l.colour, l.size, -l.qty)
-                consumePieces(l.productId, l.colour, l.size, l.qty, "") // the pieces given out leave the barcode stock
+                // the scanned piece given out leaves the stock with its own barcode and is remembered as sold (exchange on the old bill)
+                consumePieces(l.productId, l.colour, l.size, l.qty, l.barcode) { code ->
+                    if (refType == "BILL") SoldInfo(code, oldBillNo, refId, now, l.productId, l.colour, l.size, l.article, l.price) else null
+                }
                 val after = dao.qtyOf(l.productId, l.colour, l.size) ?: 0
                 dao.putLog(StockLogE("RET:$id:out:${i + 1}", l.productId, l.article, l.colour, l.size,
                     after - before, after, "EXCHANGE_OUT", now, false))
@@ -1499,6 +1540,7 @@ class Repo(private val db: AppDb, val prefs: Prefs) {
                 .put("created_at", java.time.Instant.ofEpochMilli(now).toString()))
         }
         onChanged()
+        return id
     }
 
     suspend fun returnSynced(id: String) = dao.returnSynced(id)
